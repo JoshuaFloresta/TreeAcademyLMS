@@ -1,0 +1,53 @@
+# Render blueprint for the Tree Academy API (Express + Socket.IO).
+# The React frontend is deployed separately on Vercel — see DEPLOYMENT.md.
+#
+# Secrets are intentionally NOT in this file. Values marked `sync: false` must be entered in the
+# Render dashboard (Environment tab) so they never land in git.
+services:
+  - type: web
+    name: treeacademy-api
+    runtime: node
+    plan: free
+    # Vite and the other devDependencies aren't needed to run the API, but Render installs
+    # everything by default; that's fine and keeps the build simple.
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/pricing
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Dev-only shortcuts (/demo/* endpoints, DevToolbar jumps) must never be reachable in prod.
+      - key: DEMO_MODE
+        value: "false"
+      - key: CLIENT_URL
+        sync: false
+      - key: ADDITIONAL_CLIENT_ORIGINS
+        sync: false
+      - key: CLIENT_ORIGIN_PATTERN
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_PUBLIC_BASE_URL
+        sync: false
+      - key: PAYMONGO_SECRET_KEY
+        sync: false
+      - key: PAYMONGO_WEBHOOK_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: ENROLLMENT_NOTIFICATION_TO
+        sync: false

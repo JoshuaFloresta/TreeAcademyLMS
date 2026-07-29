@@ -12,12 +12,14 @@
     "seed:content": "node server/seed-content.js",
     "migrate:backfill-access": "node server/migrate-backfill-enrollment-access.js",
     "migrate:backfill-quiz-modules": "node server/migrate-backfill-quiz-modules.js",
+    "migrate:storage": "node server/migrate-storage.js",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "start": "node server/index.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1097.0",
     "@hookform/resolvers": "^5.2.2",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.90.21",

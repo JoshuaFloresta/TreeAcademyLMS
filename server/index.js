@@ -1,6 +1,5 @@
 import http from 'node:http'
 import crypto from 'node:crypto'
-import fs from 'node:fs/promises'
 import path from 'node:path'
 import express from 'express'
 import mongoose from 'mongoose'
@@ -12,17 +11,20 @@ import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
 import { Server } from 'socket.io'
 import { z } from 'zod'
-import { config, integrations, isProduction } from './config.js'
+import { config, integrations, isAllowedOrigin, isProduction } from './config.js'
 import { catalog } from './catalog.js'
 import { Announcement, Assignment, Attendance, Badge, CalendarEvent, Category, CategoryHeader, Certificate, CertificateTemplate, ContentAsset, Course, EmailTemplate, Enrollment, ForumPost, ForumThread, LearningModule, LearningProgress, Lesson, Module, NewsletterSubscriber, Notification, Presence, PricingSettings, Quiz, Report, RolePermission, StudentBadge, Submission, SubmissionComment, SupportTicket, Webinar, WebinarRegistration, WebhookEvent, AuditLog, RefreshToken, User } from './models.js'
 import { createToken, hashToken, requireAdmin, requireAuth, requireStaff, signAccessToken, verifyHmac, verifyPaymongoSignature } from './security.js'
 import { emailTemplateDefaults, ensureDefaultEmailTemplates, sendEnrollmentDocumentsEmail, sendTemplatedEmail } from './email.js'
-import { getPrivateFilePath, renderCertificate, saveCertificateTemplate, saveSubmissionAttachment, submissionExtensionByMime } from './certificates.js'
+import { renderCertificate, saveCertificateTemplate, saveSubmissionAttachment, submissionExtensionByMime } from './certificates.js'
 import { createApplicationPdf, createFilledDocument, createFilledDocumentBytes } from './enrollment-documents.js'
+import { PUBLIC_PREFIX, getFile, isObjectStorage, publicUrl, putFile, randomKey } from './storage.js'
 
 const app = express()
 const server = http.createServer(app)
-const io = new Server(server, { cors: { origin: config.clientUrl, credentials: true } })
+// Socket.IO shares the HTTP CORS allow-list so the presence socket works from the same origins
+// the REST API does — including per-deploy preview URLs.
+const io = new Server(server, { cors: { origin: (origin, callback) => callback(null, isAllowedOrigin(origin)), credentials: true } })
 let databaseReady = false
 const memory = { enrollments: new Map(), newsletter: new Map(), presence: new Map(), users: new Map() }
 const certificateUpload = multer({
@@ -33,32 +35,29 @@ const certificateUpload = multer({
 
 // Avatars are public-facing images (unlike signed PDFs, which stay in private storage), so they're
 // written to a dedicated static-served directory and referenced by URL, not by object key.
-const avatarUploadsDir = path.resolve(process.cwd(), 'server', 'public-uploads', 'avatars')
 const avatarMimeExtension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }
 const avatarUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 3 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, callback) => callback(null, Boolean(avatarMimeExtension[file.mimetype])),
 })
-async function saveAvatarUpload(file) {
-  await fs.mkdir(avatarUploadsDir, { recursive: true })
-  const filename = `${crypto.randomUUID()}.${avatarMimeExtension[file.mimetype]}`
-  await fs.writeFile(path.join(avatarUploadsDir, filename), file.buffer)
-  return `/uploads/avatars/${filename}`
-}
+const saveAvatarUpload = (file) => savePublicImage('avatars', file)
 
-// Course banners follow the same public-static pattern as avatars.
-const bannerUploadsDir = path.resolve(process.cwd(), 'server', 'public-uploads', 'banners')
+// Course banners follow the same public-image pattern as avatars.
 const bannerUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 4 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, callback) => callback(null, Boolean(avatarMimeExtension[file.mimetype])),
 })
-async function saveBannerUpload(file) {
-  await fs.mkdir(bannerUploadsDir, { recursive: true })
-  const filename = `${crypto.randomUUID()}.${avatarMimeExtension[file.mimetype]}`
-  await fs.writeFile(path.join(bannerUploadsDir, filename), file.buffer)
-  return `/uploads/banners/${filename}`
+const saveBannerUpload = (file) => savePublicImage('banners', file)
+
+// Avatars and banners are the only web-servable uploads (signed PDFs and certificates stay
+// private). They live under the storage layer's `public/` prefix and are referenced by URL —
+// absolute when a public bucket hostname is configured, otherwise relative to this API's
+// /uploads route, which `avatarSrc()` on the client resolves against the API origin.
+async function savePublicImage(folder, file) {
+  const key = await putFile(randomKey(`${PUBLIC_PREFIX}${folder}`, avatarMimeExtension[file.mimetype]), file.buffer, file.mimetype)
+  return publicUrl(key)
 }
 
 // Assignment submission attachments (the "drop box") — private storage, same as certificates.
@@ -70,17 +69,27 @@ const submissionUpload = multer({
 
 app.set('trust proxy', 1)
 app.use(helmet({ crossOriginResourcePolicy: false }))
-// In production, lock CORS to the configured client origin. In development, reflect any localhost
-// origin so the flow keeps working when Vite falls back to an alternate port (e.g. 5174).
-const corsOrigin = isProduction
-  ? config.clientUrl
-  : (origin, callback) => callback(null, !origin || /^https?:\/\/localhost(:\d+)?$/.test(origin) || /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin))
-app.use(cors({ origin: corsOrigin, credentials: true }))
+// See isAllowedOrigin in config.js — the same allow-list guards the Socket.IO handshake above.
+app.use(cors({ origin: (origin, callback) => callback(null, isAllowedOrigin(origin)), credentials: true }))
 app.use(cookieParser())
 app.use(express.json({ limit: '1mb', verify: (req, _res, buffer) => { req.rawBody = buffer } }))
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: 250, standardHeaders: 'draft-8', legacyHeaders: false }))
-app.use('/uploads/avatars', express.static(path.resolve(process.cwd(), 'server', 'public-uploads', 'avatars'), { maxAge: '7d' }))
-app.use('/uploads/banners', express.static(path.resolve(process.cwd(), 'server', 'public-uploads', 'banners'), { maxAge: '7d' }))
+// Serves the public/ prefix of the storage layer. When a public bucket hostname is configured the
+// browser goes straight to the CDN and never hits this route, but it stays mounted so avatars and
+// banners still resolve on local disk in development and before that hostname is set up.
+app.get('/uploads/{*filePath}', async (req, res) => {
+  const relativePath = Array.isArray(req.params.filePath) ? req.params.filePath.join('/') : req.params.filePath
+  try {
+    const bytes = await getFile(`${PUBLIC_PREFIX}${relativePath}`)
+    const extension = path.extname(relativePath).toLowerCase()
+    res.type({ '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp' }[extension] ?? 'application/octet-stream')
+    res.set('Cache-Control', 'public, max-age=604800, immutable')
+    res.send(bytes)
+  } catch {
+    // Missing key, traversal attempt, or provider error — all indistinguishable to a caller.
+    res.status(404).end()
+  }
+})
 
 const enrollmentInput = z.object({
   name: z.string().trim().min(2).max(100),
@@ -415,6 +424,16 @@ const bulkDecisionInput = z.object({
 
 const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)
 
+// Private files (signed agreements, certificates, submission attachments) are never public URLs —
+// they're fetched from storage and streamed through the route that just authorized the caller.
+// The quoted filename keeps browsers from interpreting a name containing spaces or commas.
+function sendPrivateDownload(res, bytes, filename, contentType = 'application/octet-stream') {
+  res.type(contentType)
+  res.set('Content-Disposition', `attachment; filename="${filename.replace(/"/g, '')}"`)
+  res.set('Cache-Control', 'private, no-store')
+  res.send(bytes)
+}
+
 // Seasonal availability — published courses are only visible to learners/public inside their window.
 const learnerCourseFilter = () => {
   const now = new Date()
@@ -555,8 +574,14 @@ function paymentReturnUrl(state, enrollmentId) {
   return url.toString()
 }
 
+// When the client is hosted on a different site than the API (e.g. Vercel frontend + Render API),
+// `SameSite=Lax` makes the browser withhold this cookie on cross-site XHR — sign-in appears to
+// work but the session dies on the first refresh. `None` restores it, and requires `Secure`,
+// which is why it only applies in production (localhost dev stays on Lax over plain HTTP).
+const cookieOptions = (extra = {}) => ({ httpOnly: true, secure: isProduction, sameSite: isProduction ? 'none' : 'lax', ...extra })
+
 function refreshCookie(res, token) {
-  res.cookie('treeacademy_refresh', token, { httpOnly: true, secure: isProduction, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 24 * 14, path: '/api/auth' })
+  res.cookie('treeacademy_refresh', token, cookieOptions({ maxAge: 1000 * 60 * 60 * 24 * 14, path: '/api/auth' }))
 }
 
 async function issueSession(res, user, impersonatorId = null) {
@@ -707,7 +732,7 @@ app.post('/api/auth/refresh', asyncRoute(async (req, res) => {
 
 app.post('/api/auth/logout', asyncRoute(async (req, res) => {
   if (databaseReady && req.cookies.treeacademy_refresh) await RefreshToken.deleteOne({ tokenHash: hashToken(req.cookies.treeacademy_refresh) })
-  res.clearCookie('treeacademy_refresh', { httpOnly: true, secure: isProduction, sameSite: 'lax', path: '/api/auth' })
+  res.clearCookie('treeacademy_refresh', cookieOptions({ path: '/api/auth' }))
   res.status(204).end()
 }))
 
@@ -733,7 +758,7 @@ app.post('/api/auth/change-password', requireAuth, asyncRoute(async (req, res) =
   await user.save()
   await RefreshToken.deleteMany({ userId: user._id })
   await saveAudit('user.password_changed', 'User', user.id, {}, user.id)
-  res.clearCookie('treeacademy_refresh', { httpOnly: true, secure: isProduction, sameSite: 'lax', path: '/api/auth' })
+  res.clearCookie('treeacademy_refresh', cookieOptions({ path: '/api/auth' }))
   res.status(204).end()
 }))
 
@@ -767,7 +792,7 @@ app.post('/api/users/me/avatar', requireAuth, avatarUpload.single('avatar'), asy
 app.get('/api/auth/google', (_req, res) => {
   if (!config.google.clientId || !config.google.clientSecret) return res.status(503).json({ error: 'Google sign-in is not configured.' })
   const state = createToken()
-  res.cookie('treeacademy_google_state', state, { httpOnly: true, secure: isProduction, sameSite: 'lax', maxAge: 10 * 60 * 1000, path: '/api/auth/google' })
+  res.cookie('treeacademy_google_state', state, cookieOptions({ maxAge: 10 * 60 * 1000, path: '/api/auth/google' }))
   const query = new URLSearchParams({
     client_id: config.google.clientId,
     redirect_uri: config.google.redirectUri,
@@ -781,7 +806,7 @@ app.get('/api/auth/google', (_req, res) => {
 app.get('/api/auth/google/callback', asyncRoute(async (req, res) => {
   const failure = (reason) => res.redirect(`${config.clientUrl}/auth?oauth=${encodeURIComponent(reason)}`)
   if (!databaseReady || !config.google.clientId || !config.google.clientSecret || !req.query.code || req.query.state !== req.cookies.treeacademy_google_state) return failure('unavailable')
-  res.clearCookie('treeacademy_google_state', { httpOnly: true, secure: isProduction, sameSite: 'lax', path: '/api/auth/google' })
+  res.clearCookie('treeacademy_google_state', cookieOptions({ path: '/api/auth/google' }))
   const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1767,7 +1792,7 @@ app.get('/api/certificates/:id/download', requireAuth, asyncRoute(async (req, re
   const certificate = await Certificate.findById(req.params.id)
   if (!certificate) return res.status(404).json({ error: 'Certificate not found.' })
   if (String(certificate.learnerId) !== req.auth.sub && !['instructor', 'admin'].includes(req.auth.role)) return res.status(403).json({ error: 'You cannot download this certificate.' })
-  res.download(getPrivateFilePath(certificate.fileKey), `Tree-Academy-Certificate-${certificate.id}.pdf`)
+  sendPrivateDownload(res, await getFile(certificate.fileKey), `Tree-Academy-Certificate-${certificate.id}.pdf`, 'application/pdf')
 }))
 
 // --- LMS content: courses, modules, lessons, assignments, quizzes, calendar, notifications ---
@@ -2188,7 +2213,7 @@ app.get('/api/submissions/:id/attachment', requireAuth, asyncRoute(async (req, r
   if (!submission || !submission.attachmentKey) return res.status(404).json({ error: 'No attachment found.' })
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
   if (!isStaff && String(submission.learnerId) !== req.auth.sub) return res.status(403).json({ error: 'You cannot download this attachment.' })
-  res.download(getPrivateFilePath(submission.attachmentKey), submission.attachmentName || `submission-${submission.id}`)
+  sendPrivateDownload(res, await getFile(submission.attachmentKey), submission.attachmentName || `submission-${submission.id}`)
 }))
 
 app.get('/api/staff/assignments/:id/submissions', requireAuth, requireStaff, asyncRoute(async (req, res) => {
@@ -2842,6 +2867,13 @@ async function boot() {
   } else {
     console.warn('MONGODB_URI is not set. Running with development-only in-memory records.')
   }
+  // Managed hosts (Render, Vercel, Fly) give each instance an ephemeral filesystem, so anything
+  // written to disk — including signed enrollment agreements and certificates — disappears on the
+  // next restart or redeploy. Refuse to start rather than silently destroy legal records.
+  if (isProduction && !isObjectStorage) {
+    throw new Error('S3_BUCKET/S3_ACCESS_KEY_ID are required in production: local disk storage would lose signed agreements and certificates on every redeploy.')
+  }
+  console.log(isObjectStorage ? `File storage: S3 bucket "${config.storage.s3.bucket}"` : `File storage: local disk (${config.storage.privateDirectory})`)
   server.listen(config.port, () => console.log(`Tree Academy API listening on :${config.port}`))
 }
 

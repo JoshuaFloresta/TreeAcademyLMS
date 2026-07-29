@@ -2,24 +2,14 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
-import { config } from './config.js'
+import { putFile } from './storage.js'
 
-const storageRoot = path.resolve(process.cwd(), config.storage.privateDirectory)
+// The blank AcroForm sources are committed to the repo, so they are read from the bundle on disk —
+// unlike the *filled* documents below, which are user data and go to the storage layer.
 const templateRoot = path.resolve(process.cwd(), 'server/templates')
 
-function safeStoragePath(key) {
-  const resolved = path.resolve(storageRoot, key)
-  if (!resolved.startsWith(`${storageRoot}${path.sep}`)) throw new Error('Invalid enrollment document path.')
-  return resolved
-}
-
-async function savePdf(kind, bytes) {
-  const key = path.posix.join('enrollments', `${crypto.randomUUID()}-${kind}.pdf`)
-  const filePath = safeStoragePath(key)
-  await fs.mkdir(path.dirname(filePath), { recursive: true })
-  await fs.writeFile(filePath, bytes)
-  return key
-}
+const savePdf = (kind, bytes) =>
+  putFile(path.posix.join('enrollments', `${crypto.randomUUID()}-${kind}.pdf`), bytes, 'application/pdf')
 
 const clean = (value) => typeof value === 'string' ? value.trim() : ''
 const yes = (value) => value === true || value === 'true'

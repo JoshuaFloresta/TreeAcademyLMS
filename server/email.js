@@ -1,6 +1,5 @@
 import { config } from './config.js'
-import { readFile } from 'node:fs/promises'
-import { getPrivateFilePath } from './certificates.js'
+import { getFile } from './storage.js'
 import { EmailTemplate } from './models.js'
 
 const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character])
@@ -408,7 +407,7 @@ export async function sendEnrollmentDocumentsEmail({ enrollmentId, applicant, do
 
   const attachments = await Promise.all(documentKeys.map(async ({ key, filename }) => ({
     filename,
-    content: (await readFile(getPrivateFilePath(key))).toString('base64'),
+    content: (await getFile(key)).toString('base64'),
   })))
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',

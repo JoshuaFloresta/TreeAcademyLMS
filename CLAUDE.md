@@ -62,11 +62,12 @@ server/
   security.js              # JWT, token hashing, role middleware, HMAC / PayMongo signature
   email.js                 # Resend adapters
   enrollment-documents.js  # pdf-lib: fill+flatten agreement PDFs, embed signature
-  certificates.js          # pdf-lib certificate rendering + private-storage path helper
+  certificates.js          # pdf-lib certificate rendering
+  storage.js               # file storage: local disk in dev, S3-compatible bucket in production
   catalog.js               # single all-access product (amount 14900 PHP) + pathways
-  config.js                # env-based config
+  config.js                # env-based config + isAllowedOrigin (shared CORS allow-list)
   templates/               # realex-reblex.pdf, reclex.pdf (AcroForm sources the server fills)
-  private-storage/         # generated signed PDFs (object keys only; never committed)
+  private-storage/         # dev-only file storage root (never committed)
 public/enrollment-documents/  # client-servable copies of the two PDFs (iframe preview + download)
 ```
 
@@ -151,13 +152,36 @@ learner without a `LearningProgress` row access to the course matching their mos
   anything that grants access, it only reads state a verified webhook already wrote.)
 - Keep webhook effects idempotent (`WebhookEvent` dedupe).
 - Never log or return provider secrets, raw PII webhook payloads, signed-PDF URLs, or tokens.
-- Files are not stored in Mongo — only private object keys; serve via short-lived authorized URLs.
+- Files are not stored in Mongo — only storage keys (see `storage.js`). Private files are streamed
+  through a route that authorizes the caller first (`sendPrivateDownload`); only the `public/`
+  prefix (avatars, banners) is ever reachable by URL.
+- CORS/Socket.IO origins go through `isAllowedOrigin` (`config.js`) — never widen it to a wildcard,
+  since these requests carry credentials.
+
+## File storage
+
+`server/storage.js` is the only module that touches file bytes. It runs in two modes:
+local disk (`server/private-storage/`) when no `S3_*` env vars are set, and an S3-compatible bucket
+(Cloudflare R2, AWS S3, MinIO…) when they are. Development therefore needs no external service,
+while production **requires** object storage — the server refuses to boot without it, because
+managed hosts have ephemeral disks that would silently destroy signed agreements on every redeploy.
+
+Use `putFile`/`getFile`/`randomKey`; never `fs` directly for user data. Keys are POSIX paths and
+only the key is persisted in Mongo, so switching providers never invalidates existing rows.
+`npm run migrate:storage` uploads existing local files into the configured bucket.
 
 ## Environment
 
 Copy `.env.example` → `.env`. For a working end-to-end flow set at least: `MONGODB_URI`,
 `JWT_SECRET`, `CLIENT_URL`, `PAYMONGO_SECRET_KEY`, `PAYMONGO_WEBHOOK_SECRET`, `RESEND_API_KEY`,
 `EMAIL_FROM`. Adapters degrade gracefully (log instead of send) when their keys are absent.
+
+## Deployment
+
+Frontend on Vercel, API on Render, files on R2 — see [DEPLOYMENT.md](DEPLOYMENT.md). The API cannot
+run on Vercel: Socket.IO presence needs a long-lived process. Because the two are on different
+sites, auth cookies use `SameSite=None; Secure` in production (`cookieOptions` in `index.js`) and
+`VITE_API_URL` is baked into the client at build time.
 
 ## Conventions
 

@@ -1,32 +1,13 @@
-import crypto from 'node:crypto'
-import fs from 'node:fs/promises'
-import path from 'node:path'
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
-import { config } from './config.js'
-
-const rootDirectory = path.resolve(process.cwd(), config.storage.privateDirectory)
-
-function safePath(key) {
-  const resolved = path.resolve(rootDirectory, key)
-  if (!resolved.startsWith(`${rootDirectory}${path.sep}`)) throw new Error('Invalid private storage key.')
-  return resolved
-}
-
-async function writeFile(key, bytes) {
-  const filePath = safePath(key)
-  await fs.mkdir(path.dirname(filePath), { recursive: true })
-  await fs.writeFile(filePath, bytes)
-  return key
-}
+import { getFile, putFile, randomKey } from './storage.js'
 
 export async function saveCertificateTemplate(file) {
   const extension = file.mimetype === 'application/pdf' ? 'pdf' : file.mimetype === 'image/png' ? 'png' : 'jpg'
-  const key = path.posix.join('certificate-templates', `${crypto.randomUUID()}.${extension}`)
-  return writeFile(key, file.buffer)
+  return putFile(randomKey('certificate-templates', extension), file.buffer, file.mimetype)
 }
 
 export async function renderCertificate(template, learner) {
-  const layout = await fs.readFile(safePath(template.fileKey))
+  const layout = await getFile(template.fileKey)
   let document
   let page
   if (template.mimeType === 'application/pdf') {
@@ -45,12 +26,7 @@ export async function renderCertificate(template, learner) {
   const font = await document.embedFont(StandardFonts.HelveticaBold)
   const position = template.namePosition ?? {}
   page.drawText(learner.name, { x: position.x ?? 260, y: position.y ?? 140, size: position.size ?? 30, font, color: rgb(0.106, 0.263, 0.18) })
-  const key = path.posix.join('certificates', `${crypto.randomUUID()}.pdf`)
-  return writeFile(key, await document.save())
-}
-
-export function getPrivateFilePath(key) {
-  return safePath(key)
+  return putFile(randomKey('certificates', 'pdf'), await document.save(), 'application/pdf')
 }
 
 // Assignment submission attachments — the "drop box" upload — reuse the same private-storage
@@ -64,6 +40,5 @@ export const submissionExtensionByMime = {
 }
 export async function saveSubmissionAttachment(file) {
   const extension = submissionExtensionByMime[file.mimetype] ?? 'bin'
-  const key = path.posix.join('submission-attachments', `${crypto.randomUUID()}.${extension}`)
-  return writeFile(key, file.buffer)
+  return putFile(randomKey('submission-attachments', extension), file.buffer, file.mimetype)
 }
