@@ -39,6 +39,10 @@ services:
         sync: false
       - key: S3_SECRET_ACCESS_KEY
         sync: false
+      # Only set these two if you created a SEPARATE public bucket — see DEPLOYMENT.md.
+      # The main bucket must never be public: it stores signed enrollment agreements.
+      - key: S3_PUBLIC_BUCKET
+        sync: false
       - key: S3_PUBLIC_BASE_URL
         sync: false
       - key: PAYMONGO_SECRET_KEY

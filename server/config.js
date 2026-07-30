@@ -53,7 +53,10 @@ export const config = {
       endpoint: process.env.S3_ENDPOINT,
       accessKeyId: process.env.S3_ACCESS_KEY_ID,
       secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
-      // Public hostname/CDN in front of the bucket, for avatars and course banners only.
+      // OPTIONAL second bucket for avatars/course banners only. Public read access is granted per
+      // bucket, so the main bucket above must stay private — it holds signed agreements. Leave
+      // both of these unset to serve images through the API instead (safe default).
+      publicBucket: process.env.S3_PUBLIC_BUCKET,
       publicBaseUrl: process.env.S3_PUBLIC_BASE_URL,
     },
   },

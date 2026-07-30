@@ -16,6 +16,15 @@ import { config } from './config.js'
 export const PUBLIC_PREFIX = 'public/'
 export const isObjectStorage = Boolean(config.storage.s3.bucket && config.storage.s3.accessKeyId)
 
+// Object storage providers grant public read access per *bucket*, not per prefix — switching on
+// R2's r2.dev subdomain (or an S3 public policy) exposes every object in that bucket. The main
+// bucket therefore always stays private, and avatars/banners only move to a second, deliberately
+// public bucket when S3_PUBLIC_BUCKET is set. Unset (the default) keeps everything private and
+// serves those images through this API's own /uploads route instead.
+const publicBucket = config.storage.s3.publicBucket
+const isPublicKey = (key) => key.startsWith(PUBLIC_PREFIX)
+const bucketFor = (key) => (publicBucket && isPublicKey(key) ? publicBucket : config.storage.s3.bucket)
+
 const rootDirectory = path.resolve(process.cwd(), config.storage.privateDirectory)
 
 // Guards against `..` traversal escaping the storage root — applies to the disk backend only,
@@ -59,7 +68,7 @@ export async function putFile(key, bytes, contentType = 'application/octet-strea
   const { PutObjectCommand } = await import('@aws-sdk/client-s3')
   const client = await s3Client()
   await client.send(new PutObjectCommand({
-    Bucket: config.storage.s3.bucket,
+    Bucket: bucketFor(safeKey),
     Key: safeKey,
     Body: Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes),
     ContentType: contentType,
@@ -72,7 +81,7 @@ export async function getFile(key) {
   if (!isObjectStorage) return fs.readFile(diskPath(safeKey))
   const { GetObjectCommand } = await import('@aws-sdk/client-s3')
   const client = await s3Client()
-  const result = await client.send(new GetObjectCommand({ Bucket: config.storage.s3.bucket, Key: safeKey }))
+  const result = await client.send(new GetObjectCommand({ Bucket: bucketFor(safeKey), Key: safeKey }))
   return Buffer.from(await result.Body.transformToByteArray())
 }
 
@@ -82,6 +91,9 @@ export async function getFile(key) {
 export function publicUrl(key) {
   const safeKey = assertSafeKey(key)
   const base = config.storage.s3.publicBaseUrl
-  if (isObjectStorage && base) return `${base.replace(/\/$/, '')}/${safeKey}`
-  return `/${safeKey.startsWith(PUBLIC_PREFIX) ? `uploads/${safeKey.slice(PUBLIC_PREFIX.length)}` : safeKey}`
+  // Only hand out a direct bucket URL when the asset really lives in the separate public bucket.
+  // Without that second bucket the object sits alongside signed agreements in the private one, so
+  // fall back to the API route rather than advertising a URL that would require exposing them.
+  if (isObjectStorage && base && publicBucket && isPublicKey(safeKey)) return `${base.replace(/\/$/, '')}/${safeKey}`
+  return `/${isPublicKey(safeKey) ? `uploads/${safeKey.slice(PUBLIC_PREFIX.length)}` : safeKey}`
 }

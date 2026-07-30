@@ -29,13 +29,18 @@ exactly as before, and `npm run dev:all` still works with zero external services
    Copy the Access Key ID and Secret Access Key — the secret is shown only once.
 3. Note your **Account ID** (right-hand sidebar). Your endpoint is:
    `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`
-4. *(Optional, for avatars/course banners)* Bucket → **Settings** → **Public access** → enable the
-   `r2.dev` subdomain or attach a custom domain. Set the resulting URL as `S3_PUBLIC_BASE_URL`.
-   Without it avatars still work — they're served through the API's `/uploads` route instead.
+> ⚠️ **Do not enable public access on this bucket.** R2's `r2.dev` subdomain and custom-domain
+> settings expose *every object in the bucket* — there is no per-folder public access. This bucket
+> holds signed enrollment agreements and certificates, so it must stay private. Leave
+> `S3_PUBLIC_BUCKET` and `S3_PUBLIC_BASE_URL` unset and avatars will be served through the API's
+> own `/uploads` route, which works fine and is the recommended setup.
+>
+> If you later want CDN delivery for avatars/banners, create a **second** bucket (e.g.
+> `treeacademy-public`), enable public access on *that* one only, and set both
+> `S3_PUBLIC_BUCKET=treeacademy-public` and `S3_PUBLIC_BASE_URL=https://pub-….r2.dev`. The code
+> only writes avatars and banners there; private documents always stay in the main bucket.
 
-> Any S3-compatible provider works (AWS S3, Backblaze B2, MinIO); only the env values change.
-> **Never make the bucket fully public** — it holds signed enrollment agreements. Only objects under
-> the `public/` prefix are ever exposed by URL, and only if you configure `S3_PUBLIC_BASE_URL`.
+Any S3-compatible provider works (AWS S3, Backblaze B2, MinIO); only the env values change.
 
 ### Moving your existing local files up
 
@@ -50,9 +55,10 @@ npm run migrate:storage
 
 ## 3. Render (API)
 
-1. [render.com](https://render.com) → **New** → **Web Service** → connect the GitHub repo.
-2. Render reads `render.yaml` automatically. Confirm: Runtime **Node**, Build `npm install`,
-   Start `npm start`.
+1. [render.com](https://render.com) → sign up with GitHub → **New** → **Blueprint**
+   (not "Web Service" — only the Blueprint flow reads `render.yaml`) → select the repo → **Apply**.
+2. Render creates the service from `render.yaml`: Node runtime, `npm install`, `npm start`,
+   `NODE_ENV=production`, `DEMO_MODE=false`, and an auto-generated `JWT_SECRET`.
 3. **Environment** tab — add every value marked `sync: false`:
 
    | Variable | Value |
