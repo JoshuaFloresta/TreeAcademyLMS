@@ -4,6 +4,7 @@ import { ExternalLink, FolderPlus, Trash2 } from 'lucide-react'
 import { useConfirm } from '../../../lib/confirmContext.js'
 import { useToast } from '../../../lib/toastContext.js'
 import { createContentAsset, deleteContentAsset, fetchContentAssets } from '../../../lib/admin.js'
+import Loading from '../../../components/Loading.jsx'
 
 const categories = ['template', 'document', 'video', 'image', 'link', 'other']
 
@@ -46,7 +47,7 @@ export default function AdminContentPage() {
 
     {error && <p className="form-alert" role="alert">{error}</p>}
 
-    {isLoading ? <p className="operations-note">Loading library…</p>
+    {isLoading ? <Loading label="Loading library…" />
       : !assets.length ? <div className="empty-state"><FolderPlus size={26} /><strong>No shared assets yet</strong><p>Add templates, documents, or links for the whole platform to reuse.</p></div>
       : <div className="admin-card-grid">
         {assets.map((asset) => <article className="admin-asset-card" key={asset.id}>

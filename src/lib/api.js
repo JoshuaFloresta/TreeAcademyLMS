@@ -15,3 +15,28 @@ export async function fetchPricing() {
   if (!response.ok) throw new Error('Could not load current pricing.')
   return response.json()
 }
+
+// The generic, no-payment application flow for a course outside the 3 fixed enrollment pathways
+// (see Course.agreementTemplate / CourseEnrollment). Public — no auth — same as the pathway
+// enrollment routes above.
+export async function fetchCourseAgreement(slug) {
+  const response = await fetch(`${API_URL}/api/course-agreements/${slug}`)
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.error ?? 'This course is not accepting applications right now.')
+  return data
+}
+
+export async function submitCourseAgreement(slug, payload) {
+  const response = await fetch(`${API_URL}/api/course-agreements/${slug}/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.error ?? 'We could not submit your application. Please try again.')
+  return data
+}
+
+// The blank template PDF — not sensitive, so it's fetched directly by pdfjs from the API origin
+// (which can differ from the client's own origin in production) rather than proxied through it.
+export const courseAgreementTemplateUrl = (slug) => `${API_URL}/api/course-agreements/${slug}/template.pdf`

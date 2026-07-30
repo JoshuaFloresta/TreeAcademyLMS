@@ -5,6 +5,7 @@ import StatusPill from '../../../components/StatusPill.jsx'
 import { useConfirm } from '../../../lib/confirmContext.js'
 import { useToast } from '../../../lib/toastContext.js'
 import { createWebinar, deleteWebinar, fetchAdminWebinars, fetchWebinarRegistrations, updateWebinar } from '../../../lib/admin.js'
+import Loading from '../../../components/Loading.jsx'
 
 const toLocalInput = (value) => { if (!value) return ''; const date = new Date(value); return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16) }
 const formatDate = (value) => (value ? new Date(value).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' }) : '—')
@@ -45,7 +46,7 @@ function WebinarForm({ webinar, onDone, onCancel }) {
 
 function RegistrationsPanel({ webinarId }) {
   const { data: registrations = [], isLoading } = useQuery({ queryKey: ['webinar-registrations', webinarId], queryFn: () => fetchWebinarRegistrations(webinarId) })
-  if (isLoading) return <p className="operations-note">Loading registrations…</p>
+  if (isLoading) return <Loading label="Loading registrations…" />
   if (!registrations.length) return <p className="operations-note">No registrations yet.</p>
   return <ul className="admin-webinar-registrations">{registrations.map((row) => <li key={row._id}><strong>{row.name}</strong><small>{row.email}</small><span>{formatDate(row.createdAt)}</span></li>)}</ul>
 }
@@ -74,7 +75,7 @@ export default function AdminWebinarsPage() {
     </div>
     {adding && <WebinarForm onCancel={() => setAdding(false)} onDone={() => { setAdding(false); invalidate() }} />}
     <div className="admin-webinar-list">
-      {isLoading ? <p className="operations-note">Loading sessions…</p>
+      {isLoading ? <Loading label="Loading sessions…" />
         : !webinars.length ? <p className="operations-note"><CalendarClock size={17} /> No webinars or special courses yet.</p>
         : webinars.map((webinar) => {
           const seatsLeft = webinar.capacity != null ? webinar.capacity - webinar.registeredCount : null

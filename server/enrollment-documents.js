@@ -1,18 +1,19 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
-import { putFile } from './storage.js'
+import { PDFCheckBox, PDFDocument, PDFTextField, StandardFonts, rgb } from 'pdf-lib'
+import { putFile, randomKey } from './storage.js'
 
 // The blank AcroForm sources are committed to the repo, so they are read from the bundle on disk —
 // unlike the *filled* documents below, which are user data and go to the storage layer.
 const templateRoot = path.resolve(process.cwd(), 'server/templates')
 
-const savePdf = (kind, bytes) =>
-  putFile(path.posix.join('enrollments', `${crypto.randomUUID()}-${kind}.pdf`), bytes, 'application/pdf')
+const savePdf = (folder, kind, bytes) =>
+  putFile(path.posix.join(folder, `${crypto.randomUUID()}-${kind}.pdf`), bytes, 'application/pdf')
 
 const clean = (value) => typeof value === 'string' ? value.trim() : ''
-const yes = (value) => value === true || value === 'true'
+// 'on' covers a native HTML checkbox's default submitted value (no explicit `value` attribute).
+const yes = (value) => value === true || value === 'true' || value === 'on'
 
 function decodeSignature(signatureDataUrl) {
   if (!/^data:image\/png;base64,[a-z0-9+/=]+$/i.test(signatureDataUrl ?? '')) throw new Error('The signature image is invalid.')
@@ -106,7 +107,7 @@ export async function createApplicationPdf({ data }) {
     }
     y -= 7
   }
-  return savePdf('application', await pdf.save())
+  return savePdf('enrollments', 'application', await pdf.save())
 }
 
 export async function createFilledDocumentBytes({ type, fields, signatureDataUrl, signatureName }) {
@@ -142,7 +143,57 @@ export async function createFilledDocumentBytes({ type, fields, signatureDataUrl
 
 export async function createFilledDocument({ type, fields, signatureDataUrl, signatureName }) {
   const bytes = await createFilledDocumentBytes({ type, fields, signatureDataUrl, signatureName })
-  return savePdf(type, bytes)
+  return savePdf('enrollments', type, bytes)
 }
 
 export const isTruthy = yes
+
+// --- Generic, per-course agreement PDFs (Course.agreementTemplate) ---
+// Unlike realex-reblex/reclex above, the field names here are arbitrary and admin-defined, so they
+// are read straight off the uploaded PDF's own AcroForm instead of being hardcoded per document type.
+
+export const saveAgreementTemplate = (file) => putFile(randomKey('course-agreement-templates', 'pdf'), file.buffer, 'application/pdf')
+
+// A text field is treated as the signature slot if its name contains "signature" — the same
+// convention the two hardcoded templates already follow (p_signature, b_signature). Any other field
+// kind (radio group, dropdown, etc.) is intentionally skipped — unsupported in v1.
+export async function extractAgreementFields(bytes) {
+  const pdf = await PDFDocument.load(bytes)
+  const fields = []
+  for (const field of pdf.getForm().getFields()) {
+    const name = field.getName()
+    if (field instanceof PDFCheckBox) fields.push({ name, type: 'checkbox', required: true })
+    else if (field instanceof PDFTextField) {
+      const isSignature = /signature/i.test(name)
+      fields.push({ name, type: isSignature ? 'signature' : 'text', multiline: !isSignature && field.isMultiline(), required: !isSignature })
+    }
+  }
+  return fields
+}
+
+export async function createFilledAgreementBytes({ templateBytes, schema, values, signatureDataUrl, signatureName, title }) {
+  const pdf = await PDFDocument.load(templateBytes)
+  const form = pdf.getForm()
+  const font = await pdf.embedFont(StandardFonts.Helvetica)
+  const signatureField = schema.find((field) => field.type === 'signature')
+  for (const field of schema) {
+    if (field.type === 'signature') continue
+    if (field.type === 'checkbox') check(form, field.name, isTruthy(values[field.name]))
+    else setText(form, field.name, values[field.name])
+  }
+  if (signatureField) {
+    setText(form, signatureField.name, signatureName)
+    await stampSignatureImage(pdf, form, signatureField.name, signatureDataUrl)
+  }
+  form.updateFieldAppearances(font)
+  form.flatten()
+  // Even a PDF with no named signature field still gets a legally meaningful signed record via
+  // this appended acknowledgment page — the inline overlay is a nice-to-have, not a requirement.
+  await addSignaturePage(pdf, { signatureDataUrl, signatureName, title })
+  return pdf.save()
+}
+
+export async function createFilledAgreement(args) {
+  const bytes = await createFilledAgreementBytes(args)
+  return savePdf('course-agreements', 'agreement', bytes)
+}

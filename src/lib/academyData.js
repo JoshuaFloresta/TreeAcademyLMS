@@ -30,9 +30,9 @@ export const pathways = [
     tone: 'paper',
   },
   {
-    id: 'agent',
+    id: 'appraiser',
     kicker: 'For rising practitioners',
-    title: 'Agent Review',
+    title: 'Appraiser Review',
     copy: 'Develop reliable property practice with guidance you can apply immediately.',
     details: 'Master the science of property practice with hands-on guidance, market analysis, and real-world case discussions that prepare you for confident, ethical client service.',
     modules: '9 focused modules',
@@ -48,7 +48,7 @@ export const pathways = [
 export const tasks = [
   { title: 'Property valuation practice set', course: 'Broker Review', due: 'Due tomorrow', state: 'late' },
   { title: 'Client consultation reflection', course: 'Consultant Review', due: 'Due Fri, 26 Jul', state: 'soon' },
-  { title: 'Agency disclosure worksheet', course: 'Agent Review', due: 'Submitted', state: 'done' },
+  { title: 'Agency disclosure worksheet', course: 'Appraiser Review', due: 'Submitted', state: 'done' },
 ]
 
 export const faq = [

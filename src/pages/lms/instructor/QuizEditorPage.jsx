@@ -6,6 +6,7 @@ import RichTextEditor from '../../../components/RichTextEditor.jsx'
 import { useToast } from '../../../lib/toastContext.js'
 import { createQuiz, fetchCourse, fetchQuiz, updateQuiz } from '../../../lib/lms.js'
 import { blankQuestion, questionIsValid, questionPayload, questionTypes } from './builderShared.js'
+import Loading from '../../../components/Loading.jsx'
 
 function QuestionEditor({ question, index, total, setQuestion, setQuestionType, setChoice, setAcceptableAnswer, setPair, removeQuestion }) {
   return <div className="builder-editor-section builder-question">
@@ -136,9 +137,9 @@ export default function QuizEditorPage({ role, quizId }) {
     <button type="button" className="filter-button builder-back-button" onClick={() => navigate(-1)}><ArrowLeft size={15} /> Back to course builder</button>
     <div className="course-details builder-phase-editor">
       <div className="builder-editor-page-body wide">
-        {!isNew && isLoading && <p className="operations-note">Loading quiz…</p>}
+        {!isNew && isLoading && <Loading label="Loading quiz…" />}
         {isNew && !courseId && <p className="form-alert" role="alert">No course selected. Go back and choose a course first.</p>}
-        {(isNew ? Boolean(courseId) : Boolean(loaded)) && !course && <p className="operations-note">Loading…</p>}
+        {(isNew ? Boolean(courseId) : Boolean(loaded)) && !course && <Loading label="Loading…" />}
         {(isNew ? Boolean(courseId) : Boolean(loaded)) && course && <QuizFields quizId={quizId} courseId={courseId} course={course} initial={loaded} initialModuleId={initialModuleId} initialPosition={initialPosition} onDone={done} onCancel={() => navigate(-1)} />}
       </div>
     </div>

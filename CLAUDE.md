@@ -122,6 +122,84 @@ course created outside those 3 pathways has no price, since checkout is keyed of
 pathway, not an arbitrary course. `POST /api/staff/courses` (used by both admins and instructors)
 creates a new course; the merged admin page exposes a "New course" card for this.
 
+## Learner profiles and enrollment documents
+
+`User` carries the profile fields the admission form already asks for — `birthDate`, `school`,
+`degree` — plus learner-supplied `username` (their preferred name, shown as `@handle`),
+`facebookUrl`, `bio`, `headline`, `location`. `applyIntakeToProfile` (`server/profile.js`, its own
+module so `migrate-backfill-profiles.js` can import it without booting the HTTP server) seeds the
+first three from `enrollment.intake.data` inside `provisionLearnerAccount`. **Blank fields only** —
+a learner approved for a second pathway keeps whatever they edited themselves. Run
+`npm run migrate:backfill-profiles` once for learners provisioned before this existed.
+
+`PATCH /api/users/me` (`profileInput`) is self-serve; `name`/`email` are deliberately excluded
+because they come from the signed agreement and are what staff match records against — only
+`adminUserUpdateInput` can change them. `facebookUrl` is regex-restricted to real Facebook hosts so
+a profile page can't become an open redirect under academy branding.
+
+`GET /api/users/:id` returns the profile to any authenticated caller but strips `birthDate` for
+anyone who isn't the owner or staff (`publicProfile`), and only attaches `enrollments` — the
+submitted admission form and signed agreements — for staff. **The response never contains storage
+keys**; `enrollmentDocuments`/`ENROLLMENT_DOCUMENT_TYPES` expose only type, label, and signedAt.
+Staff read a file through `GET /api/staff/enrollments/:id/documents/:type`
+(`application` | `realex-reblex` | `reclex`), which re-authorizes the caller, streams via
+`sendPrivateDownload`, and writes an `enrollment.document_viewed` audit row every time. Entry
+points: the Documents column on `AdminEnrollmentsPage`, and a Profile link from the admin User
+Management rows and the instructor Student Roster. `GET /api/staff/enrollments` returns a summary
+only — the raw intake answers and PDF keys stay server-side.
+
+## Submissions review (instructors)
+
+The old Gradebook grid is now **Submissions** (`/submissions`; `/gradebook` redirects, since
+notifications already sent carry the old path). `GET /api/staff/courses/:id/submissions` merges
+assignment `Submission`s and `QuizAttempt`s into one feed with a shared shape (`kind`, `title`,
+`learner`, `submittedAt`, `score`/`maxPoints`, `status`), sorted newest first; filtering by type,
+status, and search happens client-side in `SubmissionsPage`.
+
+**Quiz attempts are now persisted** (`QuizAttempt`). They previously were graded in memory and
+discarded, so a learner could sit a quiz leaving nothing an instructor could review. Writing the
+attempt is best-effort inside `POST /api/quizzes/:id/attempt` — a failed write logs and still
+returns the learner their result. A question the auto-grader can't judge stores `correct: null`
+(essay), which is what flags an attempt as `needs_grading`; `POST /api/staff/quiz-attempts/:id/review`
+records an instructor's `reviewedScore` override and `feedback`.
+
+Reviewing one item is a **page**, not a modal: `/submissions/:kind/:id` (`assignment` | `quiz`,
+matched in `LmsPageContent`), two columns — the submitted work on the left (written response,
+inline image/PDF preview of the attachment), grading and the comment thread on the right.
+`GET /api/staff/submissions/:id` backs the assignment side so the page is deep-linkable without
+first loading a whole course gradebook. **Grading records a score only** — the `feedback` field
+still exists on the model and the API still accepts it, but the UI deliberately routes all written
+communication through the comment thread instead, so there is one place a learner reads and replies.
+
+`SubmissionComment` now hangs off **either** `submissionId` or `quizAttemptId` — a `pre('validate')`
+hook enforces exactly one. That hook takes **no `next` parameter**: under Mongoose 9 a hook
+declaring `next` fails with "next is not a function", so it's promise-based and throws instead.
+`loadCommentTarget`/`listComments`/`createComment` in `server/index.js` serve both
+`/api/submissions/:id/comments` and `/api/quiz-attempts/:id/comments` from one implementation.
+
+## Automatic badge rules
+
+`BadgeRule` (instructor-defined, per course) lets a badge be awarded the moment a learner meets a
+condition — no manual step. Four trigger types: `course_completion`, `module_milestone`,
+`score_threshold` (an assignment or quiz, by percent), `attendance_count` (sessions marked
+present/late). `targetScope` is `'course'` (everyone the triggering event already concerns) or
+`'selected'` (a hand-picked `learnerIds` list) — the *who*, independent of the *when*.
+
+There's no background job runner in this app, so rules aren't evaluated on a schedule. `evaluateBadgeRules`
+→ `runBadgeRules`/`badgeRuleSatisfied` (`server/index.js`, just above `/api/badges/me`) are called inline
+from the five routes that can make a trigger newly true: module completion, assignment grading, a quiz
+attempt (auto-graded), a quiz-attempt review (score override), and attendance recording. Each call passes
+only the `triggerTypes` that write could possibly affect, so e.g. grading an assignment never re-checks
+attendance rules. `StudentBadge`'s unique `(badgeId, learnerId)` index is what makes this idempotent —
+**a badge is awarded once, ever, regardless of which rule grants it**; two rules sharing a badge doesn't
+double-award, it just means either path can trigger it. System-issued awards carry `awardedByRuleId`
+instead of `awardedBy` (no human awarder). Never throws — a badge miscalculation must not fail the
+grade/attendance/completion write that triggered it.
+
+Client: `RecognitionPage.jsx`. `BadgeManager` is a minimal create/list panel — nothing else in the app
+lets staff create a `Badge`, so rules would have nothing to reference without it. Manual one-off awarding
+(`POST /api/staff/badges/:badgeId/award`) exists server-side but has no UI; only the automatic path does.
+
 ## Database: dual mode
 
 Without `MONGODB_URI` the server runs an in-memory fallback (Maps) — data is lost on restart and

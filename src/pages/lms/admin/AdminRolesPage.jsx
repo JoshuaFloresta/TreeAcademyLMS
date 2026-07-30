@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ShieldCheck } from 'lucide-react'
 import { useToast } from '../../../lib/toastContext.js'
 import { PERMISSION_CATALOG, fetchPermissions, savePermissions } from '../../../lib/admin.js'
+import Loading from '../../../components/Loading.jsx'
 
 const roles = ['learner', 'instructor', 'admin']
 const roleLabels = { learner: 'Learner', instructor: 'Instructor', admin: 'Admin' }
@@ -37,7 +38,7 @@ export default function AdminRolesPage() {
     <div className="settings-card"><span className="notice-icon gold"><ShieldCheck size={18} /></span><div><h2>Capability matrix</h2><p>These flags document and gate what each role may do. Server routes always enforce the admin/staff boundary regardless of this matrix.</p></div></div>
     {notice && <p className="auth-notice" role="status">{notice}</p>}
     {error && <p className="form-alert" role="alert">{error}</p>}
-    {isLoading || !matrix ? <p className="operations-note">Loading permissions…</p> : <div className="admin-matrix">
+    {isLoading || !matrix ? <Loading label="Loading permissions…" /> : <div className="admin-matrix">
       <div className="admin-matrix-head"><span>CAPABILITY</span>{roles.map((role) => <span key={role}>{roleLabels[role]}</span>)}</div>
       {PERMISSION_CATALOG.map((permission) => <div className="admin-matrix-row" key={permission.key}>
         <span><strong>{permission.label}</strong><small>{permission.key}</small></span>

@@ -12,6 +12,7 @@ import { useConfirm } from '../../../lib/confirmContext.js'
 import { useToast } from '../../../lib/toastContext.js'
 import { createCourse, createLesson, createModule, deleteAssignment, deleteLesson, deleteModule, deleteQuiz, fetchCourse, fetchCourses, fetchQuizzes, submitCourseForReview, updateAssignment, updateCourse, updateLesson, updateModule, updateQuiz, uploadCourseBanner } from '../../../lib/lms.js'
 import { dueLabel } from './builderShared.js'
+import Loading from '../../../components/Loading.jsx'
 
 const approvalLabel = { draft: { kind: 'gold', label: 'Needs approval' }, pending_review: { kind: 'gold', label: 'Awaiting admin review' }, approved: { kind: 'green', label: 'Approved' }, rejected: { kind: 'red', label: 'Changes requested' } }
 
@@ -522,7 +523,7 @@ export default function CourseBuilderPage({ role }) {
       </aside>
       <section className="builder-canvas">
         {!activeId ? <p className="operations-note">Select or create a course to begin.</p>
-          : isLoading ? <p className="operations-note">Loading course…</p>
+          : isLoading ? <Loading label="Loading course…" />
           : courseFailed ? <p className="form-alert" role="alert">{courseError?.message ?? 'Could not load this course. Please choose another course or refresh the page.'}</p>
           : !course ? <p className="operations-note">Course details are unavailable. Please choose another course or refresh the page.</p>
           : <>

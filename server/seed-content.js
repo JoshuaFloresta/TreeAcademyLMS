@@ -13,7 +13,7 @@ const day = 24 * 60 * 60 * 1000
 const programs = [
   { slug: 'broker-review', title: 'Broker Review', audience: 'Licensed brokers preparing for the board exam', description: 'Build a bulletproof foundation for your brokerage career — legal knowledge, ethical standards, and operational practice for the Broker board exam.' },
   { slug: 'consultant-review', title: 'Consultant Review', audience: 'Advisors preparing for the Real Estate Consultant exam', description: 'Deep-dive into advisory practice, market research, financial modeling, and feasibility studies for the Consultant licensure exam.' },
-  { slug: 'agent-review', title: 'Agent Review', audience: 'Rising practitioners preparing for agent accreditation', description: 'Master property practice fundamentals with hands-on guidance and real-world case discussions.' },
+  { slug: 'appraiser-review', title: 'Appraiser Review', audience: 'Rising practitioners preparing for appraiser accreditation', description: 'Master property practice fundamentals with hands-on guidance and real-world case discussions.' },
 ]
 
 const courseBlueprints = [
@@ -82,7 +82,7 @@ const courseBlueprints = [
     },
   },
   {
-    slug: 'agent-review', programSlug: 'agent-review', title: 'Agent Review',
+    slug: 'appraiser-review', programSlug: 'appraiser-review', title: 'Appraiser Review',
     description: 'Nine modules covering property practice fundamentals, market analysis, and client service for accreditation.',
     modules: [
       { title: 'Property Practice Basics', description: 'Learn the agent’s role in a transaction and how to structure a confident, client-ready listing presentation.', lessons: [

@@ -1,6 +1,8 @@
+import { useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell } from 'lucide-react'
-import { fetchNotifications, markAllNotificationsRead, markNotificationRead } from '../../lib/lms.js'
+import { fetchNotifications, markAllNotificationsRead } from '../../lib/lms.js'
+import Loading from '../../components/Loading.jsx'
 
 function timeAgo(dateString) {
   const diffMs = Date.now() - new Date(dateString).getTime()
@@ -13,21 +15,46 @@ function timeAgo(dateString) {
 
 export default function NotificationsPage() {
   const queryClient = useQueryClient()
-  const { data: notifications = [], isLoading, error } = useQuery({ queryKey: ['nav-notifications'], queryFn: fetchNotifications })
-  const readMutation = useMutation({ mutationFn: markNotificationRead, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['nav-notifications'] }) })
-  const readAllMutation = useMutation({ mutationFn: markAllNotificationsRead, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['nav-notifications'] }) })
+  // Deliberately a different cache entry from the sidebar badge's ['nav-notifications', userId].
+  // Opening this page marks everything read, but the list should still show which items were new
+  // *this visit* — so the badge's copy is refetched and clears, while this copy is left alone and
+  // keeps rendering the unread styling until you navigate away and come back.
+  const { data: notifications = [], isLoading, error } = useQuery({ queryKey: ['notifications-page'], queryFn: fetchNotifications })
+  const autoMarked = useRef(false)
+
+  // Arriving on this page is what "seeing" a notification means, so it is the read action. Runs
+  // once per visit; on failure the guard is released so a later render can retry.
+  useEffect(() => {
+    if (autoMarked.current || isLoading || error) return
+    autoMarked.current = true
+    if (!notifications.some((notification) => !notification.readAt)) return
+    markAllNotificationsRead()
+      .then(() => queryClient.invalidateQueries({ queryKey: ['nav-notifications'] }))
+      .catch(() => { autoMarked.current = false })
+  }, [isLoading, error, notifications, queryClient])
+
+  // Fallback only — visible when the automatic pass above couldn't reach the server.
+  const readAllMutation = useMutation({
+    mutationFn: markAllNotificationsRead,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['nav-notifications'] })
+      queryClient.invalidateQueries({ queryKey: ['notifications-page'] })
+    },
+  })
   const hasUnread = notifications.some((notification) => !notification.readAt)
 
   return <>
-    <div className="page-title-row"><div><p className="eyebrow">YOUR ACADEMY UPDATES</p><h1>Notifications</h1><p>Everything important, without the noise.</p></div><button className="filter-button" onClick={() => readAllMutation.mutate()} disabled={!hasUnread || readAllMutation.isPending}>{readAllMutation.isPending ? 'Marking…' : 'Mark all as read'}</button></div>
-    {isLoading && <div className="empty-state"><Bell size={26} /><strong>Loading notifications…</strong></div>}
+    <div className="page-title-row"><div><p className="eyebrow">YOUR ACADEMY UPDATES</p><h1>Notifications</h1><p>Everything important, without the noise.</p></div>
+      {hasUnread && <button className="filter-button" onClick={() => readAllMutation.mutate()} disabled={readAllMutation.isPending}>{readAllMutation.isPending ? 'Marking…' : 'Mark all as read'}</button>}
+    </div>
+    {isLoading && <Loading block label="Loading notifications…" />}
     {error && <div className="empty-state"><Bell size={26} /><strong>Could not load notifications</strong><p>{error.message}</p></div>}
     {!isLoading && !error && notifications.length === 0 && <div className="empty-state"><Bell size={26} /><strong>You’re all caught up</strong><p>New academy updates will show up here.</p></div>}
     <div className="notification-list">
-      {notifications.map((notification) => <article key={notification._id} className="notification-item" onClick={() => !notification.readAt && readMutation.mutate(notification._id)} style={{ cursor: notification.readAt ? 'default' : 'pointer' }}>
+      {notifications.map((notification) => <article key={notification._id} className={`notification-item ${notification.readAt ? '' : 'unread'}`}>
         <span className={`notice-icon ${!notification.readAt ? 'gold' : ''}`}><Bell size={18} /></span>
         <div><strong>{notification.title}</strong><p>{notification.body}</p><small>{timeAgo(notification.createdAt)}</small></div>
-        {!notification.readAt && <i className="unread-dot" />}
+        {!notification.readAt && <span className="notification-new">New</span>}
       </article>)}
     </div>
   </>

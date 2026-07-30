@@ -13,12 +13,13 @@ import { Server } from 'socket.io'
 import { z } from 'zod'
 import { config, integrations, isAllowedOrigin, isProduction } from './config.js'
 import { catalog } from './catalog.js'
-import { Announcement, Assignment, Attendance, Badge, CalendarEvent, Category, CategoryHeader, Certificate, CertificateTemplate, ContentAsset, Course, EmailTemplate, Enrollment, ForumPost, ForumThread, LearningModule, LearningProgress, Lesson, Module, NewsletterSubscriber, Notification, Presence, PricingSettings, Quiz, Report, RolePermission, StudentBadge, Submission, SubmissionComment, SupportTicket, Webinar, WebinarRegistration, WebhookEvent, AuditLog, RefreshToken, User } from './models.js'
+import { Announcement, Assignment, Attendance, Badge, BadgeRule, CalendarEvent, Category, CategoryHeader, Certificate, CertificateTemplate, ContentAsset, Course, CourseEnrollment, EmailTemplate, Enrollment, ForumPost, ForumReaction, ForumThread, LearningModule, LearningProgress, Lesson, Module, NewsletterSubscriber, Notification, Presence, PricingSettings, Quiz, QuizAttempt, Report, RolePermission, StudentBadge, Submission, SubmissionComment, SupportTicket, Webinar, WebinarRegistration, WebhookEvent, AuditLog, RefreshToken, User } from './models.js'
 import { createToken, hashToken, requireAdmin, requireAuth, requireStaff, signAccessToken, verifyHmac, verifyPaymongoSignature } from './security.js'
 import { emailTemplateDefaults, ensureDefaultEmailTemplates, sendEnrollmentDocumentsEmail, sendTemplatedEmail } from './email.js'
 import { renderCertificate, saveCertificateTemplate, saveSubmissionAttachment, submissionExtensionByMime } from './certificates.js'
-import { createApplicationPdf, createFilledDocument, createFilledDocumentBytes } from './enrollment-documents.js'
+import { createApplicationPdf, createFilledAgreement, createFilledDocument, createFilledDocumentBytes, extractAgreementFields, saveAgreementTemplate } from './enrollment-documents.js'
 import { PUBLIC_PREFIX, getFile, isObjectStorage, publicUrl, putFile, randomKey } from './storage.js'
+import { applyIntakeToProfile } from './profile.js'
 
 const app = express()
 const server = http.createServer(app)
@@ -31,6 +32,14 @@ const certificateUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, callback) => callback(null, ['application/pdf', 'image/png', 'image/jpeg'].includes(file.mimetype)),
+})
+
+// A course's optional fillable/signable agreement PDF (see Course.agreementTemplate) — PDF only,
+// since its AcroForm fields are read directly off the file at upload time.
+const agreementTemplateUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, callback) => callback(null, file.mimetype === 'application/pdf'),
 })
 
 // Avatars are public-facing images (unlike signed PDFs, which stay in private storage), so they're
@@ -50,6 +59,14 @@ const bannerUpload = multer({
   fileFilter: (_req, file, callback) => callback(null, Boolean(avatarMimeExtension[file.mimetype])),
 })
 const saveBannerUpload = (file) => savePublicImage('banners', file)
+
+// Images attached to a discussion thread or reply — same public-image pattern as avatars/banners.
+const forumImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 6 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, callback) => callback(null, Boolean(avatarMimeExtension[file.mimetype])),
+})
+const saveForumImageUpload = (file) => savePublicImage('forum', file)
 
 // Avatars and banners are the only web-servable uploads (signed PDFs and certificates stay
 // private). They live under the storage layer's `public/` prefix and are referenced by URL —
@@ -95,15 +112,15 @@ const enrollmentInput = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().email().max(254),
   phone: z.string().trim().max(30).optional(),
-  pathway: z.enum(['broker', 'consultant', 'agent']),
+  pathway: z.enum(['broker', 'consultant', 'appraiser']),
 })
 const pricingSettingsInput = z.object({
   totalBroker: z.coerce.number().min(1).max(1_000_000),
   totalConsultant: z.coerce.number().min(1).max(1_000_000),
-  totalAgent: z.coerce.number().min(1).max(1_000_000),
+  totalAppraiser: z.coerce.number().min(1).max(1_000_000),
   upfrontBroker: z.coerce.number().min(1).max(1_000_000),
   upfrontConsultant: z.coerce.number().min(1).max(1_000_000),
-  upfrontAgent: z.coerce.number().min(1).max(1_000_000),
+  upfrontAppraiser: z.coerce.number().min(1).max(1_000_000),
 })
 // TODO(remove before launch): 'test' is a temporary ₱1 plan for exercising the real PayMongo
 // checkout → webhook → auto-provisioning path end-to-end without charging the real price. Remove
@@ -115,13 +132,13 @@ const TEST_PLAN_AMOUNT = 1
 // Falls back to catalog.js's static price when no admin override has been saved yet (or when
 // running without MongoDB), so the enrollment/payment flow always has a price to show.
 async function getPricingSettings() {
-  const defaults = { totalBroker: catalog.product.amount, totalConsultant: catalog.product.amount, totalAgent: catalog.product.amount, currency: catalog.product.currency, upfrontBroker: 1000, upfrontConsultant: 5000, upfrontAgent: 1000 }
+  const defaults = { totalBroker: catalog.product.amount, totalConsultant: catalog.product.amount, totalAppraiser: catalog.product.amount, currency: catalog.product.currency, upfrontBroker: 1000, upfrontConsultant: 5000, upfrontAppraiser: 1000 }
   if (!databaseReady) return defaults
   const saved = await PricingSettings.findOne().lean()
-  return saved ? { totalBroker: saved.totalBroker, totalConsultant: saved.totalConsultant, totalAgent: saved.totalAgent, currency: saved.currency, upfrontBroker: saved.upfrontBroker, upfrontConsultant: saved.upfrontConsultant, upfrontAgent: saved.upfrontAgent } : defaults
+  return saved ? { totalBroker: saved.totalBroker, totalConsultant: saved.totalConsultant, totalAppraiser: saved.totalAppraiser, currency: saved.currency, upfrontBroker: saved.upfrontBroker, upfrontConsultant: saved.upfrontConsultant, upfrontAppraiser: saved.upfrontAppraiser } : defaults
 }
-const totalAmountKeyByPathway = { broker: 'totalBroker', consultant: 'totalConsultant', agent: 'totalAgent' }
-const upfrontAmountKeyByPathway = { broker: 'upfrontBroker', consultant: 'upfrontConsultant', agent: 'upfrontAgent' }
+const totalAmountKeyByPathway = { broker: 'totalBroker', consultant: 'totalConsultant', appraiser: 'totalAppraiser' }
+const upfrontAmountKeyByPathway = { broker: 'upfrontBroker', consultant: 'upfrontConsultant', appraiser: 'upfrontAppraiser' }
 const totalAmountForPathway = (pricing, pathway) => pricing[totalAmountKeyByPathway[pathway]]
 const upfrontAmountForPathway = (pricing, pathway) => pricing[upfrontAmountKeyByPathway[pathway]]
 const requiredApplicationText = (label, max = 500) => z.string().trim().min(1, `${label} is required.`).max(max)
@@ -193,10 +210,56 @@ const loginInput = z.object({ email: z.string().email().max(254), password: z.st
 // Activation identifies the account by the setup token alone (POST /api/auth/activate looks the
 // user up via inviteTokenHash) — no email field, since the client has no reason to send one.
 const activationInput = z.object({ token: z.string().min(20).max(200), password: z.string().min(10).max(128) })
-const profileInput = z.object({ bio: z.string().trim().max(600).optional(), headline: z.string().trim().max(120).optional(), location: z.string().trim().max(120).optional() })
+const usernameField = z.string().trim().toLowerCase().min(3).max(30).regex(/^[a-z0-9._-]+$/, 'Usernames use letters, numbers, dot, underscore, or hyphen.')
+// Only accept real Facebook profile links. Left open it becomes an unmoderated outbound link on a
+// page every logged-in member can view — a free redirect to anywhere, rendered under our branding.
+const facebookUrlField = z.string().trim().max(300)
+  .refine((value) => /^https:\/\/(www\.|m\.|web\.)?(facebook\.com|fb\.me|fb\.com)\/[^\s]*$/i.test(value), 'Enter a full Facebook profile link, e.g. https://facebook.com/yourname')
+// Fields a member may change on their own profile. Deliberately excludes `name` and `email`: those
+// come from the signed enrollment agreement and are what staff match records against, so only an
+// admin can change them (see adminUserUpdateInput).
+// A cleared input arrives as '' from the browser; every optional profile field means "unset" by it.
+const blankToNull = (schema) => z.preprocess((value) => (typeof value === 'string' && !value.trim() ? null : value), schema.nullable().optional())
+const profileInput = z.object({
+  bio: z.string().trim().max(600).optional(),
+  headline: z.string().trim().max(120).optional(),
+  location: z.string().trim().max(120).optional(),
+  username: blankToNull(usernameField),
+  birthDate: blankToNull(z.coerce.date().min(new Date('1900-01-01'), 'Enter a valid date of birth.').max(new Date(), 'Date of birth cannot be in the future.')),
+  school: blankToNull(z.string().trim().max(200)),
+  degree: blankToNull(z.string().trim().max(200)),
+  facebookUrl: blankToNull(facebookUrlField),
+})
 const passwordChangeInput = z.object({ currentPassword: z.string().min(1).max(128), newPassword: z.string().min(10).max(128) })
 const badgeInput = z.object({ title: z.string().trim().min(2).max(120), description: z.string().trim().max(400).optional(), color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(), icon: z.string().trim().max(40).optional() })
 const awardInput = z.object({ learnerId: z.string().min(1), note: z.string().trim().max(400).optional() })
+// Each trigger type needs different fields — validated as one flat object rather than a
+// discriminated union so the client can send a single, simple form payload; the per-type fields
+// that don't apply are just left undefined and ignored by the evaluator.
+const badgeRuleShape = z.object({
+  badgeId: z.string().trim().min(1),
+  courseId: z.string().trim().min(1),
+  trigger: z.object({
+    type: z.enum(['course_completion', 'module_milestone', 'score_threshold', 'attendance_count']),
+    moduleId: z.string().trim().min(1).optional(),
+    targetKind: z.enum(['assignment', 'quiz']).optional(),
+    targetId: z.string().trim().min(1).optional(),
+    minPercent: z.coerce.number().min(0).max(100).optional(),
+    minAttendance: z.coerce.number().int().min(1).max(500).optional(),
+  }),
+  targetScope: z.enum(['course', 'selected']).optional(),
+  learnerIds: z.array(z.string().trim().min(1)).max(500).optional(),
+  isActive: z.boolean().optional(),
+})
+const badgeRuleInput = badgeRuleShape
+  .refine((value) => value.trigger.type !== 'module_milestone' || value.trigger.moduleId, { message: 'Choose which module completes this rule.', path: ['trigger', 'moduleId'] })
+  .refine((value) => value.trigger.type !== 'score_threshold' || (value.trigger.targetKind && value.trigger.targetId && value.trigger.minPercent != null), { message: 'Choose an assignment or quiz and a minimum score.', path: ['trigger', 'targetId'] })
+  .refine((value) => value.trigger.type !== 'attendance_count' || value.trigger.minAttendance, { message: 'Enter how many sessions are required.', path: ['trigger', 'minAttendance'] })
+  .refine((value) => value.targetScope !== 'selected' || (value.learnerIds && value.learnerIds.length), { message: 'Pick at least one learner.', path: ['learnerIds'] })
+// Loosely validated: a PATCH that only flips `isActive` shouldn't have to re-satisfy every
+// cross-field rule above. The evaluator treats an incompletely-configured rule as never matching,
+// so a half-edited trigger fails safe (nothing gets awarded) rather than erroring the request.
+const badgeRuleUpdateInput = badgeRuleShape.partial().extend({ trigger: badgeRuleShape.shape.trigger.partial().optional() })
 const certificateIssueInput = z.object({ templateId: z.string().min(1), learnerId: z.string().min(1) })
 const certificateTemplateInput = z.object({ title: z.string().trim().min(2).max(160), scope: z.enum(['module', 'program']), targetId: z.string().min(1), nameX: z.coerce.number().min(0).max(2000).optional(), nameY: z.coerce.number().min(0).max(2000).optional(), nameSize: z.coerce.number().min(10).max(120).optional() })
 
@@ -211,6 +274,18 @@ const courseInput = z.object({
   bannerPreset: z.string().trim().max(60).nullable().optional(),
 })
 const courseUpdateInput = courseInput.partial()
+// The contact-info half of a generic course application (POST /api/course-agreements/:slug/apply)
+// — deliberately short, unlike the pathway flow's full intake questionnaire, since a generic
+// course has no equivalent admission form beyond its own agreement PDF.
+const courseApplicantInput = z.object({
+  name: z.string().trim().min(2, 'Enter your full name.').max(100),
+  email: z.string().trim().email('Enter a valid email address.').max(254),
+  phone: z.string().trim().max(30).optional(),
+})
+// The PDF-field half is admin-defined per course, so it's validated loosely — safe because filling
+// only ever reads keys present in the course's stored `agreementTemplate.fields`, so any unexpected
+// key here is simply ignored rather than acted on.
+const agreementFieldsInput = z.record(z.string(), z.union([z.string(), z.boolean()])).optional()
 const moduleInput = z.object({
   title: z.string().trim().min(2).max(160),
   description: z.string().trim().max(1000).nullable().optional(),
@@ -290,14 +365,22 @@ const quizUpdateInput = quizInput.partial()
 // fill_blank/essay, string array for enumeration, object for matching) — validated per-question
 // against the quiz at grading time instead of a single fixed shape here.
 const quizAttemptInput = z.object({ answers: z.array(z.any()).min(1) })
+// An instructor reviewing an attempt may override the automatic score (after marking an essay,
+// say) and/or leave written feedback — both optional, since either alone is a valid review.
+const quizReviewInput = z.object({ reviewedScore: z.coerce.number().min(0).nullable().optional(), feedback: z.string().trim().max(2000).optional() })
 const calendarEventInput = z.object({
   title: z.string().trim().min(2).max(160),
-  description: z.string().trim().max(2000).optional(),
+  description: blankToNull(z.string().trim().max(2000)),
   startsAt: z.coerce.date(),
-  endsAt: z.coerce.date().optional(),
+  endsAt: z.coerce.date().nullable().optional(),
   eventType: z.enum(['live_review', 'deadline', 'announcement', 'office_hours']).optional(),
-  courseId: z.string().trim().min(1).optional(),
+  // Nullable so clearing the field removes the course link rather than being ignored as "absent".
+  courseId: blankToNull(z.string().trim().min(1)),
+  // Restricted to http(s): this renders as a button learners are told to click, so it must not be
+  // able to carry a `javascript:` or `data:` URL into the page.
+  meetingUrl: blankToNull(z.string().trim().max(500).refine((value) => /^https?:\/\//i.test(value), 'Enter a full link starting with https://')),
 })
+const calendarEventUpdateInput = calendarEventInput.partial()
 const attendanceInput = z.object({
   records: z.array(z.object({ learnerId: z.string().trim().min(1), status: z.enum(['present', 'absent', 'excused', 'late']) })).min(1).max(500),
 })
@@ -306,13 +389,22 @@ const announcementInput = z.object({
   body: z.string().trim().min(2).max(4000),
   pinned: z.boolean().optional(),
 })
+// Set by POST /api/forums/images (which generates it via the same public-image pipeline as
+// avatars/banners) — trusted enough to just shape-check here rather than re-verify storage.
+const forumImageUrl = z.string().trim().max(500).refine((value) => value.startsWith('/uploads/forum/') || /^https?:\/\//.test(value), 'Invalid image URL.').nullable().optional()
 const forumThreadInput = z.object({
   courseId: z.string().trim().min(1),
   title: z.string().trim().min(2).max(160),
   body: z.string().trim().min(2).max(6000),
+  imageUrl: forumImageUrl,
+  // "Who can reply", set at creation. Server-enforced below: only staff-authored threads may ever
+  // be created locked — a learner crafting `isLocked: true` into the request must not be able to
+  // grant themselves moderator-only reply gating on their own thread.
+  isLocked: z.boolean().optional(),
 })
-const forumPostInput = z.object({ body: z.string().trim().min(1).max(6000) })
+const forumPostInput = z.object({ body: z.string().trim().min(1).max(6000), imageUrl: forumImageUrl })
 const forumModerateInput = z.object({ isPinned: z.boolean().optional(), isLocked: z.boolean().optional() })
+const forumReactionInput = z.object({ type: z.enum(['like', 'dislike']) })
 const notificationBroadcastInput = z.object({
   title: z.string().trim().min(2).max(160),
   body: z.string().trim().max(2000).optional(),
@@ -321,7 +413,6 @@ const notificationBroadcastInput = z.object({
   recipientIds: z.array(z.string().trim().min(1)).optional(),
 })
 
-const usernameField = z.string().trim().toLowerCase().min(3).max(30).regex(/^[a-z0-9._-]+$/, 'Usernames use letters, numbers, dot, underscore, or hyphen.')
 const adminUserCreateInput = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().trim().email().max(254),
@@ -458,8 +549,25 @@ async function learnerVisibleCourseFilter(learnerId) {
   return { ...learnerCourseFilter(), _id: { $in: rows.map((row) => row.courseId) } }
 }
 const courseForPathway = (pathway) => Course.findOne({ slug: `${pathway}-review` })
+// Reserved regardless of which course currently holds them — pricing, checkout, and
+// provisionLearnerAccount's access grant all join a course by matching exactly this slug, so it can
+// neither be moved off one of the 3 pathway courses nor reused by a different one.
+const RESERVED_COURSE_SLUGS = ['broker-review', 'consultant-review', 'appraiser-review']
 const id = () => crypto.randomUUID()
 const publicEnrollment = (enrollment) => ({ id: enrollment._id?.toString() ?? enrollment.id, status: enrollment.status, amount: enrollment.amount, currency: enrollment.currency })
+
+// What a staff member is allowed to know about an enrollment's paperwork: which documents exist and
+// when they were signed — never the storage keys. Keys are how the file is fetched, so handing them
+// to the browser would turn a rendered list into a set of addresses for signed legal agreements.
+// Downloads go through GET /api/staff/enrollments/:id/documents/:type, which re-checks the caller.
+const ENROLLMENT_DOCUMENT_TYPES = {
+  application: { label: 'Admission form', key: (row) => row.intake?.pdfKey, signedAt: (row) => row.intake?.submittedAt },
+  'realex-reblex': { label: 'REALEX / REBLEX agreement', key: (row) => row.documents?.realexReblex?.pdfKey, signedAt: (row) => row.documents?.realexReblex?.signedAt },
+  reclex: { label: 'RECLEX agreement', key: (row) => row.documents?.reclex?.pdfKey, signedAt: (row) => row.documents?.reclex?.signedAt },
+}
+const enrollmentDocuments = (row) => Object.entries(ENROLLMENT_DOCUMENT_TYPES)
+  .filter(([, spec]) => spec.key(row))
+  .map(([type, spec]) => ({ type, label: spec.label, signedAt: spec.signedAt(row) ?? null }))
 
 async function findEnrollment(enrollmentId) {
   if (databaseReady) return Enrollment.findById(enrollmentId)
@@ -532,6 +640,7 @@ async function provisionLearnerAccount(enrollment) {
   }
   let learner = await User.findOne({ email: applicant.email })
   if (!learner) learner = new User({ name: applicant.name, email: applicant.email, role: 'learner' })
+  applyIntakeToProfile(learner, enrollment.intake?.data)
   const alreadyActive = learner.status === 'active'
   let setupUrl = null
   if (!alreadyActive) {
@@ -543,6 +652,26 @@ async function provisionLearnerAccount(enrollment) {
   const pathwayCourse = await courseForPathway(applicant.pathway)
   if (pathwayCourse) await LearningProgress.findOneAndUpdate(
     { learnerId: learner._id, courseId: pathwayCourse._id }, { $setOnInsert: { completedModuleIds: [] } }, { upsert: true, setDefaultsOnInsert: true })
+  if (alreadyActive) return { delivery: 'existing_active_account', setupUrl: null }
+  const delivery = await bestEffortEmail(sendCredentialsEmail({ name: learner.name, email: learner.email, setupUrl }), 'enrollment_credentials email')
+  return { ...delivery, setupUrl }
+}
+
+// The generic-course sibling of provisionLearnerAccount above — granted the moment a course's
+// agreement PDF is signed (no payment gate, so no separate "approved" step to wait on) and keyed
+// directly by course rather than resolved via a pathway. No applyIntakeToProfile call: a generic
+// application collects only name/email/phone, not the pathway's admission questionnaire.
+async function provisionCourseEnrollmentAccess(course, applicant) {
+  let learner = await User.findOne({ email: applicant.email })
+  if (!learner) learner = new User({ name: applicant.name, email: applicant.email, role: 'learner' })
+  const alreadyActive = learner.status === 'active'
+  let setupUrl = null
+  if (!alreadyActive) {
+    learner.status = 'active'
+    setupUrl = await issueAccountSetupUrl(learner)
+  }
+  await LearningProgress.findOneAndUpdate(
+    { learnerId: learner._id, courseId: course._id }, { $setOnInsert: { completedModuleIds: [] } }, { upsert: true, setDefaultsOnInsert: true })
   if (alreadyActive) return { delivery: 'existing_active_account', setupUrl: null }
   const delivery = await bestEffortEmail(sendCredentialsEmail({ name: learner.name, email: learner.email, setupUrl }), 'enrollment_credentials email')
   return { ...delivery, setupUrl }
@@ -622,7 +751,7 @@ app.get('/api/catalog', (_req, res) => res.json(catalog))
 app.get('/api/public/pathway-stats', asyncRoute(async (_req, res) => {
   if (!databaseReady) return res.json({})
   const now = new Date()
-  const courses = await Course.find({ slug: { $in: ['broker-review', 'consultant-review', 'agent-review'] } })
+  const courses = await Course.find({ slug: { $in: RESERVED_COURSE_SLUGS } })
     .select('slug isPublished archivedAt availableFrom availableUntil showEnrollmentCount').lean()
   const enrollCounts = await LearningProgress.aggregate([
     { $match: { courseId: { $in: courses.map((course) => course._id) } } },
@@ -762,21 +891,47 @@ app.post('/api/auth/change-password', requireAuth, asyncRoute(async (req, res) =
   res.status(204).end()
 }))
 
+const PROFILE_FIELDS = 'name email username role avatarUrl bio headline location birthDate school degree facebookUrl createdAt'
+
+// Birth date is the one profile field peers never see: it's identity-verification material, and it
+// arrives from the enrollment form rather than being volunteered publicly. Owners and staff do see
+// it, because staff need it to match a learner against their signed agreement.
+const publicProfile = (user, { privileged }) => (privileged ? user : { ...user, birthDate: undefined })
+
 app.get('/api/users/:id', requireAuth, asyncRoute(async (req, res) => {
   if (!databaseReady) return res.status(503).json({ error: 'Profiles require MongoDB.' })
-  const user = await User.findById(req.params.id).select('name email role avatarUrl bio headline location createdAt').lean()
+  const user = await User.findById(req.params.id).select(PROFILE_FIELDS).lean()
   if (!user) return res.status(404).json({ error: 'User not found.' })
-  const badges = await StudentBadge.find({ learnerId: user._id }).populate('badgeId', 'title description color icon').sort({ createdAt: -1 }).lean()
-  const certificates = await Certificate.find({ learnerId: user._id }).populate('templateId', 'title scope').sort({ createdAt: -1 }).lean()
-  res.json({ user, badges, certificates })
+  const isStaff = ['instructor', 'admin'].includes(req.auth.role)
+  const privileged = isStaff || String(user._id) === req.auth.sub
+  const [badges, certificates, enrollments] = await Promise.all([
+    StudentBadge.find({ learnerId: user._id }).populate('badgeId', 'title description color icon').sort({ createdAt: -1 }).lean(),
+    Certificate.find({ learnerId: user._id }).populate('templateId', 'title scope').sort({ createdAt: -1 }).lean(),
+    // Staff open a member's profile to check what that person actually signed, so the submitted
+    // application and agreement are surfaced here. Only staff — a learner never sees another
+    // learner's paperwork, and the keys themselves are never sent (see enrollmentDocuments).
+    isStaff ? Enrollment.find({ 'applicant.email': user.email }).sort({ createdAt: -1 }).lean() : [],
+  ])
+  res.json({
+    user: publicProfile(user, { privileged }),
+    badges,
+    certificates,
+    ...(isStaff && { enrollments: enrollments.map((row) => ({ id: String(row._id), pathway: row.applicant?.pathway, status: row.status, createdAt: row.createdAt, documents: enrollmentDocuments(row) })) }),
+  })
 }))
 
 app.patch('/api/users/me', requireAuth, asyncRoute(async (req, res) => {
   if (!databaseReady) return res.status(503).json({ error: 'Profile updates require MongoDB.' })
   const updates = profileInput.parse(req.body)
-  const user = await User.findByIdAndUpdate(req.auth.sub, updates, { new: true }).select('name email role avatarUrl bio headline location createdAt')
+  // `username` is uniquely indexed, so check before writing to return a readable message instead of
+  // a raw duplicate-key error. Excluding self keeps re-saving an unchanged profile from 409-ing.
+  if (updates.username && await User.findOne({ username: updates.username, _id: { $ne: req.auth.sub } }).select('_id').lean()) {
+    return res.status(409).json({ error: 'That preferred name is already taken.' })
+  }
+  const user = await User.findByIdAndUpdate(req.auth.sub, updates, { new: true, runValidators: true }).select(PROFILE_FIELDS)
   if (!user) return res.status(404).json({ error: 'User not found.' })
-  await saveAudit('user.profile_updated', 'User', user.id, {}, user.id)
+  // Field *names* only — the values are personal data and audit rows are read by every admin.
+  await saveAudit('user.profile_updated', 'User', user.id, { fields: Object.keys(updates) }, user.id)
   res.json(user)
 }))
 
@@ -1053,57 +1208,6 @@ app.post('/api/enrollments/:id/payment-session', asyncRoute(async (req, res) => 
   res.json({ checkoutUrl: result.data.attributes.checkout_url, mode: 'checkout_session' })
 }))
 
-// 1x1 transparent PNG, only ever used to satisfy the signature-image schema for synthetic dev enrollments.
-const DEV_SIGNATURE_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
-
-app.post('/api/enrollments/:id/demo/complete-application', asyncRoute(async (req, res) => {
-  if (isProduction || !config.demoMode) return res.status(404).end()
-  const enrollment = await findEnrollment(req.params.id)
-  if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
-  if (enrollment.status !== 'application_pending') return res.status(409).json({ error: 'This enrollment is not awaiting an application.' })
-
-  const values = applicationInput.parse({
-    full_name: enrollment.applicant.name, birth_date: '1995-01-01', mobile: enrollment.applicant.phone || '+63 917 000 0000',
-    email: enrollment.applicant.email, address: '123 Dev Street, Quezon City', emergency_name: 'Dev Emergency Contact',
-    emergency_mobile: '+63 917 000 0001', school: 'University of the Philippines', degree: 'Bachelor of Science in Real Estate Management',
-    grad_year: 2020, attempts: 'None — first taker', prc_status: 'Not yet started', computation_level: 'Confident',
-    situational_level: 'Confident', study_hours: '5–7 hours', internet: 'Reliable', device: 'Laptop/desktop',
-    commit_attend: true, commit_study: true, commit_assess: true, commit_remediate: true, commit_communicate: true,
-    agree_nonsharing: true, agree_integrity: true, agree_privacy: true, agree_recording: true,
-    // Extra convenience fields (outside applicationInput's real shape, kept via .passthrough()) so the
-    // dev "jump to contract signing" shortcut can prefill fields the real intake form never collects.
-    agmt_place: 'Quezon City', r_lic_type: 'Real estate broker', r_lic_no: 'DEV-0000',
-  })
-  const pdfKey = await createApplicationPdf({ data: values })
-  enrollment.intake = { data: values, submittedAt: new Date(), pdfKey }
-  enrollment.status = 'documents_pending'
-  if (databaseReady) await enrollment.save()
-  await saveAudit('enrollment.demo_application_completed', 'Enrollment', req.params.id)
-  res.json({ ...publicEnrollment(enrollment), intake: values, nextStep: 'realex-reblex' })
-}))
-
-app.post('/api/enrollments/:id/demo/complete-documents', asyncRoute(async (req, res) => {
-  if (isProduction || !config.demoMode) return res.status(404).end()
-  const enrollment = await findEnrollment(req.params.id)
-  if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
-  if (enrollment.status !== 'documents_pending') return res.status(409).json({ error: 'This enrollment is not awaiting a signed document.' })
-
-  const type = enrollment.applicant.pathway === 'consultant' ? 'reclex' : 'realex-reblex'
-  const signatureName = enrollment.applicant.name
-  const today = new Date().toISOString().slice(0, 10)
-  const fields = type === 'realex-reblex'
-    ? realexReblexInput.parse({ exam_type: 'REBLEX', p_name: signatureName, p_address: '123 Dev Street, Quezon City', p_contact: enrollment.applicant.phone || '+63 917 000 0000', p_email: enrollment.applicant.email, p_prc_app: 'Not yet started', p_date: today, prov_date: today })
-    : reclexInput.parse({ agmt_date: today, agmt_place: 'Quezon City', r_name: signatureName, r_lic_type: 'Real estate broker', r_lic_no: 'DEV-0000', r_contact: enrollment.applicant.phone || '+63 917 000 0000', r_email: enrollment.applicant.email, r_address: '123 Dev Street, Quezon City', r_target_exam: 'REBLEX 2027 First Batch', a_date: today, b_date: today })
-  const pdfKey = await createFilledDocument({ type, fields, signatureDataUrl: DEV_SIGNATURE_DATA_URL, signatureName })
-  const documentName = type === 'realex-reblex' ? 'realexReblex' : 'reclex'
-  enrollment.documents ??= {}
-  enrollment.documents[documentName] = { pdfKey, signedAt: new Date(), signatureName }
-  enrollment.status = 'payment_pending'
-  if (databaseReady) await enrollment.save()
-  await saveAudit('enrollment.demo_documents_completed', 'Enrollment', req.params.id)
-  res.json({ ...publicEnrollment(enrollment), nextStep: 'payment' })
-}))
-
 // Dev-only: simulate the PayMongo `checkout_session.payment.paid` webhook so the paid → account
 // provisioning path can be tested on localhost, where PayMongo cannot reach the real webhook.
 // Mirrors the webhook's state effect exactly via the shared markEnrollmentPaid helper. 404s in
@@ -1125,16 +1229,90 @@ app.post('/api/enrollments/:id/demo/mark-paid', asyncRoute(async (req, res) => {
   res.json({ ...publicEnrollment(enrollment), nextStep: 'complete', invitation })
 }))
 
+// --- Generic per-course agreements (Course.agreementTemplate) — the no-payment counterpart to the
+// pathway enrollment routes above, for courses outside the 3 fixed pathways. Public/unauthenticated,
+// same trust model as the /api/enrollments routes: anyone can apply, access is granted the moment
+// the agreement is signed since there is no payment gate to wait on. See CourseEnrollment in models.js.
+const agreementCourse = async (slug) => {
+  const course = await Course.findOne({ slug })
+  return course && course.isPublished && courseIsAvailable(course) && course.agreementTemplate?.fileKey ? course : null
+}
+
+app.get('/api/course-agreements/:slug', asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Course agreements require MongoDB.' })
+  const course = await agreementCourse(req.params.slug)
+  if (!course) return res.status(404).json({ error: 'This course is not accepting applications right now.' })
+  res.json({ courseId: course.id, title: course.title, fields: course.agreementTemplate.fields })
+}))
+
+// Streams the blank template — not sensitive (no applicant data in an empty form), so this is safe
+// to serve unauthenticated and cross-origin, the same trust level as the two static pathway
+// templates already served from public/enrollment-documents/.
+app.get('/api/course-agreements/:slug/template.pdf', asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(404).end()
+  const course = await agreementCourse(req.params.slug)
+  if (!course) return res.status(404).end()
+  res.type('application/pdf')
+  res.send(await getFile(course.agreementTemplate.fileKey))
+}))
+
+app.post('/api/course-agreements/:slug/apply', asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Course agreements require MongoDB.' })
+  const course = await agreementCourse(req.params.slug)
+  if (!course) return res.status(404).json({ error: 'This course is not accepting applications right now.' })
+  const applicant = courseApplicantInput.parse(req.body)
+  const { signatureName, signatureDataUrl, consent } = signatureInput.parse(req.body)
+  const values = agreementFieldsInput.parse(req.body.fields) ?? {}
+  if (signatureName.localeCompare(applicant.name, undefined, { sensitivity: 'accent' }) !== 0) return res.status(422).json({ error: 'Your typed electronic signature must match your full name.' })
+  if (!consent) return res.status(422).json({ error: 'Electronic-signature consent is required.' })
+
+  const templateBytes = await getFile(course.agreementTemplate.fileKey)
+  const pdfKey = await createFilledAgreement({ templateBytes, schema: course.agreementTemplate.fields, values, signatureDataUrl, signatureName, title: course.title })
+  const email = applicant.email.toLowerCase()
+  const courseEnrollment = await CourseEnrollment.create({
+    courseId: course._id,
+    applicant: { name: applicant.name, email, phone: applicant.phone },
+    document: { pdfKey, signedAt: new Date(), signatureName },
+  })
+  const invitation = await provisionCourseEnrollmentAccess(course, { name: applicant.name, email })
+  await saveAudit('course_enrollment.signed', 'CourseEnrollment', courseEnrollment.id, { courseId: course.id })
+  res.status(201).json({ status: 'signed', invitation })
+}))
+
 app.get('/api/staff/enrollments', requireAuth, requireStaff, asyncRoute(async (req, res) => {
   // Archived enrollments (abandoned/incomplete signups an admin tidied away) are hidden unless
   // explicitly requested with ?archived=only (just archived) or ?archived=all (everything).
   const scope = req.query.archived
+  // The stored row carries the whole intake form and the PDF storage keys. The list only renders a
+  // summary, so send a summary — raw applicant answers and file keys have no business in a payload
+  // this widely fetched. Staff read the full form by opening the document itself.
+  const summarise = (row) => ({
+    _id: String(row._id ?? row.id), applicant: row.applicant, status: row.status, amount: row.amount, currency: row.currency,
+    payment: row.payment ? { plan: row.payment.plan, planAmount: row.payment.planAmount, paidAt: row.payment.paidAt, referenceNumber: row.payment.referenceNumber } : undefined,
+    createdAt: row.createdAt, archivedAt: row.archivedAt ?? null, documents: enrollmentDocuments(row),
+  })
   if (databaseReady) {
     const filter = scope === 'all' ? {} : scope === 'only' ? { archivedAt: { $ne: null } } : { archivedAt: null }
-    return res.json(await Enrollment.find(filter).sort({ createdAt: -1 }).lean())
+    return res.json((await Enrollment.find(filter).sort({ createdAt: -1 }).lean()).map(summarise))
   }
   const rows = [...memory.enrollments.values()].reverse()
-  res.json(scope === 'all' ? rows : rows.filter((row) => (scope === 'only' ? row.archivedAt : !row.archivedAt)))
+  res.json((scope === 'all' ? rows : rows.filter((row) => (scope === 'only' ? row.archivedAt : !row.archivedAt))).map(summarise))
+}))
+
+// Streams a submitted admission form or signed agreement to staff. The file itself lives in private
+// object storage and is never reachable by URL — this route is the only way in, and it authorizes
+// the caller first. Every view is audited: these are signed legal documents full of personal data,
+// so "who looked at this, and when" has to be answerable.
+app.get('/api/staff/enrollments/:id/documents/:type', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  const spec = ENROLLMENT_DOCUMENT_TYPES[req.params.type]
+  if (!spec) return res.status(404).json({ error: 'Unknown enrollment document.' })
+  const enrollment = await findEnrollment(req.params.id)
+  if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
+  const key = spec.key(enrollment)
+  if (!key) return res.status(404).json({ error: 'That document has not been submitted yet.' })
+  await saveAudit('enrollment.document_viewed', 'Enrollment', req.params.id, { type: req.params.type }, req.auth.sub)
+  const safeName = (enrollment.applicant?.name ?? 'applicant').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '')
+  sendPrivateDownload(res, await getFile(key), `${safeName}-${req.params.type}.pdf`, 'application/pdf')
 }))
 
 app.post('/api/staff/enrollments/:id/decision', requireAuth, requireStaff, asyncRoute(async (req, res) => {
@@ -1397,6 +1575,8 @@ app.get('/api/admin/courses', ...adminOnly, asyncRoute(async (_req, res) => {
     approvalStatus: course.approvalStatus ?? 'draft', reviewNote: course.reviewNote ?? null,
     enrolledCount: enrollMap.get(String(course._id)) ?? 0,
     moduleCount: countMap.get(String(course._id)) ?? 0, createdAt: course.createdAt,
+    // Only the filename/upload date — never the storage key, same rule as every other private file.
+    agreementTemplate: course.agreementTemplate?.fileKey ? { originalName: course.agreementTemplate.originalName, uploadedAt: course.agreementTemplate.uploadedAt } : null,
   })))
 }))
 
@@ -1711,6 +1891,75 @@ app.get('/api/admin/dashboard', ...adminOnly, asyncRoute(async (_req, res) => {
   })
 }))
 
+// Whether one learner currently satisfies one rule's condition. Each branch mirrors how that same
+// fact is computed elsewhere in the app (course completion matches the auto-certificate check
+// below; score comparisons match how the gradebook/quiz review express a percent) so a badge and a
+// certificate never disagree about whether a course is "done".
+async function badgeRuleSatisfied(rule, learnerId) {
+  const { trigger, courseId } = rule
+  if (trigger.type === 'course_completion') {
+    const [progress, moduleCount] = await Promise.all([
+      LearningProgress.findOne({ learnerId, courseId }).select('completedModuleIds').lean(),
+      Module.countDocuments({ courseId }),
+    ])
+    return moduleCount > 0 && (progress?.completedModuleIds?.length ?? 0) >= moduleCount
+  }
+  if (trigger.type === 'module_milestone') {
+    const progress = await LearningProgress.findOne({ learnerId, courseId }).select('completedModuleIds').lean()
+    return Boolean(progress?.completedModuleIds?.some((id) => String(id) === String(trigger.moduleId)))
+  }
+  if (trigger.type === 'score_threshold') {
+    if (trigger.targetKind === 'assignment') {
+      const [submission, assignment] = await Promise.all([
+        Submission.findOne({ assignmentId: trigger.targetId, learnerId }).select('grade').lean(),
+        Assignment.findById(trigger.targetId).select('maxPoints').lean(),
+      ])
+      if (!submission || submission.grade == null || !assignment) return false
+      return (submission.grade / (assignment.maxPoints || 100)) * 100 >= trigger.minPercent
+    }
+    // Quizzes may be attempted more than once; the most recent attempt is what "your score" means
+    // everywhere else this app shows it (the Submissions review page, the learner's own history).
+    const attempt = await QuizAttempt.findOne({ quizId: trigger.targetId, learnerId }).sort({ submittedAt: -1 }).select('reviewedScore percent total').lean()
+    if (!attempt) return false
+    const percent = attempt.reviewedScore != null && attempt.total ? (attempt.reviewedScore / attempt.total) * 100 : attempt.percent
+    return percent >= trigger.minPercent
+  }
+  if (trigger.type === 'attendance_count') {
+    const count = await Attendance.countDocuments({ courseId, learnerId, status: { $in: ['present', 'late'] } })
+    return count >= trigger.minAttendance
+  }
+  return false
+}
+
+// Re-checks every active rule for `courseId` whose trigger could plausibly have just changed
+// (`triggerTypes` narrows this — a grade save never needs to re-check attendance rules) against
+// `learnerIds`, and awards any badge newly earned. Called inline from the routes that can make a
+// trigger true, rather than on a schedule: the app has no background job runner, and re-checking a
+// handful of rules for one or two affected learners on a write that already hits the database is
+// cheap. Never throws — a badge miscalculation must not fail the grade/attendance/completion write
+// that triggered it.
+async function runBadgeRules(courseId, learnerIds, triggerTypes) {
+  if (!databaseReady || !courseId || !learnerIds.length) return
+  try {
+    const rules = await BadgeRule.find({ courseId, isActive: true, 'trigger.type': { $in: triggerTypes } }).lean()
+    for (const rule of rules) {
+      const eligible = rule.targetScope === 'selected'
+        ? learnerIds.filter((learnerId) => rule.learnerIds?.some((allowed) => String(allowed) === String(learnerId)))
+        : learnerIds
+      for (const learnerId of eligible) {
+        if (await StudentBadge.exists({ badgeId: rule.badgeId, learnerId })) continue // already earned — rules only ever grant once
+        if (!(await badgeRuleSatisfied(rule, learnerId))) continue
+        const award = await StudentBadge.create({ badgeId: rule.badgeId, learnerId, awardedByRuleId: rule._id })
+        await saveAudit('badge.auto_awarded', 'StudentBadge', award.id, { badgeId: String(rule.badgeId), ruleId: String(rule._id), trigger: rule.trigger.type }, null)
+        const badge = await Badge.findById(rule.badgeId).select('title').lean()
+        await notifyUsers([learnerId], { title: 'New badge earned!', body: `You earned “${badge?.title ?? 'a badge'}”.`, link: '/recognition' })
+      }
+    }
+  } catch (error) {
+    console.error('Badge rule evaluation failed:', error)
+  }
+}
+
 app.get('/api/badges/me', requireAuth, asyncRoute(async (req, res) => {
   if (!databaseReady) return res.status(503).json({ error: 'Badges require MongoDB.' })
   const badges = await StudentBadge.find({ learnerId: req.auth.sub }).populate('badgeId', 'title description color icon').sort({ createdAt: -1 }).lean()
@@ -1733,6 +1982,67 @@ app.post('/api/staff/badges/:badgeId/award', requireAuth, requireStaff, asyncRou
   const award = await StudentBadge.findOneAndUpdate({ badgeId: badge._id, learnerId: learner._id }, { awardedBy: req.auth.sub, note }, { new: true, upsert: true, setDefaultsOnInsert: true })
   await saveAudit('badge.awarded', 'StudentBadge', award.id, { badgeId: badge.id, learnerId: learner.id }, req.auth.sub)
   res.status(201).json(award)
+}))
+
+app.get('/api/staff/badges', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Badge management requires MongoDB.' })
+  res.json(await Badge.find().sort({ createdAt: -1 }).lean())
+}))
+
+// A rule's trigger references a module/assignment/quiz by id only — the row it's shown on needs
+// those names too, and re-fetching them per rule in the client would mean a request per row.
+async function publicBadgeRule(rule) {
+  const trigger = rule.trigger ?? {}
+  const [module, target] = await Promise.all([
+    trigger.moduleId ? Module.findById(trigger.moduleId).select('title').lean() : null,
+    trigger.targetId ? (trigger.targetKind === 'quiz' ? Quiz.findById(trigger.targetId) : Assignment.findById(trigger.targetId)).select('title').lean() : null,
+  ])
+  return {
+    id: rule._id.toString(), badgeId: String(rule.badgeId), courseId: String(rule.courseId),
+    trigger: { ...trigger, moduleTitle: module?.title ?? null, targetTitle: target?.title ?? null },
+    targetScope: rule.targetScope, learnerIds: (rule.learnerIds ?? []).map(String),
+    isActive: rule.isActive, createdAt: rule.createdAt,
+  }
+}
+
+app.get('/api/staff/badge-rules', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Badge rules require MongoDB.' })
+  const filter = {}
+  if (req.query.courseId) filter.courseId = req.query.courseId
+  const rules = await BadgeRule.find(filter).sort({ createdAt: -1 }).lean()
+  res.json(await Promise.all(rules.map(publicBadgeRule)))
+}))
+
+app.post('/api/staff/badge-rules', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Badge rules require MongoDB.' })
+  const values = badgeRuleInput.parse(req.body)
+  const [badge, course] = await Promise.all([Badge.findById(values.badgeId), Course.findById(values.courseId)])
+  if (!badge || !course) return res.status(404).json({ error: 'Badge or course not found.' })
+  const rule = await BadgeRule.create({ ...values, createdBy: req.auth.sub })
+  await saveAudit('badge_rule.created', 'BadgeRule', rule.id, { badgeId: badge.id, courseId: course.id, trigger: values.trigger.type }, req.auth.sub)
+  res.status(201).json(await publicBadgeRule(rule.toObject()))
+}))
+
+// Covers both "edit the condition" and "turn this rule on/off" — the same route so the client
+// doesn't need two mutations for what's conceptually one action (change how this rule behaves).
+app.patch('/api/staff/badge-rules/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Badge rules require MongoDB.' })
+  const values = badgeRuleUpdateInput.parse(req.body)
+  const rule = await BadgeRule.findById(req.params.id)
+  if (!rule) return res.status(404).json({ error: 'Rule not found.' })
+  if (values.trigger) rule.trigger = { ...rule.trigger.toObject?.() ?? rule.trigger, ...values.trigger }
+  for (const field of ['badgeId', 'courseId', 'targetScope', 'learnerIds', 'isActive']) if (values[field] !== undefined) rule[field] = values[field]
+  await rule.save()
+  await saveAudit('badge_rule.updated', 'BadgeRule', rule.id, { fields: Object.keys(values) }, req.auth.sub)
+  res.json(await publicBadgeRule(rule.toObject()))
+}))
+
+app.delete('/api/staff/badge-rules/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Badge rules require MongoDB.' })
+  const rule = await BadgeRule.findByIdAndDelete(req.params.id)
+  if (!rule) return res.status(404).json({ error: 'Rule not found.' })
+  await saveAudit('badge_rule.deleted', 'BadgeRule', req.params.id, {}, req.auth.sub)
+  res.status(204).end()
 }))
 
 app.post('/api/staff/certificate-templates', requireAuth, requireStaff, certificateUpload.single('layout'), asyncRoute(async (req, res) => {
@@ -1783,6 +2093,7 @@ app.post('/api/learning/modules/:moduleId/complete', requireAuth, asyncRoute(asy
     const programTemplates = await CertificateTemplate.find({ scope: 'program', targetId: module.courseId })
     issued.push(...await Promise.all(programTemplates.map((template) => issueCertificate({ template, learner, issuedBy: null }))))
   }
+  await runBadgeRules(String(module.courseId), [req.auth.sub], ['course_completion', 'module_milestone'])
   await saveAudit('module.completed', 'Module', module.id, { learnerId: learner.id, certificatesIssued: issued.length }, learner.id)
   res.json({ completedModuleIds: progress.completedModuleIds, certificates: issued.map((certificate) => certificate.id) })
 }))
@@ -1946,6 +2257,11 @@ app.patch('/api/staff/courses/:id', requireAuth, requireStaff, asyncRoute(async 
   if (values.isPublished && req.auth.role !== 'admin' && course.approvalStatus !== 'approved') {
     return res.status(409).json({ error: 'This course needs admin approval before it can be published. Submit it for review first.' })
   }
+  if (values.slug && values.slug !== course.slug) {
+    if (RESERVED_COURSE_SLUGS.includes(course.slug)) return res.status(409).json({ error: 'This slug is fixed — pricing and checkout are linked to it.' })
+    if (RESERVED_COURSE_SLUGS.includes(values.slug)) return res.status(409).json({ error: 'That slug is reserved for the enrollment pathway courses.' })
+    if (await Course.findOne({ slug: values.slug, _id: { $ne: course._id } })) return res.status(409).json({ error: 'That slug is already used by another course.' })
+  }
   Object.assign(course, values)
   await course.save()
   await saveAudit('course.updated', 'Course', course.id, {}, req.auth.sub)
@@ -1960,6 +2276,47 @@ app.post('/api/staff/courses/:id/banner', requireAuth, requireStaff, bannerUploa
   if (!course) return res.status(404).json({ error: 'Course not found.' })
   await saveAudit('course.banner_updated', 'Course', course.id, {}, req.auth.sub)
   res.json({ bannerUrl, course })
+}))
+
+app.post('/api/staff/courses/:id/agreement-template', requireAuth, requireStaff, agreementTemplateUpload.single('template'), asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Agreement templates require MongoDB.' })
+  if (!req.file) return res.status(400).json({ error: 'Choose a PDF under 8MB.' })
+  const course = await Course.findById(req.params.id)
+  if (!course) return res.status(404).json({ error: 'Course not found.' })
+  const fields = await extractAgreementFields(req.file.buffer)
+  if (!fields.length) return res.status(422).json({ error: 'That PDF has no fillable fields. Add AcroForm text/checkbox fields to it first.' })
+  const fileKey = await saveAgreementTemplate(req.file)
+  course.agreementTemplate = { fileKey, originalName: req.file.originalname, fields, uploadedAt: new Date() }
+  await course.save()
+  await saveAudit('course.agreement_template_uploaded', 'Course', course.id, { fieldCount: fields.length }, req.auth.sub)
+  res.json(course)
+}))
+
+app.delete('/api/staff/courses/:id/agreement-template', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Agreement templates require MongoDB.' })
+  const course = await Course.findById(req.params.id)
+  if (!course) return res.status(404).json({ error: 'Course not found.' })
+  course.agreementTemplate = undefined
+  await course.save()
+  await saveAudit('course.agreement_template_removed', 'Course', course.id, {}, req.auth.sub)
+  res.json(course)
+}))
+
+// Summary only — applicant name/email/signedAt, never the signed PDF's storage key (same rule as
+// GET /api/staff/enrollments). Staff read the file itself via the /document route below.
+app.get('/api/staff/courses/:id/agreement-enrollments', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Course applicants require MongoDB.' })
+  const rows = await CourseEnrollment.find({ courseId: req.params.id }).sort({ createdAt: -1 }).lean()
+  res.json(rows.map((row) => ({ _id: String(row._id), applicant: row.applicant, signedAt: row.document?.signedAt ?? null, createdAt: row.createdAt })))
+}))
+
+app.get('/api/staff/course-enrollments/:id/document', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Course applicants require MongoDB.' })
+  const row = await CourseEnrollment.findById(req.params.id)
+  if (!row || !row.document?.pdfKey) return res.status(404).json({ error: 'Signed document not found.' })
+  await saveAudit('course_enrollment.document_viewed', 'CourseEnrollment', req.params.id, {}, req.auth.sub)
+  const safeName = (row.applicant?.name ?? 'applicant').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '')
+  sendPrivateDownload(res, await getFile(row.document.pdfKey), `${safeName}-agreement.pdf`, 'application/pdf')
 }))
 
 // --- Instructor catalogue builder: course -> category -> header -> typed learning module ---
@@ -2222,71 +2579,127 @@ app.get('/api/staff/assignments/:id/submissions', requireAuth, requireStaff, asy
   res.json(submissions)
 }))
 
+// Everything the standalone review page needs for one assignment submission. Without this the page
+// could only be reached by first loading the whole course gradebook, which made it undeep-linkable.
+app.get('/api/staff/submissions/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Submissions require MongoDB.' })
+  const submission = await Submission.findById(req.params.id).populate('learnerId', 'name email avatarUrl').lean()
+  if (!submission) return res.status(404).json({ error: 'Submission not found.' })
+  const assignment = await Assignment.findById(submission.assignmentId).select('title maxPoints dueAt instructions courseId').lean()
+  res.json({
+    id: String(submission._id), kind: 'assignment',
+    title: assignment?.title ?? 'Assignment', instructions: assignment?.instructions ?? '',
+    courseId: assignment?.courseId ? String(assignment.courseId) : null,
+    maxPoints: assignment?.maxPoints ?? 100, dueAt: assignment?.dueAt ?? null,
+    learner: submission.learnerId ? { id: String(submission.learnerId._id), name: submission.learnerId.name, email: submission.learnerId.email } : null,
+    submittedAt: submission.submittedAt ?? submission.createdAt,
+    body: submission.body ?? '', grade: submission.grade ?? null, feedback: submission.feedback ?? '',
+    // The key itself never leaves the server — the browser fetches bytes through the attachment
+    // route, which authorizes the caller first.
+    attachmentName: submission.attachmentName ?? null, hasAttachment: Boolean(submission.attachmentKey),
+  })
+}))
+
 app.post('/api/staff/submissions/:id/grade', requireAuth, requireStaff, asyncRoute(async (req, res) => {
   if (!databaseReady) return res.status(503).json({ error: 'Grading requires MongoDB.' })
   const submission = await Submission.findByIdAndUpdate(req.params.id, gradeInput.parse(req.body), { new: true })
   if (!submission) return res.status(404).json({ error: 'Submission not found.' })
   await saveAudit('submission.graded', 'Submission', submission.id, {}, req.auth.sub)
-  const assignment = await Assignment.findById(submission.assignmentId).select('title').lean()
+  const assignment = await Assignment.findById(submission.assignmentId).select('title courseId').lean()
   await notifyUsers([submission.learnerId], {
     title: `Graded: ${assignment?.title ?? 'Assignment'}`,
     body: `You scored ${submission.grade}${submission.feedback ? ` — ${submission.feedback}` : ''}`,
     link: `/assignments/${submission.assignmentId}`,
   })
+  if (assignment?.courseId) await runBadgeRules(String(assignment.courseId), [String(submission.learnerId)], ['score_threshold'])
   res.json(submission)
 }))
 
-// Threaded comments on a submission — a lighter-weight back-and-forth than the single overwritable
-// `feedback` field, open to the submission's learner and any staff member.
-app.get('/api/submissions/:id/comments', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Comments require MongoDB.' })
-  const submission = await Submission.findById(req.params.id).select('learnerId').lean()
-  if (!submission) return res.status(404).json({ error: 'Submission not found.' })
-  const isStaff = ['instructor', 'admin'].includes(req.auth.role)
-  if (!isStaff && String(submission.learnerId) !== req.auth.sub) return res.status(403).json({ error: 'You cannot view these comments.' })
-  const comments = await SubmissionComment.find({ submissionId: submission._id }).sort({ createdAt: 1 }).populate('authorId', 'name avatarUrl').lean()
-  res.json(comments.map((comment) => ({
-    id: comment._id.toString(), body: comment.body, authorRole: comment.authorRole, createdAt: comment.createdAt,
-    author: comment.authorId ? { name: comment.authorId.name, avatarUrl: comment.authorId.avatarUrl ?? null } : null,
-  })))
-}))
+// Threaded comments on something a learner handed in — a lighter-weight back-and-forth than the
+// single overwritable `feedback` field, open to the author and any staff member. Assignments and
+// quiz attempts share the implementation; only the lookup and the notification wording differ.
+const publicComment = (comment, author) => ({
+  id: comment._id?.toString() ?? comment.id, body: comment.body, authorRole: comment.authorRole, createdAt: comment.createdAt,
+  author: author ? { name: author.name, avatarUrl: author.avatarUrl ?? null } : null,
+})
 
-app.post('/api/submissions/:id/comments', requireAuth, asyncRoute(async (req, res) => {
+// Resolves the commentable and checks the caller may see it, so neither route repeats the rule
+// that a learner reaches only their own work while staff reach anyone's.
+async function loadCommentTarget(kind, id, auth) {
+  const isStaff = ['instructor', 'admin'].includes(auth.role)
+  const record = kind === 'submission'
+    ? await Submission.findById(id).select('learnerId assignmentId')
+    : await QuizAttempt.findById(id).select('learnerId quizId')
+  if (!record) return { error: { status: 404, message: kind === 'submission' ? 'Submission not found.' : 'Quiz attempt not found.' } }
+  if (!isStaff && String(record.learnerId) !== auth.sub) return { error: { status: 403, message: 'You cannot view this.' } }
+  const title = kind === 'submission'
+    ? (await Assignment.findById(record.assignmentId).select('title').lean())?.title
+    : (await Quiz.findById(record.quizId).select('title').lean())?.title
+  return { record, isStaff, filter: kind === 'submission' ? { submissionId: record._id } : { quizAttemptId: record._id }, title, learnerLink: kind === 'submission' ? `/assignments/${record.assignmentId}` : '/catalog' }
+}
+
+const listComments = (kind) => asyncRoute(async (req, res) => {
   if (!databaseReady) return res.status(503).json({ error: 'Comments require MongoDB.' })
-  const submission = await Submission.findById(req.params.id)
-  if (!submission) return res.status(404).json({ error: 'Submission not found.' })
-  const isStaff = ['instructor', 'admin'].includes(req.auth.role)
-  if (!isStaff && String(submission.learnerId) !== req.auth.sub) return res.status(403).json({ error: 'You cannot comment here.' })
+  const target = await loadCommentTarget(kind, req.params.id, req.auth)
+  if (target.error) return res.status(target.error.status).json({ error: target.error.message })
+  const comments = await SubmissionComment.find(target.filter).sort({ createdAt: 1 }).populate('authorId', 'name avatarUrl').lean()
+  res.json(comments.map((comment) => publicComment(comment, comment.authorId)))
+})
+
+const createComment = (kind) => asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Comments require MongoDB.' })
+  const target = await loadCommentTarget(kind, req.params.id, req.auth)
+  if (target.error) return res.status(target.error.status).json({ error: target.error.message })
   const values = submissionCommentInput.parse(req.body)
-  const comment = await SubmissionComment.create({ submissionId: submission._id, authorId: req.auth.sub, authorRole: req.auth.role, body: values.body })
-  await saveAudit('submission.commented', 'Submission', submission.id, {}, req.auth.sub)
-  const [author, assignment] = await Promise.all([
-    User.findById(req.auth.sub).select('name').lean(),
-    Assignment.findById(submission.assignmentId).select('title').lean(),
-  ])
-  if (isStaff) {
-    await notifyUsers([submission.learnerId], { title: `New comment on: ${assignment?.title ?? 'your submission'}`, body: `${author?.name ?? 'Your instructor'} left a comment.`, link: `/assignments/${submission.assignmentId}` })
+  const comment = await SubmissionComment.create({ ...target.filter, authorId: req.auth.sub, authorRole: req.auth.role, body: values.body })
+  await saveAudit('submission.commented', kind === 'submission' ? 'Submission' : 'QuizAttempt', String(target.record._id), {}, req.auth.sub)
+  const author = await User.findById(req.auth.sub).select('name avatarUrl').lean()
+  if (target.isStaff) {
+    await notifyUsers([target.record.learnerId], { title: `New comment on: ${target.title ?? 'your work'}`, body: `${author?.name ?? 'Your instructor'} left a comment.`, link: target.learnerLink })
   } else {
     const staff = await User.find({ role: { $in: ['instructor', 'admin'] }, status: 'active' }).select('_id').lean()
-    await notifyUsers(staff.map((member) => member._id), { title: `New comment on: ${assignment?.title ?? 'a submission'}`, body: `${author?.name ?? 'A learner'} left a comment.`, link: '/gradebook' })
+    await notifyUsers(staff.map((member) => member._id), { title: `New comment on: ${target.title ?? 'a submission'}`, body: `${author?.name ?? 'A learner'} left a comment.`, link: '/submissions' })
   }
-  res.status(201).json({
-    id: comment._id.toString(), body: comment.body, authorRole: comment.authorRole, createdAt: comment.createdAt,
-    author: author ? { name: author.name, avatarUrl: null } : null,
-  })
-}))
+  res.status(201).json(publicComment(comment, author))
+})
+
+app.get('/api/submissions/:id/comments', requireAuth, listComments('submission'))
+app.post('/api/submissions/:id/comments', requireAuth, createComment('submission'))
+app.get('/api/quiz-attempts/:id/comments', requireAuth, listComments('quiz_attempt'))
+app.post('/api/quiz-attempts/:id/comments', requireAuth, createComment('quiz_attempt'))
 
 // Instructor teaching workspace — all instructors share every course, so "their courses" and
 // "their students" span the whole catalog. These aggregation routes power the instructor
 // dashboard, gradebook, and roster.
 const ungradedFilter = { submittedAt: { $ne: null }, $or: [{ grade: { $exists: false } }, { grade: null }] }
 
+// A submission whose assignment or learner has since been deleted can't be graded — there's no
+// rubric to grade against and nobody to notify. Left in, it surfaces as a ghost row of fallback
+// labels ("Assignment", "Learner · Course") and inflates the pending-grading count with work no
+// one can ever clear. Both the queue and the badge use this definition so they agree.
+const actionableUngraded = [
+  { $match: ungradedFilter },
+  { $lookup: { from: 'assignments', localField: 'assignmentId', foreignField: '_id', as: 'assignmentDoc' } },
+  { $lookup: { from: 'users', localField: 'learnerId', foreignField: '_id', as: 'learnerDoc' } },
+  { $match: { 'assignmentDoc.0': { $exists: true }, 'learnerDoc.0': { $exists: true } } },
+]
+
+// Quiz attempts containing a question the auto-grader can't judge (essay) also wait on a human, so
+// the dashboard count matches what the Submissions page actually lists as "Needs grading".
+async function pendingGradingCount() {
+  const [submissions, attempts] = await Promise.all([
+    Submission.aggregate([...actionableUngraded, { $count: 'count' }]),
+    QuizAttempt.countDocuments({ reviewedAt: null, 'results.correct': null }),
+  ])
+  return (submissions[0]?.count ?? 0) + attempts
+}
+
 app.get('/api/staff/overview', requireAuth, requireStaff, asyncRoute(async (req, res) => {
   if (!databaseReady) return res.status(503).json({ error: 'The teaching dashboard requires MongoDB.' })
   const [courses, learnerCount, pendingGrading, upcoming, pendingApprovals] = await Promise.all([
     Course.find().select('_id title isPublished').lean(),
     User.countDocuments({ role: 'learner', status: 'active' }),
-    Submission.countDocuments(ungradedFilter),
+    pendingGradingCount(),
     Assignment.find({ dueAt: { $gte: new Date() } }).sort({ dueAt: 1 }).limit(6).lean(),
     Enrollment.countDocuments({ status: 'paid_approval_pending' }),
   ])
@@ -2309,22 +2722,36 @@ app.get('/api/staff/grading-queue', requireAuth, requireStaff, asyncRoute(async 
     .populate('learnerId', 'name email')
     .populate('assignmentId', 'title courseId maxPoints')
     .sort({ submittedAt: 1 }).limit(200).lean()
-  res.json(submissions.map((submission) => ({
-    id: submission._id.toString(),
-    learner: submission.learnerId ? { name: submission.learnerId.name, email: submission.learnerId.email } : null,
-    assignmentTitle: submission.assignmentId?.title ?? 'Assignment',
-    maxPoints: submission.assignmentId?.maxPoints ?? 100,
-    courseTitle: titleById.get(String(submission.assignmentId?.courseId)) ?? 'Course',
-    submittedAt: submission.submittedAt,
-    body: submission.body ?? '',
-    attachmentKey: submission.attachmentKey ?? null,
-    attachmentName: submission.attachmentName ?? null,
-  })))
+  res.json(submissions
+    // populate() yields null for a deleted reference; those rows are ungradeable, so drop them
+    // rather than rendering placeholder text where a learner's name should be.
+    .filter((submission) => submission.assignmentId && submission.learnerId)
+    .map((submission) => ({
+      id: submission._id.toString(),
+      learner: { name: submission.learnerId.name, email: submission.learnerId.email },
+      assignmentTitle: submission.assignmentId.title,
+      maxPoints: submission.assignmentId.maxPoints ?? 100,
+      courseTitle: titleById.get(String(submission.assignmentId.courseId)) ?? 'Course',
+      submittedAt: submission.submittedAt,
+      body: submission.body ?? '',
+      // The storage key stays server-side; the attachment is fetched through the route that
+      // authorizes the caller first.
+      hasAttachment: Boolean(submission.attachmentKey),
+      attachmentName: submission.attachmentName ?? null,
+    })))
 }))
 
 app.get('/api/staff/learners', requireAuth, requireStaff, asyncRoute(async (req, res) => {
   if (!databaseReady) return res.status(503).json({ error: 'The roster requires MongoDB.' })
-  const learners = await User.find({ role: 'learner' }).select('name email status createdAt lastSeenAt avatarUrl').sort({ name: 1 }).lean()
+  // Status and course are filtered in Mongo rather than in the browser, so the roster stays honest
+  // once there are more learners than one page can hold.
+  const filter = { role: 'learner' }
+  if (req.query.status) filter.status = String(req.query.status)
+  if (req.query.courseId) {
+    const enrolled = await LearningProgress.find({ courseId: req.query.courseId }).select('learnerId').lean()
+    filter._id = { $in: enrolled.map((row) => row.learnerId) }
+  }
+  const learners = await User.find(filter).select('name email status createdAt lastSeenAt avatarUrl').sort({ name: 1 }).lean()
   const grouped = await LearningProgress.aggregate([
     { $group: { _id: '$learnerId', courses: { $sum: 1 }, modules: { $sum: { $size: { $ifNull: ['$completedModuleIds', []] } } } } },
   ])
@@ -2358,6 +2785,92 @@ app.get('/api/staff/courses/:id/gradebook', requireAuth, requireStaff, asyncRout
       submittedAt: submission.submittedAt ?? null,
     })),
   })
+}))
+
+// One feed of everything learners have handed in for a course — assignment submissions and quiz
+// attempts together, newest first. The two are stored in different collections but an instructor
+// reviewing work doesn't care which; they care what still needs marking.
+app.get('/api/staff/courses/:id/submissions', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Submissions require MongoDB.' })
+  const course = await Course.findById(req.params.id).select('title').lean()
+  if (!course) return res.status(404).json({ error: 'Course not found.' })
+  const [assignments, quizzes] = await Promise.all([
+    Assignment.find({ courseId: course._id }).select('title maxPoints dueAt').lean(),
+    Quiz.find({ courseId: course._id }).select('title').lean(),
+  ])
+  const assignmentById = new Map(assignments.map((row) => [String(row._id), row]))
+  const quizById = new Map(quizzes.map((row) => [String(row._id), row]))
+  const [submissions, attempts] = await Promise.all([
+    Submission.find({ assignmentId: { $in: assignments.map((row) => row._id) } }).populate('learnerId', 'name email avatarUrl').sort({ submittedAt: -1 }).lean(),
+    QuizAttempt.find({ courseId: course._id }).populate('learnerId', 'name email avatarUrl').sort({ submittedAt: -1 }).lean(),
+  ])
+  const learnerOf = (row) => (row.learnerId ? { id: String(row.learnerId._id), name: row.learnerId.name, email: row.learnerId.email, avatarUrl: row.learnerId.avatarUrl ?? null } : null)
+
+  const rows = [
+    ...submissions.map((row) => {
+      const assignment = assignmentById.get(String(row.assignmentId))
+      const maxPoints = assignment?.maxPoints ?? 100
+      return {
+        id: String(row._id), kind: 'assignment', title: assignment?.title ?? 'Assignment',
+        learner: learnerOf(row), submittedAt: row.submittedAt ?? row.createdAt,
+        maxPoints, score: row.grade ?? null,
+        percent: row.grade == null ? null : Math.round((row.grade / (maxPoints || 100)) * 100),
+        status: row.grade == null ? 'needs_grading' : 'graded',
+        hasAttachment: Boolean(row.attachmentKey), hasResponse: Boolean(row.body),
+      }
+    }),
+    ...attempts.map((row) => {
+      // An essay question can't be auto-marked, so an attempt containing one waits for a human
+      // even though the rest of it already has a score.
+      const needsReview = Array.isArray(row.results) && row.results.some((result) => result?.correct === null)
+      const score = row.reviewedScore ?? row.score
+      return {
+        id: String(row._id), kind: 'quiz', title: quizById.get(String(row.quizId))?.title ?? 'Quiz',
+        learner: learnerOf(row), submittedAt: row.submittedAt ?? row.createdAt,
+        maxPoints: row.total, score,
+        percent: row.reviewedScore != null && row.total ? Math.round((row.reviewedScore / row.total) * 100) : row.percent,
+        status: needsReview && row.reviewedAt == null ? 'needs_grading' : 'graded',
+        autoGraded: true, reviewed: Boolean(row.reviewedAt),
+      }
+    }),
+  ].sort((first, second) => new Date(second.submittedAt ?? 0) - new Date(first.submittedAt ?? 0))
+
+  res.json({ course: { id: String(course._id), title: course.title }, rows })
+}))
+
+// Full detail for one quiz attempt: every question, what the learner answered, and whether it was
+// right. This is the "view what the student sent" half of reviewing a quiz.
+app.get('/api/staff/quiz-attempts/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Quiz attempts require MongoDB.' })
+  const attempt = await QuizAttempt.findById(req.params.id).populate('learnerId', 'name email avatarUrl').populate('quizId', 'title').lean()
+  if (!attempt) return res.status(404).json({ error: 'Quiz attempt not found.' })
+  res.json({
+    id: String(attempt._id), title: attempt.quizId?.title ?? 'Quiz',
+    learner: attempt.learnerId ? { id: String(attempt.learnerId._id), name: attempt.learnerId.name, email: attempt.learnerId.email } : null,
+    submittedAt: attempt.submittedAt ?? attempt.createdAt,
+    score: attempt.score, total: attempt.total, percent: attempt.percent,
+    reviewedScore: attempt.reviewedScore ?? null, feedback: attempt.feedback ?? '', reviewedAt: attempt.reviewedAt ?? null,
+    answers: attempt.answers ?? [], results: attempt.results ?? [],
+  })
+}))
+
+app.post('/api/staff/quiz-attempts/:id/review', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Quiz attempts require MongoDB.' })
+  const attempt = await QuizAttempt.findById(req.params.id)
+  if (!attempt) return res.status(404).json({ error: 'Quiz attempt not found.' })
+  const values = quizReviewInput.parse(req.body)
+  if (values.reviewedScore != null && values.reviewedScore > attempt.total) return res.status(422).json({ error: `Score cannot exceed ${attempt.total}.` })
+  Object.assign(attempt, { ...values, reviewedBy: req.auth.sub, reviewedAt: new Date() })
+  await attempt.save()
+  await saveAudit('quiz_attempt.reviewed', 'QuizAttempt', attempt.id, {}, req.auth.sub)
+  const quiz = await Quiz.findById(attempt.quizId).select('title courseId').lean()
+  await notifyUsers([attempt.learnerId], {
+    title: `Reviewed: ${quiz?.title ?? 'Quiz'}`,
+    body: `You scored ${values.reviewedScore ?? attempt.score}/${attempt.total}${values.feedback ? ` — ${values.feedback}` : ''}`,
+    link: '/catalog',
+  })
+  if (quiz?.courseId) await runBadgeRules(String(quiz.courseId), [String(attempt.learnerId)], ['score_threshold'])
+  res.json({ ok: true })
 }))
 
 app.get('/api/staff/courses/:id/analytics', requireAuth, requireStaff, asyncRoute(async (req, res) => {
@@ -2540,8 +3053,16 @@ app.post('/api/quizzes/:id/attempt', requireAuth, asyncRoute(async (req, res) =>
   }))
   const gradable = results.filter((result) => result.correct !== null)
   const score = gradable.filter((result) => result.correct).length
+  const percent = gradable.length ? Math.round((score / gradable.length) * 100) : 0
   await saveAudit('quiz.attempted', 'Quiz', quiz._id.toString(), { score, total: gradable.length }, req.auth.sub)
-  res.json({ score, total: gradable.length, percent: gradable.length ? Math.round((score / gradable.length) * 100) : 0, results })
+  // Recorded so instructors can review it later. Best-effort: a learner who has just finished a
+  // quiz should still get their result even if the write fails, so this never rejects the request.
+  const attempt = await QuizAttempt.create({
+    quizId: quiz._id, courseId: quiz.courseId, learnerId: req.auth.sub,
+    answers, results, score, total: gradable.length, percent, submittedAt: new Date(),
+  }).catch((error) => { console.error('Failed to record quiz attempt:', error); return null })
+  if (attempt) await runBadgeRules(String(quiz.courseId), [req.auth.sub], ['score_threshold'])
+  res.json({ id: attempt?.id ?? null, score, total: gradable.length, percent, results })
 }))
 
 // Class communication — course announcements (one-way) and discussion forums (two-way).
@@ -2560,6 +3081,7 @@ app.get('/api/announcements', requireAuth, asyncRoute(async (req, res) => {
     id: announcement._id.toString(), courseId: String(announcement.courseId),
     courseTitle: titleById.get(String(announcement.courseId)) ?? 'Course',
     title: announcement.title, body: announcement.body, pinned: announcement.pinned,
+    authorId: announcement.authorId?._id ? String(announcement.authorId._id) : null,
     authorName: announcement.authorId?.name ?? 'Staff', createdAt: announcement.createdAt,
   })))
 }))
@@ -2580,10 +3102,21 @@ app.post('/api/staff/courses/:id/announcements', requireAuth, requireStaff, asyn
 
 app.delete('/api/staff/announcements/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
   if (!databaseReady) return res.status(503).json({ error: 'Announcements require MongoDB.' })
-  const announcement = await Announcement.findByIdAndDelete(req.params.id)
+  const announcement = await Announcement.findById(req.params.id)
   if (!announcement) return res.status(404).json({ error: 'Announcement not found.' })
+  // Admins can moderate any announcement; instructors may only remove their own.
+  if (req.auth.role !== 'admin' && String(announcement.authorId) !== req.auth.sub) {
+    return res.status(403).json({ error: 'You can only delete your own announcements.' })
+  }
+  await announcement.deleteOne()
   await saveAudit('announcement.deleted', 'Announcement', announcement.id, {}, req.auth.sub)
   res.status(204).end()
+}))
+
+app.post('/api/forums/images', requireAuth, forumImageUpload.single('image'), asyncRoute(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Attach a PNG, JPEG, or WEBP image.' })
+  const imageUrl = await saveForumImageUpload(req.file)
+  res.status(201).json({ imageUrl })
 }))
 
 app.get('/api/forums/threads', requireAuth, asyncRoute(async (req, res) => {
@@ -2592,16 +3125,35 @@ app.get('/api/forums/threads', requireAuth, asyncRoute(async (req, res) => {
   const titleById = new Map(courses.map((course) => [String(course._id), course.title]))
   const filter = { courseId: { $in: courses.map((course) => course._id) } }
   if (req.query.courseId) filter.courseId = req.query.courseId
-  const threads = await ForumThread.find(filter).populate('authorId', 'name role').sort({ isPinned: -1, lastPostAt: -1 }).limit(100).lean()
-  const counts = await ForumPost.aggregate([{ $match: { threadId: { $in: threads.map((thread) => thread._id) } } }, { $group: { _id: '$threadId', count: { $sum: 1 } } }])
+  const threads = await ForumThread.find(filter).populate('authorId', 'name role avatarUrl').sort({ isPinned: -1, lastPostAt: -1 }).limit(100).lean()
+  const threadIds = threads.map((thread) => thread._id)
+  const counts = await ForumPost.aggregate([{ $match: { threadId: { $in: threadIds } } }, { $group: { _id: '$threadId', count: { $sum: 1 } } }])
   const countById = new Map(counts.map((row) => [String(row._id), row.count]))
-  res.json(threads.map((thread) => ({
-    id: thread._id.toString(), courseId: String(thread.courseId),
-    courseTitle: titleById.get(String(thread.courseId)) ?? 'Course',
-    title: thread.title, isPinned: thread.isPinned, isLocked: thread.isLocked,
-    authorName: thread.authorId?.name ?? 'Member', authorRole: thread.authorId?.role ?? 'learner',
-    replyCount: countById.get(String(thread._id)) ?? 0, lastPostAt: thread.lastPostAt, createdAt: thread.createdAt,
-  })))
+  // Recent repliers, newest first, for the avatar stack — capped well below the page limit since
+  // this is only ever collapsed down to a few faces per thread, never listed in full.
+  const recentPosts = await ForumPost.find({ threadId: { $in: threadIds } }).select('threadId authorId')
+    .populate('authorId', 'name avatarUrl').sort({ createdAt: -1 }).limit(1000).lean()
+  const participantsById = new Map()
+  for (const post of recentPosts) {
+    const list = participantsById.get(String(post.threadId)) ?? []
+    if (list.length < 3 && post.authorId && !list.some((person) => person.id === String(post.authorId._id))) {
+      list.push({ id: String(post.authorId._id), name: post.authorId.name, avatarUrl: post.authorId.avatarUrl ?? null })
+    }
+    participantsById.set(String(post.threadId), list)
+  }
+  res.json(threads.map((thread) => {
+    const authorId = thread.authorId?._id ? String(thread.authorId._id) : null
+    const repliers = (participantsById.get(String(thread._id)) ?? []).filter((person) => person.id !== authorId)
+    return {
+      id: thread._id.toString(), courseId: String(thread.courseId),
+      courseTitle: titleById.get(String(thread.courseId)) ?? 'Course',
+      title: thread.title, body: thread.body, imageUrl: thread.imageUrl ?? null, isPinned: thread.isPinned, isLocked: thread.isLocked,
+      authorName: thread.authorId?.name ?? 'Member', authorRole: thread.authorId?.role ?? 'learner', authorAvatarUrl: thread.authorId?.avatarUrl ?? null,
+      participants: [{ name: thread.authorId?.name ?? 'Member', avatarUrl: thread.authorId?.avatarUrl ?? null }, ...repliers].slice(0, 4),
+      replyCount: countById.get(String(thread._id)) ?? 0, viewCount: thread.viewCount ?? 0,
+      lastPostAt: thread.lastPostAt, createdAt: thread.createdAt,
+    }
+  }))
 }))
 
 app.post('/api/forums/threads', requireAuth, asyncRoute(async (req, res) => {
@@ -2610,6 +3162,7 @@ app.post('/api/forums/threads', requireAuth, asyncRoute(async (req, res) => {
   const course = await Course.findById(values.courseId)
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
   if (!course || (!course.isPublished && !isStaff)) return res.status(404).json({ error: 'Course not found.' })
+  if (!isStaff) values.isLocked = false
   const thread = await ForumThread.create({ ...values, authorId: req.auth.sub })
   await saveAudit('forum_thread.created', 'ForumThread', thread.id, { courseId: course.id }, req.auth.sub)
   res.status(201).json(thread)
@@ -2617,17 +3170,47 @@ app.post('/api/forums/threads', requireAuth, asyncRoute(async (req, res) => {
 
 app.get('/api/forums/threads/:id', requireAuth, asyncRoute(async (req, res) => {
   if (!databaseReady) return res.status(503).json({ error: 'Forums require MongoDB.' })
-  const thread = await ForumThread.findById(req.params.id).populate('authorId', 'name role').lean()
+  const thread = await ForumThread.findById(req.params.id).populate('authorId', 'name role avatarUrl')
   if (!thread) return res.status(404).json({ error: 'Thread not found.' })
   const course = await Course.findById(thread.courseId).select('title isPublished').lean()
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
   if (!course || (!course.isPublished && !isStaff)) return res.status(404).json({ error: 'Thread not found.' })
-  const posts = await ForumPost.find({ threadId: thread._id }).populate('authorId', 'name role').sort({ createdAt: 1 }).lean()
+  thread.viewCount = (thread.viewCount ?? 0) + 1
+  await thread.save()
+  const [posts, reactionCounts, myReaction] = await Promise.all([
+    ForumPost.find({ threadId: thread._id }).populate('authorId', 'name role avatarUrl').sort({ createdAt: 1 }).lean(),
+    ForumReaction.aggregate([{ $match: { threadId: thread._id } }, { $group: { _id: '$type', count: { $sum: 1 } } }]),
+    ForumReaction.findOne({ threadId: thread._id, userId: req.auth.sub }).select('type').lean(),
+  ])
+  const likeCount = reactionCounts.find((row) => row._id === 'like')?.count ?? 0
+  const dislikeCount = reactionCounts.find((row) => row._id === 'dislike')?.count ?? 0
   res.json({
     id: thread._id.toString(), courseId: String(thread.courseId), courseTitle: course.title,
-    title: thread.title, body: thread.body, isPinned: thread.isPinned, isLocked: thread.isLocked,
-    authorName: thread.authorId?.name ?? 'Member', authorRole: thread.authorId?.role ?? 'learner', createdAt: thread.createdAt,
-    posts: posts.map((post) => ({ id: post._id.toString(), body: post.body, authorId: String(post.authorId?._id ?? post.authorId), authorName: post.authorId?.name ?? 'Member', authorRole: post.authorId?.role ?? 'learner', createdAt: post.createdAt })),
+    title: thread.title, body: thread.body, imageUrl: thread.imageUrl ?? null, isPinned: thread.isPinned, isLocked: thread.isLocked,
+    authorName: thread.authorId?.name ?? 'Member', authorRole: thread.authorId?.role ?? 'learner', authorAvatarUrl: thread.authorId?.avatarUrl ?? null,
+    viewCount: thread.viewCount, likeCount, dislikeCount, myReaction: myReaction?.type ?? null, createdAt: thread.createdAt,
+    posts: posts.map((post) => ({ id: post._id.toString(), body: post.body, imageUrl: post.imageUrl ?? null, authorId: String(post.authorId?._id ?? post.authorId), authorName: post.authorId?.name ?? 'Member', authorRole: post.authorId?.role ?? 'learner', authorAvatarUrl: post.authorId?.avatarUrl ?? null, createdAt: post.createdAt, editedAt: post.editedAt ?? null })),
+  })
+}))
+
+app.post('/api/forums/threads/:id/reactions', requireAuth, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Forums require MongoDB.' })
+  const thread = await ForumThread.findById(req.params.id).select('_id')
+  if (!thread) return res.status(404).json({ error: 'Thread not found.' })
+  const { type } = forumReactionInput.parse(req.body)
+  const existing = await ForumReaction.findOne({ threadId: thread._id, userId: req.auth.sub })
+  // Clicking the already-active reaction clears it; clicking the other one switches it — never both.
+  if (existing && existing.type === type) await existing.deleteOne()
+  else if (existing) { existing.type = type; await existing.save() }
+  else await ForumReaction.create({ threadId: thread._id, userId: req.auth.sub, type })
+  const [reactionCounts, myReaction] = await Promise.all([
+    ForumReaction.aggregate([{ $match: { threadId: thread._id } }, { $group: { _id: '$type', count: { $sum: 1 } } }]),
+    ForumReaction.findOne({ threadId: thread._id, userId: req.auth.sub }).select('type').lean(),
+  ])
+  res.json({
+    likeCount: reactionCounts.find((row) => row._id === 'like')?.count ?? 0,
+    dislikeCount: reactionCounts.find((row) => row._id === 'dislike')?.count ?? 0,
+    myReaction: myReaction?.type ?? null,
   })
 }))
 
@@ -2638,7 +3221,7 @@ app.post('/api/forums/threads/:id/posts', requireAuth, asyncRoute(async (req, re
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
   if (thread.isLocked && !isStaff) return res.status(403).json({ error: 'This thread is locked.' })
   const values = forumPostInput.parse(req.body)
-  const post = await ForumPost.create({ threadId: thread._id, authorId: req.auth.sub, body: values.body })
+  const post = await ForumPost.create({ threadId: thread._id, authorId: req.auth.sub, body: values.body, imageUrl: values.imageUrl })
   thread.lastPostAt = new Date()
   await thread.save()
   res.status(201).json(post)
@@ -2656,15 +3239,32 @@ app.delete('/api/staff/forums/threads/:id', requireAuth, requireStaff, asyncRout
   if (!databaseReady) return res.status(503).json({ error: 'Forums require MongoDB.' })
   const thread = await ForumThread.findByIdAndDelete(req.params.id)
   if (!thread) return res.status(404).json({ error: 'Thread not found.' })
-  await ForumPost.deleteMany({ threadId: thread._id })
+  await Promise.all([ForumPost.deleteMany({ threadId: thread._id }), ForumReaction.deleteMany({ threadId: thread._id })])
   await saveAudit('forum_thread.deleted', 'ForumThread', thread.id, {}, req.auth.sub)
   res.status(204).end()
 }))
 
-app.delete('/api/staff/forums/posts/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+app.patch('/api/forums/posts/:id', requireAuth, asyncRoute(async (req, res) => {
   if (!databaseReady) return res.status(503).json({ error: 'Forums require MongoDB.' })
-  const post = await ForumPost.findByIdAndDelete(req.params.id)
-  if (!post) return res.status(404).json({ error: 'Post not found.' })
+  const post = await ForumPost.findById(req.params.id)
+  if (!post) return res.status(404).json({ error: 'Reply not found.' })
+  // Editing is author-only — staff moderate by removing a reply, never by rewriting someone else's words.
+  if (String(post.authorId) !== req.auth.sub) return res.status(403).json({ error: 'You can only edit your own reply.' })
+  const values = forumPostInput.parse(req.body)
+  post.body = values.body
+  if (values.imageUrl !== undefined) post.imageUrl = values.imageUrl
+  post.editedAt = new Date()
+  await post.save()
+  res.json({ id: post.id, body: post.body, imageUrl: post.imageUrl ?? null, editedAt: post.editedAt })
+}))
+
+app.delete('/api/forums/posts/:id', requireAuth, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Forums require MongoDB.' })
+  const post = await ForumPost.findById(req.params.id)
+  if (!post) return res.status(404).json({ error: 'Reply not found.' })
+  const isStaff = ['instructor', 'admin'].includes(req.auth.role)
+  if (!isStaff && String(post.authorId) !== req.auth.sub) return res.status(403).json({ error: 'You can only delete your own reply.' })
+  await post.deleteOne()
   await saveAudit('forum_post.deleted', 'ForumPost', post.id, { threadId: String(post.threadId) }, req.auth.sub)
   res.status(204).end()
 }))
@@ -2684,6 +3284,27 @@ app.post('/api/staff/calendar-events', requireAuth, requireStaff, asyncRoute(asy
   const event = await CalendarEvent.create(calendarEventInput.parse(req.body))
   await saveAudit('calendar_event.created', 'CalendarEvent', event.id, {}, req.auth.sub)
   res.status(201).json(event)
+}))
+
+// A recurring session's details drift — the Zoom link is regenerated, the topic changes, it moves
+// an hour. Without these an instructor could only ever add events, never correct one.
+app.patch('/api/staff/calendar-events/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Calendar requires MongoDB.' })
+  const updates = calendarEventUpdateInput.parse(req.body)
+  const event = await CalendarEvent.findByIdAndUpdate(req.params.id, updates, { new: true, runValidators: true })
+  if (!event) return res.status(404).json({ error: 'Event not found.' })
+  await saveAudit('calendar_event.updated', 'CalendarEvent', event.id, { fields: Object.keys(updates) }, req.auth.sub)
+  res.json(event)
+}))
+
+app.delete('/api/staff/calendar-events/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Calendar requires MongoDB.' })
+  const event = await CalendarEvent.findById(req.params.id)
+  if (!event) return res.status(404).json({ error: 'Event not found.' })
+  // Attendance rows are meaningless once their session is gone — leaving them orphans the roll-call.
+  await Promise.all([Attendance.deleteMany({ eventId: event._id }), event.deleteOne()])
+  await saveAudit('calendar_event.deleted', 'CalendarEvent', req.params.id, { title: event.title }, req.auth.sub)
+  res.status(204).end()
 }))
 
 // Built-in attendance — a roll-call roster per calendar session, restricted to events tied to a
@@ -2716,6 +3337,10 @@ app.post('/api/staff/calendar-events/:id/attendance', requireAuth, requireStaff,
     { upsert: true, setDefaultsOnInsert: true },
   )))
   await saveAudit('attendance.recorded', 'CalendarEvent', event._id.toString(), { count: values.records.length }, req.auth.sub)
+  // Only learners marked present/late can possibly have crossed an attendance-count threshold —
+  // an absence never makes a rule newly true, so there's nothing to re-check for those rows.
+  const attendedLearnerIds = values.records.filter((record) => ['present', 'late'].includes(record.status)).map((record) => record.learnerId)
+  await runBadgeRules(String(event.courseId), attendedLearnerIds, ['attendance_count'])
   res.json({ ok: true, count: values.records.length })
 }))
 

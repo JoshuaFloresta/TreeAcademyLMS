@@ -4,6 +4,7 @@ import { Flag } from 'lucide-react'
 import StatusPill from '../../../components/StatusPill.jsx'
 import { useToast } from '../../../lib/toastContext.js'
 import { fetchReports, updateReport } from '../../../lib/admin.js'
+import Loading from '../../../components/Loading.jsx'
 
 const statuses = ['submitted', 'reviewing', 'actioned', 'dismissed']
 const statusKind = { submitted: 'gold', reviewing: 'gold', actioned: 'green', dismissed: 'red' }
@@ -29,7 +30,7 @@ export default function AdminReportsPage() {
       <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}><option value="">All statuses</option>{statuses.map((value) => <option key={value} value={value}>{value}</option>)}</select>
     </div>
     {error && <p className="form-alert" role="alert">{error}</p>}
-    {isLoading ? <p className="operations-note">Loading reports…</p>
+    {isLoading ? <Loading label="Loading reports…" />
       : !reports.length ? <div className="empty-state"><Flag size={26} /><strong>No reports</strong><p>Reports submitted by students and instructors will appear here.</p></div>
       : <div className="admin-ticket-list">
         {reports.map((report) => <article className="admin-ticket" key={report.id}>

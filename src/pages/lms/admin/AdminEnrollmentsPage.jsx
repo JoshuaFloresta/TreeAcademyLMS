@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Archive, ArchiveRestore, Check, Clock3, CreditCard, X } from 'lucide-react'
+import EnrollmentDocumentLinks from '../../../components/EnrollmentDocumentLinks.jsx'
 import StatusPill from '../../../components/StatusPill.jsx'
 import { useConfirm } from '../../../lib/confirmContext.js'
 import { useToast } from '../../../lib/toastContext.js'
 import { archiveEnrollment, bulkDecideEnrollments, decideEnrollment, fetchAdminEnrollments } from '../../../lib/admin.js'
+import Loading from '../../../components/Loading.jsx'
 
-const pathwayLabel = { broker: 'Broker Review', consultant: 'Consultant Review', agent: 'Agent Review' }
+const pathwayLabel = { broker: 'Broker Review', consultant: 'Consultant Review', appraiser: 'Appraiser Review' }
 const statusLabel = {
   application_pending: 'Application started', documents_pending: 'Awaiting signature', documents_complete: 'Agreement signed',
   payment_pending: 'Awaiting payment', contract_pending: 'Awaiting signature', contract_signed: 'Agreement signed',
@@ -98,8 +100,8 @@ export default function AdminEnrollmentsPage() {
     {error && <p className="form-alert" role="alert">{error}</p>}
 
     <div className="admin-table admin-table-enrollments">
-      <div className="admin-table-head"><span>{selectablePendingIds.length > 0 && <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all pending" />}</span><span>APPLICANT</span><span>PATHWAY</span><span>STATUS</span><span>SUBMITTED</span><span>ACTIONS</span></div>
-      {isLoading ? <p className="operations-note">Loading enrollments…</p>
+      <div className="admin-table-head"><span>{selectablePendingIds.length > 0 && <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all pending" />}</span><span>APPLICANT</span><span>PATHWAY</span><span>STATUS</span><span>DOCUMENTS</span><span>SUBMITTED</span><span>ACTIONS</span></div>
+      {isLoading ? <Loading label="Loading enrollments…" />
         : !enrollments.length ? <p className="operations-note">{showArchived ? 'No archived enrollments.' : 'No active enrollments.'}</p>
         : enrollments.map((row) => { const isPending = !showArchived && row.status === 'paid_approval_pending'; return <div className="admin-table-row" key={rowId(row)}>
           <span>{isPending && <input type="checkbox" checked={selected.has(rowId(row))} onChange={() => toggle(rowId(row))} aria-label={`Select ${row.applicant?.name}`} />}</span>
@@ -109,6 +111,7 @@ export default function AdminEnrollmentsPage() {
             <StatusPill kind={pillKind(row.status)}>{statusLabel[row.status] ?? row.status}</StatusPill>
             {row.payment?.plan === 'upfront' && <small style={{ display: 'block', marginTop: 4, color: '#a17e40', fontWeight: 700 }}>Balance due {peso(Number(row.amount ?? 0) - Number(row.payment?.planAmount ?? 0))} — follow up</small>}
           </span>
+          <span><EnrollmentDocumentLinks enrollmentId={rowId(row)} applicantName={row.applicant?.name} documents={row.documents} /></span>
           <span>{formatDate(row.createdAt)}</span>
           <span className="admin-row-actions">
             {isPending && <>

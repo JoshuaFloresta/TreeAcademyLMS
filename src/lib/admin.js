@@ -64,6 +64,45 @@ export const decideEnrollment = (id, decision, reason) => post(`/api/staff/enrol
 export const bulkDecideEnrollments = (ids, decision, reason) => post('/api/admin/enrollments/bulk-decision', { ids, decision, reason: reason || undefined })
 export const archiveEnrollment = (id, archived) => post(`/api/admin/enrollments/${id}/archive`, { archived })
 
+// Submitted admission forms and signed agreements. The server streams the bytes rather than
+// handing out a URL, so this goes through authedFetch and becomes a local blob — which also lets
+// the caller decide between opening it in a tab and saving it, from the same single request.
+export async function fetchEnrollmentDocument(id, type) {
+  const response = await authedFetch(`/api/staff/enrollments/${id}/documents/${type}`)
+  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? 'That document could not be opened.')
+  return URL.createObjectURL(await response.blob())
+}
+
+export async function openEnrollmentDocument(id, type) {
+  const url = await fetchEnrollmentDocument(id, type)
+  window.open(url, '_blank', 'noopener')
+  // Revoked on a delay, not immediately: the new tab needs the URL to still resolve when it loads.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
+export async function downloadEnrollmentDocument(id, type, filename) {
+  const url = await fetchEnrollmentDocument(id, type)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+// Mirrors the naming the server gives the same file in its Content-Disposition header, so the
+// saved copy reads the same whether staff opened it via /documents/:type or downloaded it here.
+export const enrollmentDocumentFilename = (applicantName, type) =>
+  `${(applicantName || 'applicant').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '')}-${type}.pdf`
+
+// Applicants for a generic (non-pathway) course's uploaded agreement PDF — see CourseEnrollment.
+export async function openCourseAgreementDocument(courseEnrollmentId) {
+  const response = await authedFetch(`/api/staff/course-enrollments/${courseEnrollmentId}/document`)
+  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? 'That document could not be opened.')
+  const url = URL.createObjectURL(await response.blob())
+  window.open(url, '_blank', 'noopener')
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
 // Audit logs
 export const fetchAuditLogs = (params) => get(`/api/admin/audit-logs${qs(params)}`)
 

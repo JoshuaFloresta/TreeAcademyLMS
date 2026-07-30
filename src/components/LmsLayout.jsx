@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Navigate, NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useIsFetching, useIsMutating, useQuery } from '@tanstack/react-query'
 import { io } from 'socket.io-client'
-import { BarChart3, Bell, BookOpen, CalendarClock, CalendarDays, ChevronDown, ChevronRight, ClipboardCheck, Flag, GraduationCap, LayoutDashboard, Library, LifeBuoy, LogOut, Mail, Megaphone, Menu, MessagesSquare, MoreHorizontal, ScrollText, Search, Settings, ShieldCheck, Sparkles, UserRound, Users, UsersRound, X } from 'lucide-react'
+import { BarChart3, Bell, BookOpen, CalendarClock, CalendarDays, ChevronDown, ChevronRight, ClipboardCheck, FileText, Flag, GraduationCap, LayoutDashboard, Library, LifeBuoy, LogOut, Mail, Megaphone, Menu, MessagesSquare, MoreHorizontal, ScrollText, Search, Settings, ShieldCheck, Sparkles, UserRound, Users, UsersRound, X } from 'lucide-react'
 import { API_URL, avatarSrc } from '../lib/api.js'
 import { authedFetch, stopImpersonation } from '../lib/auth.js'
-import { fetchAssignments, fetchNotifications, fetchPresence, fetchStaffOverview, searchAcademy } from '../lib/lms.js'
+import { fetchCourses, fetchNotifications, fetchPresence, fetchStaffOverview, searchAcademy } from '../lib/lms.js'
 import Brand from './Brand.jsx'
 import LmsPageContent from './LmsPageContent.jsx'
 import OnlineMembersPanel from './OnlineMembersPanel.jsx'
@@ -14,7 +14,7 @@ import { getLmsPage } from '../lib/lmsPages.js'
 const navItems = [
   { label: 'Dashboard', icon: LayoutDashboard, to: '/dashboard' },
   { label: 'Modules catalog', icon: BookOpen, to: '/catalog' },
-  { label: 'Assignments', icon: ClipboardCheck, to: '/assignments', badgeKey: 'assignments' },
+  { label: 'Assignments', icon: ClipboardCheck, to: '/assignments' },
   { label: 'Announcements', icon: Megaphone, to: '/announcements' },
   { label: 'Discussions', icon: MessagesSquare, to: '/forums' },
   { label: 'Calendar', icon: CalendarDays, to: '/calendar' },
@@ -26,14 +26,13 @@ const navItems = [
 const instructorNavItems = [
   { label: 'Dashboard', icon: LayoutDashboard, to: '/dashboard' },
   { label: 'Course builder', icon: BookOpen, to: '/builder' },
-  { label: 'Gradebook', icon: ClipboardCheck, to: '/gradebook', badgeKey: 'grading' },
+  { label: 'Submissions', icon: ClipboardCheck, to: '/submissions', badgeKey: 'grading' },
   { label: 'Student roster', icon: Users, to: '/roster' },
-  { label: 'Course analytics', icon: BarChart3, to: '/insights' },
+  { label: 'Enrollment Documents', icon: FileText, to: '/enrollment-documents' },
   { label: 'Announcements', icon: Megaphone, to: '/announcements' },
   { label: 'Discussions', icon: MessagesSquare, to: '/forums' },
   { label: 'Calendar', icon: CalendarDays, to: '/calendar' },
   { label: 'Notifications', icon: Bell, to: '/notifications', badgeKey: 'notifications' },
-  { label: 'Operations', icon: ShieldCheck, to: '/operations', badgeKey: 'operations' },
   { label: 'Recognition', icon: Sparkles, to: '/recognition' },
 ]
 
@@ -46,6 +45,8 @@ const adminNavItems = [
   { label: 'Course Catalog & Pricing', icon: BookOpen, to: '/admin/courses', primary: true },
   { label: 'Enrollment Management', icon: GraduationCap, to: '/admin/enrollments', badgeKey: 'operations', primary: true },
   { label: 'Global Analytics', icon: BarChart3, to: '/admin/analytics', primary: true },
+  { label: 'Enrollment Documents', icon: FileText, to: '/enrollment-documents' },
+  { label: 'Discussions', icon: MessagesSquare, to: '/forums' },
   { label: 'Roles & Permissions', icon: ShieldCheck, to: '/admin/roles' },
   { label: 'Audit Logs', icon: ScrollText, to: '/admin/audit' },
   { label: 'Content Library', icon: Library, to: '/admin/content' },
@@ -61,7 +62,7 @@ const pageTitles = {
   assignments: 'Assignments',
   calendar: 'Learning calendar',
   notifications: 'Notifications',
-  operations: 'Academy operations',
+  forums: 'Discussions',
 }
 
 function usePresence(user) {
@@ -83,10 +84,10 @@ function usePresence(user) {
 }
 
 function useNavBadges(user) {
-  const isLearner = user?.role === 'learner'
   const isStaff = user?.role === 'instructor' || user?.role === 'admin'
-  const { data: assignments = [] } = useQuery({ queryKey: ['nav-assignments', user?.id], queryFn: fetchAssignments, enabled: isLearner })
   const { data: notifications = [] } = useQuery({ queryKey: ['nav-notifications', user?.id], queryFn: fetchNotifications, enabled: Boolean(user) })
+  // Only admin's "Enrollment Management" nav item still uses this badge — instructors lost their
+  // own enrollment-review page, so there's no reason to fetch this on their behalf anymore.
   const { data: pendingEnrollments = 0 } = useQuery({
     queryKey: ['nav-pending-enrollments'],
     queryFn: async () => {
@@ -95,11 +96,10 @@ function useNavBadges(user) {
       const rows = await response.json()
       return rows.filter((row) => row.status === 'paid_approval_pending').length
     },
-    enabled: isStaff,
+    enabled: user?.role === 'admin',
   })
   const { data: overview } = useQuery({ queryKey: ['staff-overview'], queryFn: fetchStaffOverview, enabled: isStaff })
   return {
-    assignments: isLearner ? assignments.filter((assignment) => !assignment.mySubmission).length : 0,
     notifications: notifications.filter((notification) => !notification.readAt).length,
     operations: pendingEnrollments,
     grading: overview?.pendingGrading ?? 0,
@@ -143,6 +143,15 @@ function HeaderSearch() {
   </div>
 }
 
+// Per-page spinners only cover a page's *first* load. Once data is cached, a refetch or a save
+// leaves the screen looking idle — misleading against a hosted API that can stall for tens of
+// seconds. This thin bar is the catch-all: any in-flight query or mutation, anywhere, shows it.
+function ActivityBar() {
+  const busy = useIsFetching() + useIsMutating() > 0
+  if (!busy) return null
+  return <div className="lms-activity-bar" role="status" aria-label="Loading" />
+}
+
 function initialsOf(name) {
   if (!name) return 'U'
   return name.trim().split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase()
@@ -158,9 +167,12 @@ export default function LmsLayout({ user, authReady, onSignOut, onUserUpdate }) 
   const title = pageTitles[page] ?? getLmsPage(location.pathname)?.label ?? `${page.charAt(0).toUpperCase()}${page.slice(1)}`
   const members = usePresence(user)
   const badges = useNavBadges(user)
+  // Learner access is pathway-scoped (see learnerVisibleCourseFilter) — the course(s) /api/courses
+  // returns for a learner *are* the program(s) they're enrolled in, so no separate lookup is needed.
+  const { data: learnerCourses = [] } = useQuery({ queryKey: ['courses'], queryFn: fetchCourses, enabled: user?.role === 'learner' })
   // If the active page lives behind the "More" toggle, keep it expanded so the highlighted
   // link stays visible instead of hiding on navigation.
-  const onSecondaryAdminPage = adminNavItems.some((item) => !item.primary && item.to === location.pathname)
+  const onSecondaryAdminPage = adminNavItems.some((item) => !item.primary && (item.to === location.pathname || location.pathname.startsWith(`${item.to}/`)))
   const showAllAdminItems = adminNavExpanded || onSecondaryAdminPage
 
   if (!authReady) return <div className="lms-auth-loading"><span className="spinner" /></div>
@@ -168,13 +180,15 @@ export default function LmsLayout({ user, authReady, onSignOut, onUserUpdate }) 
 
   const role = user.role
   const initials = initialsOf(user.name)
+  const programLabel = learnerCourses.length ? learnerCourses.map((course) => course.title).join(' & ') : 'All-access learner'
   const signOut = async () => { await onSignOut(); navigate('/') }
   const exitImpersonation = async () => { try { await stopImpersonation() } catch { /* fall through to reload */ } window.location.assign('/admin/users') }
 
   return <div className="lms-page">
+    <ActivityBar />
     <aside className={`sidebar ${navOpen ? 'open' : ''}`}>
       <div className="sidebar-head"><Brand light /><button onClick={() => setNavOpen(false)} className="sidebar-close" aria-label="Close navigation"><X /></button></div>
-      <div className="workspace-label"><span className="workspace-avatar" style={user.avatarUrl ? { backgroundImage: `url(${avatarSrc(user.avatarUrl)})` } : undefined}>{!user.avatarUrl && initials}</span><span><strong>{user.name}</strong><small>{role === 'learner' ? 'All-access learner' : role.charAt(0).toUpperCase() + role.slice(1)}</small></span></div>
+      <div className="workspace-label"><span className="workspace-avatar" style={user.avatarUrl ? { backgroundImage: `url(${avatarSrc(user.avatarUrl)})` } : undefined}>{!user.avatarUrl && initials}</span><span><strong>{user.name}</strong><small>{role === 'learner' ? programLabel : role.charAt(0).toUpperCase() + role.slice(1)}</small></span></div>
       <nav className="lms-nav">
         {role === 'admin'
           ? <>
@@ -188,7 +202,11 @@ export default function LmsLayout({ user, authReady, onSignOut, onUserUpdate }) 
           ? instructorNavItems.map((item) => <NavLink key={item.to} to={item.to} onClick={() => setNavOpen(false)}><item.icon size={19} /><span>{item.label}</span>{item.badgeKey && badges[item.badgeKey] > 0 && <b className="gold-badge">{badges[item.badgeKey]}</b>}</NavLink>)
           : navItems.map((item) => <NavLink key={item.to} to={item.to} onClick={() => setNavOpen(false)}><item.icon size={19} /><span>{item.label}</span>{item.badgeKey && badges[item.badgeKey] > 0 && <b>{badges[item.badgeKey]}</b>}</NavLink>)}
       </nav>
-      <div className="sidebar-bottom"><NavLink to="/settings"><Settings size={19} /> <span>Settings</span></NavLink>{role !== 'admin' && <NavLink to="/profile"><UserRound size={19} /> <span>My profile</span></NavLink>}<button type="button" className="sidebar-signout" onClick={signOut}><LogOut size={19} /> <span>Sign out</span></button></div>
+      {/* Learners and instructors have one destination — the profile page absorbed Settings, so
+          showing both would be two links to the same screen. Admins have no learner profile. */}
+      <div className="sidebar-bottom">{role === 'admin'
+        ? <NavLink to="/settings"><Settings size={19} /> <span>Settings</span></NavLink>
+        : <NavLink to="/profile"><UserRound size={19} /> <span>Profile &amp; settings</span></NavLink>}<button type="button" className="sidebar-signout" onClick={signOut}><LogOut size={19} /> <span>Sign out</span></button></div>
     </aside>
     <div className={`sidebar-backdrop ${navOpen ? 'show' : ''}`} onClick={() => setNavOpen(false)} />
     <main className="lms-main">{user.impersonating && <div className="impersonation-bar"><span><UserRound size={15} /> Viewing as <strong>{user.name}</strong>{user.impersonatorName ? ` — signed in as ${user.impersonatorName}` : ''}</span><button type="button" onClick={exitImpersonation}>Exit impersonation</button></div>}<header className="lms-header"><button className="lms-menu" onClick={() => setNavOpen(true)} aria-label="Open navigation"><Menu /></button><div className="breadcrumbs"><span>Tree Academy</span><ChevronRight size={15} /><strong>{title}</strong></div><div className="header-tools"><HeaderSearch /><NavLink to="/notifications" className="header-icon notification-dot" aria-label="Notifications" data-has-unread={badges.notifications > 0}><Bell size={19} /></NavLink><button className="member-trigger" onClick={() => setOnlinePanelOpen(true)} aria-expanded={onlinePanelOpen} aria-controls="online-members-title"><i className="online-live-dot" /><UsersRound size={16} /><span><b>{members.length}</b> Online</span></button></div></header><section className="page-content"><LmsPageContent page={page} pathname={location.pathname} role={role} user={user} onUserUpdate={onUserUpdate} /></section></main>

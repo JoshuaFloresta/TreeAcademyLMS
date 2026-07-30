@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Mail, Save } from 'lucide-react'
 import { useToast } from '../../../lib/toastContext.js'
 import { fetchEmailTemplates, updateEmailTemplate } from '../../../lib/admin.js'
+import Loading from '../../../components/Loading.jsx'
 
 const templateMeta = {
   enrollment_received: {
@@ -61,7 +62,7 @@ export default function AdminEmailAutomationPage() {
 
   return <>
     <div className="page-title-row"><div><p className="eyebrow">PLATFORM ADMIN</p><h1>Email automation</h1><p>Customize the automatic emails sent the moment someone enrolls or registers.</p></div></div>
-    {isLoading ? <p className="operations-note">Loading templates…</p>
+    {isLoading ? <Loading label="Loading templates…" />
       : !templates.length ? <p className="operations-note"><Mail size={17} /> No templates configured.</p>
       : <div className="admin-email-template-list">{templates.map((template) => <TemplateCard template={template} key={template.key} />)}</div>}
   </>

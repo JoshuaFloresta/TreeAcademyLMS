@@ -16,28 +16,13 @@ async function responseData(response) {
   return data
 }
 
-// Dev-only: DevToolbar's enrollment shortcuts stash a fast-forwarded enrollment here so this
-// page can open straight into contract signing or payment instead of step 1.
-function readDevBootstrap() {
-  if (!import.meta.env.DEV) return null
-  try {
-    const raw = sessionStorage.getItem('treeacademy_dev_bootstrap')
-    if (!raw) return null
-    sessionStorage.removeItem('treeacademy_dev_bootstrap')
-    return JSON.parse(raw)
-  } catch {
-    return null
-  }
-}
-
 export default function EnrollmentPage() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
   const paymentState = params.get('payment')
-  const [devBootstrap] = useState(readDevBootstrap)
-  const [step, setStep] = useState(paymentState ? 4 : (devBootstrap?.step ?? 1))
-  const [application, setApplication] = useState(() => devBootstrap ? { id: devBootstrap.id, name: devBootstrap.name, email: devBootstrap.email, phone: devBootstrap.phone, amount: devBootstrap.amount, currency: devBootstrap.currency } : null)
-  const [intake, setIntake] = useState(() => devBootstrap?.intake ?? null)
+  const [step, setStep] = useState(paymentState ? 4 : 1)
+  const [application, setApplication] = useState(null)
+  const [intake, setIntake] = useState(null)
   const [formError, setFormError] = useState('')
   const [busy, setBusy] = useState(false)
   const [paymentMessage, setPaymentMessage] = useState('')
@@ -48,7 +33,7 @@ export default function EnrollmentPage() {
   const pathway = pathways.find((item) => item.id === params.get('pathway')) ?? pathways[0]
   const documentType = pathway.id === 'consultant' ? 'reclex' : 'realex-reblex'
   const [pricing, setPricing] = useState(null)
-  const upfrontKeyByPathway = { broker: 'upfrontBroker', consultant: 'upfrontConsultant', agent: 'upfrontAgent' }
+  const upfrontKeyByPathway = { broker: 'upfrontBroker', consultant: 'upfrontConsultant', appraiser: 'upfrontAppraiser' }
   const upfrontAmount = pricing ? pricing[upfrontKeyByPathway[pathway.id]] : null
 
   useEffect(() => {

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { BookOpen, CheckCircle2, ClipboardCheck, Flag, GraduationCap, Megaphone, ScrollText, UserPlus, Users } from 'lucide-react'
 import StatCard from '../../../components/lms/StatCard.jsx'
 import { fetchAdminDashboard } from '../../../lib/admin.js'
+import Loading from '../../../components/Loading.jsx'
 
 const sum = (map) => Object.values(map ?? {}).reduce((total, value) => total + value, 0)
 const titleize = (value) => value.replace(/[._]/g, ' ').replace(/\b\w/, (char) => char.toUpperCase())
@@ -34,7 +35,7 @@ function GrowthChart({ growth }) {
 export default function AdminDashboardPage({ user }) {
   const { data, isLoading, error } = useQuery({ queryKey: ['admin-dashboard'], queryFn: fetchAdminDashboard })
 
-  if (isLoading) return <><div className="page-title-row"><div><p className="eyebrow">PLATFORM ADMIN</p><h1>Dashboard</h1></div></div><p className="operations-note">Loading dashboard…</p></>
+  if (isLoading) return <><div className="page-title-row"><div><p className="eyebrow">PLATFORM ADMIN</p><h1>Dashboard</h1></div></div><Loading label="Loading dashboard…" /></>
   if (error) return <><div className="page-title-row"><div><p className="eyebrow">PLATFORM ADMIN</p><h1>Dashboard</h1></div></div><p className="form-alert" role="alert">{error.message}</p></>
 
   const pendingItems = [
@@ -53,7 +54,7 @@ export default function AdminDashboardPage({ user }) {
     <div className="stat-grid">
       <StatCard icon={Users} label="Total users" value={sum(data.usersByRole)} detail={`${data.usersByRole.learner ?? 0} learners · ${data.usersByRole.instructor ?? 0} instructors · ${data.usersByRole.admin ?? 0} admins`} trend="" />
       <StatCard icon={BookOpen} label="Total courses" value={data.courses.total} detail={`${data.courses.published} published`} trend="" />
-      <StatCard icon={GraduationCap} label="Active enrollments" value={sum(data.activeEnrollmentsByPathway)} detail={['broker', 'consultant', 'agent'].map((pathway) => `${data.activeEnrollmentsByPathway[pathway] ?? 0} ${pathway}`).join(' · ')} trend="" />
+      <StatCard icon={GraduationCap} label="Active enrollments" value={sum(data.activeEnrollmentsByPathway)} detail={['broker', 'consultant', 'appraiser'].map((pathway) => `${data.activeEnrollmentsByPathway[pathway] ?? 0} ${pathway}`).join(' · ')} trend="" />
       <StatCard icon={CheckCircle2} label="Course completion" value={`${data.completionRate}%`} detail="Platform-wide average" trend={data.completionRate >= 50 ? 'Healthy' : 'Needs attention'} gold={data.completionRate < 50} />
     </div>
     <section className="quick-actions" style={{ marginTop: 22 }}>

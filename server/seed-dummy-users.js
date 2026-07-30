@@ -11,7 +11,7 @@ const DEFAULT_PASSWORD = process.env.SEED_DUMMY_PASSWORD ?? 'TreeAcademy123!'
 
 const dummyUsers = [
   { name: 'Maria Santos', email: 'maria.learner@treeacademy.test', role: 'learner', headline: 'Broker Review candidate', location: 'Quezon City, PH' },
-  { name: 'Ramon Cruz', email: 'ramon.learner@treeacademy.test', role: 'learner', headline: 'Agent Review candidate', location: 'Cebu City, PH' },
+  { name: 'Ramon Cruz', email: 'ramon.learner@treeacademy.test', role: 'learner', headline: 'Appraiser Review candidate', location: 'Cebu City, PH' },
   { name: 'Divina Reyes', email: 'divina.learner@treeacademy.test', role: 'learner', headline: 'Consultant Review candidate', location: 'Davao City, PH' },
   { name: 'Mia Flores', email: 'mia.instructor@treeacademy.test', role: 'instructor', headline: 'Lead review instructor', location: 'Makati City, PH' },
   { name: 'Andres Bautista', email: 'andres.learner@treeacademy.test', role: 'learner', headline: 'Broker Review candidate', location: 'Iloilo City, PH' },

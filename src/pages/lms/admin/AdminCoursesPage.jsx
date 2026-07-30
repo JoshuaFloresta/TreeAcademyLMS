@@ -1,12 +1,14 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, ArchiveRestore, Check, Eye, EyeOff, Plus, Save, Trash2, Users, X } from 'lucide-react'
+import { Archive, ArchiveRestore, Check, Eye, EyeOff, FileText, Link2, Pencil, Plus, Save, Trash2, Upload, Users, X } from 'lucide-react'
 import CourseBanner from '../../../components/lms/CourseBanner.jsx'
 import StatusPill from '../../../components/StatusPill.jsx'
+import Modal from '../../../components/Modal.jsx'
 import { useConfirm } from '../../../lib/confirmContext.js'
 import { useToast } from '../../../lib/toastContext.js'
-import { createCourse } from '../../../lib/lms.js'
-import { deleteCourse, fetchAdminCourses, fetchAdminPricing, moderateCourse, reviewCourse, updateAdminPricing } from '../../../lib/admin.js'
+import { createCourse, deleteCourseAgreementTemplate, fetchCourseAgreementEnrollments, updateCourse, uploadCourseAgreementTemplate } from '../../../lib/lms.js'
+import { deleteCourse, fetchAdminCourses, fetchAdminPricing, moderateCourse, openCourseAgreementDocument, reviewCourse, updateAdminPricing } from '../../../lib/admin.js'
+import Loading from '../../../components/Loading.jsx'
 
 const courseState = (course) => (course.archivedAt ? { kind: 'red', label: 'Archived' } : course.isPublished ? { kind: 'green', label: 'Published' } : { kind: 'gold', label: 'Draft' })
 const approvalState = { draft: null, pending_review: { kind: 'gold', label: 'Awaiting review' }, approved: { kind: 'green', label: 'Approved' }, rejected: { kind: 'red', label: 'Rejected' } }
@@ -15,10 +17,10 @@ const peso = (value) => `₱${Number(value ?? 0).toLocaleString('en-PH')}`
 const slugify = (value) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 160)
 // Pricing is tied to the 3 enrollment pathways, joined to a course purely by slug convention
 // (`${pathway}-review`, see courseForPathway in index.js) — only these 3 cards get price fields.
-// Broker and Agent independently editable even though they sign the same "realex-reblex"
+// Broker and Appraiser independently editable even though they sign the same "realex-reblex"
 // agreement document — that's a document-generation detail, not a pricing one.
-const totalKeyBySlug = { 'broker-review': 'totalBroker', 'consultant-review': 'totalConsultant', 'agent-review': 'totalAgent' }
-const upfrontKeyBySlug = { 'broker-review': 'upfrontBroker', 'consultant-review': 'upfrontConsultant', 'agent-review': 'upfrontAgent' }
+const totalKeyBySlug = { 'broker-review': 'totalBroker', 'consultant-review': 'totalConsultant', 'appraiser-review': 'totalAppraiser' }
+const upfrontKeyBySlug = { 'broker-review': 'upfrontBroker', 'consultant-review': 'upfrontConsultant', 'appraiser-review': 'upfrontAppraiser' }
 
 // Availability dates are staged locally and only committed when "Save" is pressed — editing a
 // live date field on blur risked accidental changes if an admin was just skimming the card.
@@ -62,13 +64,22 @@ function PriceField({ priceKey, label = 'Full enrollment price (PHP)', pricing, 
 function NewCourseCard({ onCreated, onCancel }) {
   const [values, setValues] = useState({ title: '', slug: '', description: '' })
   const [touchedSlug, setTouchedSlug] = useState(false)
+  const [templateFile, setTemplateFile] = useState(null)
   const [error, setError] = useState('')
   const toast = useToast()
   const mutation = useMutation({ mutationFn: () => createCourse({ title: values.title.trim(), slug: values.slug.trim(), description: values.description.trim() || undefined }) })
   const submit = async (event) => {
     event.preventDefault()
     setError('')
-    try { await mutation.mutateAsync(); toast.success('Course created.'); onCreated() } catch (e) { setError(e.message) }
+    try {
+      const course = await mutation.mutateAsync()
+      if (templateFile) {
+        try { await uploadCourseAgreementTemplate(course.id, templateFile) }
+        catch (e) { toast.error(`Course created, but the agreement PDF could not be attached: ${e.message}`) }
+      }
+      toast.success('Course created.')
+      onCreated()
+    } catch (e) { setError(e.message) }
   }
   return <article className="catalog-card admin-course-card admin-new-course-card">
     <form onSubmit={submit}>
@@ -76,6 +87,11 @@ function NewCourseCard({ onCreated, onCancel }) {
       <input value={values.title} onChange={(event) => { const title = event.target.value; setValues((prev) => ({ ...prev, title, slug: touchedSlug ? prev.slug : slugify(title) })) }} placeholder="Course title" aria-label="Course title" autoFocus />
       <input value={values.slug} onChange={(event) => { setTouchedSlug(true); setValues((prev) => ({ ...prev, slug: slugify(event.target.value) })) }} placeholder="course-slug" aria-label="Course slug" />
       <textarea value={values.description} onChange={(event) => setValues((prev) => ({ ...prev, description: event.target.value }))} placeholder="Short description (optional)" rows={3} />
+      <label className="admin-agreement-upload-label">
+        <span>Commitment / agreement PDF (optional)</span>
+        <input type="file" accept="application/pdf" onChange={(event) => setTemplateFile(event.target.files?.[0] ?? null)} />
+      </label>
+      {templateFile && <small className="admin-agreement-filename"><FileText size={12} /> {templateFile.name}</small>}
       {error && <span className="builder-error">{error}</span>}
       <div className="admin-course-actions">
         <button type="submit" className="button button-primary button-compact" disabled={mutation.isPending || values.title.trim().length < 2}><Plus size={14} /> {mutation.isPending ? 'Creating…' : 'Create course'}</button>
@@ -85,7 +101,126 @@ function NewCourseCard({ onCreated, onCancel }) {
   </article>
 }
 
-function CourseCard({ course, index, pricing, onAct, onUnpublish, onArchive, onReview, onRemove, onSavePrice }) {
+// Shown only on courses outside the 3 fixed enrollment pathways (which keep their own hardcoded
+// realex-reblex/reclex documents) — lets an admin attach/replace/remove the PDF that powers that
+// course's generic, no-payment application flow at /apply/:slug, and see who has signed it.
+function AgreementSection({ course }) {
+  const toast = useToast()
+  const confirm = useConfirm()
+  const queryClient = useQueryClient()
+  const fileInputRef = useRef(null)
+  const [applicantsOpen, setApplicantsOpen] = useState(false)
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin-courses'] })
+  const uploadMutation = useMutation({ mutationFn: (file) => uploadCourseAgreementTemplate(course.id, file) })
+  const removeMutation = useMutation({ mutationFn: () => deleteCourseAgreementTemplate(course.id) })
+  const { data: applicants = [], isLoading } = useQuery({
+    queryKey: ['course-agreement-enrollments', course.id],
+    queryFn: () => fetchCourseAgreementEnrollments(course.id),
+    enabled: applicantsOpen,
+  })
+
+  const template = course.agreementTemplate
+  const applyLink = `${window.location.origin}/apply/${course.slug}`
+
+  const chooseFile = () => fileInputRef.current?.click()
+  const onFileChosen = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    try { await uploadMutation.mutateAsync(file); toast.success('Agreement PDF attached.'); invalidate() }
+    catch (e) { toast.error(e.message) }
+  }
+  const remove = async () => {
+    if (!(await confirm({ message: 'Learners will no longer be able to apply with this document. Signed copies already on file are kept.', confirmLabel: 'Remove' }))) return
+    try { await removeMutation.mutateAsync(); toast.success('Agreement PDF removed.'); invalidate() }
+    catch (e) { toast.error(e.message) }
+  }
+  const copyLink = async () => {
+    try { await navigator.clipboard.writeText(applyLink); toast.success('Apply link copied.') }
+    catch { toast.error('Could not copy the link.') }
+  }
+  const viewDocument = (courseEnrollmentId) => openCourseAgreementDocument(courseEnrollmentId).catch((e) => toast.error(e.message))
+
+  return <div className="admin-course-agreement">
+    <input ref={fileInputRef} type="file" accept="application/pdf" hidden onChange={onFileChosen} />
+    {template
+      ? <>
+        <span className="admin-course-field-label">Agreement PDF</span>
+        <div className="admin-agreement-row"><FileText size={13} /> {template.originalName}
+          <button type="button" className="admin-count-toggle" title="Replace the PDF" onClick={chooseFile}><Upload size={12} /></button>
+          <button type="button" className="admin-count-toggle" title="Remove the PDF" onClick={remove}><Trash2 size={12} /></button>
+        </div>
+        <div className="admin-agreement-row">
+          <button type="button" className="button button-ghost button-compact" onClick={copyLink}><Link2 size={13} /> Copy apply link</button>
+          <button type="button" className="button button-ghost button-compact" onClick={() => setApplicantsOpen(true)}><Users size={13} /> Applicants{applicants.length ? ` (${applicants.length})` : ''}</button>
+        </div>
+      </>
+      : <button type="button" className="button button-ghost button-compact" onClick={chooseFile}><Upload size={13} /> Upload agreement PDF</button>}
+
+    <Modal open={applicantsOpen} onClose={() => setApplicantsOpen(false)} labelledBy="agreement-applicants-title" className="confirm-modal">
+      <p className="eyebrow">APPLICANTS</p>
+      <h2 id="agreement-applicants-title">{course.title}</h2>
+      {isLoading ? <Loading label="Loading applicants…" />
+        : !applicants.length ? <p className="operations-note">No one has applied yet.</p>
+        : <ul className="admin-agreement-applicant-list">{applicants.map((row) => <li key={row._id}>
+          <span>{row.applicant.name} <small>{row.applicant.email}</small></span>
+          <button type="button" className="button button-ghost button-compact" onClick={() => viewDocument(row._id)}><FileText size={13} /> View PDF</button>
+        </li>)}</ul>}
+    </Modal>
+  </div>
+}
+
+// Renaming edits the title only — the slug stays fixed because pricing and checkout join a course
+// to its enrollment pathway by slug (`${pathway}-review`), so an editable slug would silently
+// detach both. The slug stays visible under the name so it's clear what didn't change.
+// `slugLocked` is true only for the 3 pathway courses — their slug is how pricing, checkout, and
+// access-provisioning find the right course (`${pathway}-review`), so it can't be edited here; the
+// server enforces this too (see RESERVED_COURSE_SLUGS in index.js), this just avoids offering an
+// edit that would always be rejected.
+function CourseTitle({ course, slugLocked, onRenamed }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(course.title)
+  const [editingSlug, setEditingSlug] = useState(false)
+  const [slugDraft, setSlugDraft] = useState(course.slug)
+  const toast = useToast()
+  const mutation = useMutation({ mutationFn: (title) => updateCourse(course.id, { title }) })
+  const slugMutation = useMutation({ mutationFn: (slug) => updateCourse(course.id, { slug }) })
+  const cancel = () => { setDraft(course.title); setEditing(false) }
+  const save = async (event) => {
+    event.preventDefault()
+    const title = draft.trim()
+    if (title === course.title) return cancel()
+    try { await mutation.mutateAsync(title); toast.success(`Renamed to “${title}”.`); setEditing(false); onRenamed() }
+    catch (e) { toast.error(e.message) }
+  }
+  const cancelSlug = () => { setSlugDraft(course.slug); setEditingSlug(false) }
+  const saveSlug = async (event) => {
+    event.preventDefault()
+    const slug = slugify(slugDraft)
+    if (!slug || slug === course.slug) return cancelSlug()
+    try { await slugMutation.mutateAsync(slug); toast.success(`Slug changed to “/${slug}”. Update any shared apply links.`); setEditingSlug(false); onRenamed() }
+    catch (e) { toast.error(e.message) }
+  }
+  return <div className="admin-course-title">
+    {editing
+      ? <form className="admin-course-rename" onSubmit={save}>
+        <input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') cancel() }} aria-label="Course name" maxLength={160} autoFocus />
+        <button type="submit" className="admin-season-save" disabled={mutation.isPending || draft.trim().length < 2}><Save size={12} /> {mutation.isPending ? 'Saving…' : 'Save'}</button>
+        <button type="button" className="admin-count-toggle" title="Cancel" onClick={cancel}><X size={13} /></button>
+      </form>
+      : <h2>{course.title}<button type="button" className="admin-count-toggle" title="Rename this course" onClick={() => setEditing(true)}><Pencil size={12} /></button></h2>}
+    {editingSlug
+      ? <form className="admin-course-rename admin-course-slug-edit" onSubmit={saveSlug}>
+        <span>/</span>
+        <input value={slugDraft} onChange={(event) => setSlugDraft(slugify(event.target.value))} onKeyDown={(event) => { if (event.key === 'Escape') cancelSlug() }} aria-label="Course slug" maxLength={160} autoFocus />
+        <button type="submit" className="admin-season-save" disabled={slugMutation.isPending || slugDraft.trim().length < 2}><Save size={12} /> {slugMutation.isPending ? 'Saving…' : 'Save'}</button>
+        <button type="button" className="admin-count-toggle" title="Cancel" onClick={cancelSlug}><X size={13} /></button>
+      </form>
+      : <small>/{course.slug} · {course.moduleCount} modules{!slugLocked && <button type="button" className="admin-count-toggle" title="Edit the slug" onClick={() => setEditingSlug(true)}><Pencil size={10} /></button>}</small>}
+  </div>
+}
+
+function CourseCard({ course, index, pricing, onAct, onUnpublish, onArchive, onReview, onRemove, onSavePrice, onRenamed }) {
   const state = courseState(course)
   const approval = approvalState[course.approvalStatus]
   const totalKey = totalKeyBySlug[course.slug]
@@ -94,7 +229,7 @@ function CourseCard({ course, index, pricing, onAct, onUnpublish, onArchive, onR
     <CourseBanner course={course} index={index} />
     <div>
       <div className="admin-course-card-head">
-        <div><h2>{course.title}</h2><small>/{course.slug} · {course.moduleCount} modules</small></div>
+        <CourseTitle course={course} slugLocked={Boolean(totalKey)} onRenamed={onRenamed} />
         <span className="admin-enroll-cell"><Users size={13} /> {course.enrolledCount}
           <button type="button" className="admin-count-toggle" title={course.showEnrollmentCount ? 'Shown on the landing page — click to hide' : 'Hidden from the landing page — click to show'} onClick={() => onAct(course, { showEnrollmentCount: !course.showEnrollmentCount }, course.showEnrollmentCount ? 'Enrollment count hidden from the landing page.' : 'Enrollment count is now shown on the landing page.')}>{course.showEnrollmentCount ? <Eye size={13} /> : <EyeOff size={13} />}</button>
         </span>
@@ -103,8 +238,9 @@ function CourseCard({ course, index, pricing, onAct, onUnpublish, onArchive, onR
 
       {totalKey && <div className="admin-course-price-pair">
         <PriceField priceKey={totalKey} label="Full enrollment price (PHP)" pricing={pricing} onSave={onSavePrice} />
-        <PriceField priceKey={upfrontKey} label="Upfront reservation fee (PHP)" pricing={pricing} onSave={onSavePrice} />
+        <PriceField priceKey={upfrontKey} label="Upfront fee(PHP)" pricing={pricing} onSave={onSavePrice} />
       </div>}
+      {!totalKey && <AgreementSection course={course} />}
       <AvailabilityFields course={course} onSave={(updates) => onAct(course, updates, 'Availability updated.')} />
 
       {course.approvalStatus === 'pending_review' && <div className="admin-course-actions">
@@ -185,10 +321,10 @@ export default function AdminCoursesPage() {
 
     <div className="catalog-grid admin-course-grid">
       {creating && <NewCourseCard onCreated={() => { setCreating(false); invalidateCourses() }} onCancel={() => setCreating(false)} />}
-      {isLoading ? <p className="operations-note">Loading catalog…</p>
+      {isLoading ? <Loading label="Loading catalog…" />
         : !courses.length && !creating ? <p className="operations-note">No courses have been created yet.</p>
-        : courses.map((course, index) => <CourseCard key={course.id} course={course} index={index} pricing={pricing} onAct={act} onUnpublish={unpublish} onArchive={archive} onReview={review} onRemove={remove} onSavePrice={savePrice} />)}
+        : courses.map((course, index) => <CourseCard key={course.id} course={course} index={index} pricing={pricing} onAct={act} onUnpublish={unpublish} onArchive={archive} onReview={review} onRemove={remove} onSavePrice={savePrice} onRenamed={invalidateCourses} />)}
     </div>
-    <p className="operations-note"><Users size={17} /> The eye toggle controls whether that course’s live enrolled count appears on the public landing page. Only Broker, Consultant, and Agent Review show a price field — pricing follows the enrollment pathway, not arbitrary courses.</p>
+    <p className="operations-note"><Users size={17} /> The eye toggle controls whether that course’s live enrolled count appears on the public landing page. Only Broker, Consultant, and Appraiser Review show a price field — pricing follows the enrollment pathway, not arbitrary courses.</p>
   </>
 }

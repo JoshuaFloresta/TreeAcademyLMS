@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ScrollText } from 'lucide-react'
 import { fetchAuditLogs } from '../../../lib/admin.js'
+import Loading from '../../../components/Loading.jsx'
 
 const formatDate = (value) => (value ? new Date(value).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' }) : '—')
 
@@ -19,7 +20,7 @@ export default function AdminAuditPage() {
     {error && <p className="form-alert" role="alert">{error.message}</p>}
     <div className="admin-table admin-table-audit">
       <div className="admin-table-head"><span>ACTION</span><span>ENTITY</span><span>ACTOR</span><span>WHEN</span></div>
-      {isLoading ? <p className="operations-note">Loading audit trail…</p>
+      {isLoading ? <Loading label="Loading audit trail…" />
         : !logs.length ? <div className="empty-state"><ScrollText size={26} /><strong>No audit entries</strong><p>System actions will appear here as they happen.</p></div>
         : logs.map((log) => <div className="admin-table-row" key={log.id}>
           <span><strong>{log.action}</strong>{log.metadata && Object.keys(log.metadata).length > 0 && <small className="admin-audit-meta">{JSON.stringify(log.metadata)}</small>}</span>

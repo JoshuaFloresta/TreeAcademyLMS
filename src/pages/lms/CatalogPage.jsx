@@ -6,6 +6,7 @@ import CourseBanner from '../../components/lms/CourseBanner.jsx'
 import RichTextViewer from '../../components/RichTextViewer.jsx'
 import { useToast } from '../../lib/toastContext.js'
 import { completeModule, fetchCourse, fetchCourseCategories, fetchCourseCategory, fetchCourses, updateModule } from '../../lib/lms.js'
+import Loading from '../../components/Loading.jsx'
 
 const kindLabel = { article: 'Article', video: 'Video lesson', document: 'Document', link: 'Resource link' }
 const dueLabel = (dueAt) => (dueAt ? `Due ${new Date(dueAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}` : 'No due date')
@@ -110,7 +111,7 @@ function CategoryDetailPage({ courseId, categoryId, onBack }) {
   const { data: category, isLoading } = useQuery({ queryKey: ['course-category', courseId, categoryId], queryFn: () => fetchCourseCategory(courseId, categoryId) })
   return <>
     <button type="button" className="filter-button" onClick={onBack} style={{ marginBottom: 18 }}><ArrowLeft size={15} /> Back to catalog</button>
-    {isLoading && <div className="empty-state"><BookOpen size={26} /><strong>Loading category…</strong></div>}
+    {isLoading && <Loading block label="Loading category…" />}
     {!isLoading && !category && <div className="empty-state"><BookOpen size={26} /><strong>Category not found</strong></div>}
     {category && <div className="course-details">
       <div className="course-details-header" style={{ background: categoryBackground(category), color: '#fff' }}>
@@ -162,7 +163,7 @@ function PhaseDetailPage({ courseId, phaseId, role, onBack }) {
 
   return <>
     <button type="button" className="filter-button" onClick={onBack} style={{ marginBottom: 18 }}><ArrowLeft size={15} /> Back to catalog</button>
-    {isLoading && <div className="empty-state"><BookOpen size={26} /><strong>Loading phase…</strong></div>}
+    {isLoading && <Loading block label="Loading phase…" />}
     {!isLoading && !module && <div className="empty-state"><BookOpen size={26} /><strong>Phase not found</strong></div>}
     {module && <div className="course-details">
       <div className="course-details-header">
@@ -204,10 +205,10 @@ function PhaseGrid({ role, onOpenPhase, onOpenCategory }) {
       <div><p className="eyebrow">ALL-ACCESS LIBRARY</p><h1>Modules catalog</h1><p>Your review phases, in order.</p></div>
       {isStaff && courses.length > 1 && <select value={activeCourseId} onChange={(event) => setCourseId(event.target.value)} className="filter-button" aria-label="Select course">{courses.map((item) => <option key={item._id} value={item._id}>{item.title}</option>)}</select>}
     </div>
-    {coursesLoading && <div className="empty-state"><BookOpen size={26} /><strong>Loading…</strong></div>}
+    {coursesLoading && <Loading block label="Loading…" />}
     {error && <div className="empty-state"><BookOpen size={26} /><strong>Could not load your course</strong><p>{error.message}</p></div>}
     {!coursesLoading && !error && courses.length === 0 && <div className="empty-state"><BookOpen size={26} /><strong>No course access yet</strong><p>Once your enrollment is approved, your review phases will appear here.</p></div>}
-    {isLoading && activeCourseId && <div className="empty-state"><BookOpen size={26} /><strong>Loading phases…</strong></div>}
+    {isLoading && activeCourseId && <Loading block label="Loading phases…" />}
     {course && <div className="catalog-grid">
       {categories.map((category, index) => <article className="catalog-card" key={category._id}>
         <div className="catalog-image preset" style={{ background: categoryBackground(category) }}><span>{String(index + 1).padStart(2, '0')}</span></div>

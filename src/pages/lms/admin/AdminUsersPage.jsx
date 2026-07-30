@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, Camera, ChevronDown, Download, KeyRound, LogIn, RefreshCw, Save, Trash2, Upload, UserPlus } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { BookOpen, Camera, ChevronDown, Download, IdCard, KeyRound, LogIn, RefreshCw, Save, Trash2, Upload, UserPlus } from 'lucide-react'
 import StatusPill from '../../../components/StatusPill.jsx'
 import Modal from '../../../components/Modal.jsx'
 import ImageCropModal from '../../../components/ImageCropModal.jsx'
@@ -9,6 +10,7 @@ import { avatarSrc } from '../../../lib/api.js'
 import { startImpersonation } from '../../../lib/auth.js'
 import { useConfirm } from '../../../lib/confirmContext.js'
 import { useToast } from '../../../lib/toastContext.js'
+import Loading from '../../../components/Loading.jsx'
 import {
   bulkEnrollUsers, bulkUserAction, createAdminUser, deleteAdminUser, enrollUserCourse, fetchAdminCourses,
   fetchAdminUsers, fetchInstructorTeachingCourses, fetchUserCourses, importUsers, resetAdminUserPassword, saveInstructorTeachingCourses, unenrollUserCourse, updateAdminUser, uploadAdminUserAvatar,
@@ -189,10 +191,10 @@ function UserDetail({ user, onChanged }) {
 
     <section className="admin-detail-courses">
       <h4>{user.role === 'instructor' ? 'Teaching courses' : 'Course enrollment'}</h4>
-      {user.role === 'instructor' && (teachingCoursesLoading ? <p className="operations-note">Loading available courses…</p>
+      {user.role === 'instructor' && (teachingCoursesLoading ? <Loading label="Loading available courses…" />
         : !teachingCourses.length ? <p className="operations-note">No courses exist yet.</p>
         : <><p className="operations-note">Choose courses this instructor can teach. Changes are saved only when you click <strong>Save profile</strong>.</p><div className="admin-enroll-list">{teachingCourses.map((course) => <label key={course.id} className={`admin-enroll-row ${teachingCourseIds.includes(course.id) ? 'on' : ''}`}><input type="checkbox" checked={teachingCourseIds.includes(course.id)} onChange={() => setTeachingChanges((current) => { const ids = current ?? teachingCourses.filter((item) => item.assigned).map((item) => item.id); return ids.includes(course.id) ? ids.filter((id) => id !== course.id) : [...ids, course.id] })} /><span><strong>{course.title}</strong><small>{teachingCourseIds.includes(course.id) ? 'Assigned to teach' : 'Not assigned'}</small></span><BookOpen size={15} /></label>)}</div></>)}
-      {user.role !== 'instructor' && (coursesLoading ? <p className="operations-note">Loading courses…</p>
+      {user.role !== 'instructor' && (coursesLoading ? <Loading label="Loading courses…" />
         : !courses.length ? <p className="operations-note">No courses exist yet.</p>
         : <div className="admin-enroll-list">
           {courses.map((course) => <label key={course.id} className={`admin-enroll-row ${course.enrolled ? 'on' : ''}`}>
@@ -316,7 +318,7 @@ export default function AdminUsersPage({ user }) {
 
     <div className="admin-table admin-table-users">
       <div className="admin-table-head"><span>{allIds.length > 0 && <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all" />}</span><span>MEMBER</span><span>ROLE</span><span>STATUS</span><span>LAST ACTIVE</span><span>ACTIONS</span></div>
-      {isLoading ? <p className="operations-note">Loading users…</p>
+      {isLoading ? <Loading label="Loading users…" />
         : !users.length ? <p className="operations-note">No users match those filters.</p>
         : users.map((row) => <div key={row.id}>
           <div className={`admin-table-row ${expandedId === row.id ? 'expanded' : ''}`}>
@@ -329,6 +331,9 @@ export default function AdminUsersPage({ user }) {
               {row.status === 'active'
                 ? <button className="button button-ghost button-compact" onClick={() => quickUpdate(row, { status: 'inactive' })}>Deactivate</button>
                 : <button className="button button-ghost button-compact" onClick={() => quickUpdate(row, { status: 'active' })}>Activate</button>}
+              {/* Opens the member's profile — their personal details and the enrollment paperwork
+                  they signed, both staff-only on that page. */}
+              <Link className="button button-ghost button-compact" to={`/profile?member=${row.id}`}><IdCard size={14} /> Profile</Link>
               <button className="button button-ghost button-compact" onClick={() => setExpandedId(expandedId === row.id ? '' : row.id)} aria-expanded={expandedId === row.id}>Manage <ChevronDown size={14} className={expandedId === row.id ? 'rotate' : ''} /></button>
             </span>
           </div>

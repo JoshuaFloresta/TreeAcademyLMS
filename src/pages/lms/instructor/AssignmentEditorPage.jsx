@@ -6,6 +6,7 @@ import RichTextEditor from '../../../components/RichTextEditor.jsx'
 import { useToast } from '../../../lib/toastContext.js'
 import { createAssignment, fetchAssignment, fetchCourse, updateAssignment } from '../../../lib/lms.js'
 import { toLocalInput } from './builderShared.js'
+import Loading from '../../../components/Loading.jsx'
 
 function AssignmentFields({ course, assignment, initialModuleId, initialPosition, onDone, onCancel }) {
   const [values, setValues] = useState({
@@ -104,7 +105,7 @@ export default function AssignmentEditorPage({ role, assignmentId }) {
     <div className="course-details builder-phase-editor">
       <div className="builder-editor-page-body">
         {!courseId && <p className="form-alert" role="alert">No course selected. Go back and choose a course first.</p>}
-        {courseId && (assignmentLoading || courseLoading) && <p className="operations-note">Loading…</p>}
+        {courseId && (assignmentLoading || courseLoading) && <Loading label="Loading…" />}
         {courseId && !assignmentLoading && !courseLoading && !course && <p className="form-alert" role="alert">Could not load this course.</p>}
         {courseId && course && (isNew || existing) && <AssignmentFields course={course} assignment={isNew ? null : existing} initialModuleId={initialModuleId} initialPosition={initialPosition} onDone={done} onCancel={() => navigate(-1)} />}
       </div>

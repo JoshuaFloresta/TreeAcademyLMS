@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { BarChart3, BookOpen, CreditCard, FileText, LifeBuoy, Users } from 'lucide-react'
 import StatCard from '../../../components/lms/StatCard.jsx'
 import { fetchAnalytics } from '../../../lib/admin.js'
+import Loading from '../../../components/Loading.jsx'
 
 const peso = (value) => `₱${Number(value ?? 0).toLocaleString('en-PH')}`
 const sum = (map) => Object.values(map ?? {}).reduce((total, value) => total + value, 0)
@@ -23,7 +24,7 @@ function Breakdown({ title, data }) {
 export default function AdminAnalyticsPage() {
   const { data, isLoading, error } = useQuery({ queryKey: ['admin-analytics'], queryFn: fetchAnalytics })
 
-  if (isLoading) return <><div className="page-title-row"><div><p className="eyebrow">PLATFORM ADMIN</p><h1>Global Analytics</h1></div></div><p className="operations-note">Loading platform metrics…</p></>
+  if (isLoading) return <><div className="page-title-row"><div><p className="eyebrow">PLATFORM ADMIN</p><h1>Global Analytics</h1></div></div><Loading label="Loading platform metrics…" /></>
   if (error) return <><div className="page-title-row"><div><p className="eyebrow">PLATFORM ADMIN</p><h1>Global Analytics</h1></div></div><p className="form-alert" role="alert">{error.message}</p></>
 
   return <>

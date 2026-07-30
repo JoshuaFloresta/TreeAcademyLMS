@@ -4,6 +4,7 @@ import { LifeBuoy } from 'lucide-react'
 import StatusPill from '../../../components/StatusPill.jsx'
 import { useToast } from '../../../lib/toastContext.js'
 import { fetchSupportTickets, updateSupportTicket } from '../../../lib/admin.js'
+import Loading from '../../../components/Loading.jsx'
 
 const statuses = ['open', 'in_progress', 'resolved', 'closed']
 const statusKind = { open: 'gold', in_progress: 'gold', resolved: 'green', closed: 'red' }
@@ -28,7 +29,7 @@ export default function AdminSupportPage() {
       <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}><option value="">All statuses</option>{statuses.map((value) => <option key={value} value={value}>{value.replace('_', ' ')}</option>)}</select>
     </div>
     {error && <p className="form-alert" role="alert">{error}</p>}
-    {isLoading ? <p className="operations-note">Loading tickets…</p>
+    {isLoading ? <Loading label="Loading tickets…" />
       : !tickets.length ? <div className="empty-state"><LifeBuoy size={26} /><strong>No support tickets</strong><p>Tickets submitted by users will land here.</p></div>
       : <div className="admin-ticket-list">
         {tickets.map((ticket) => <article className="admin-ticket" key={ticket.id}>

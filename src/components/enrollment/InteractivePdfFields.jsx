@@ -82,7 +82,7 @@ export default function InteractivePdfFields({ src, fields, defaults = {}, signa
 
   return <div className="pdf-fields" ref={containerRef}>
     {error && <p className="form-alert" role="alert">{error}</p>}
-    {!error && !pages && <p className="pdf-fields-loading">Loading document…</p>}
+    {!error && !pages && <p className="pdf-fields-loading"><span className="spinner spinner-sm" /> Loading document…</p>}
     {pages?.map(({ pageNumber, width, height, widgets }) => <div key={pageNumber} className="pdf-page" style={{ width, height }}>
       <canvas ref={(node) => { if (node) canvasRefs.current.set(pageNumber, node); else canvasRefs.current.delete(pageNumber) }} width={width} height={height} />
       {widgets.map((widget) => {

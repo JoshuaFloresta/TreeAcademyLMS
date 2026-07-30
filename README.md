@@ -1,5 +1,8 @@
 # Tree Academy LMS
 
+> 📖 **New here, or not a developer?** Read [OVERVIEW.md](OVERVIEW.md) — a plain-language tour of
+> every tool this application uses and how they fit together. The rest of this file assumes you write code.
+
 ## PASS-FIRST enrollment flow
 
 The enrollment route (`/enroll`) now guides a learner through:
@@ -53,16 +56,4 @@ npm run dev:all
 
 The client runs on port 5173 and the API on port 4000 by default. MongoDB is required for production; without it, the API uses temporary memory records strictly for local preview.
 
-## Development page navigator
-
-In development, the floating **Dev pages** control lets you choose a preview role and then select one of that role's pages from a compact dropdown. The shared public pages remain available for every role, and it discovers every `.jsx` page in `src/pages/lms` automatically. A new `ProgressPage.jsx`, for example, is available at `/progress` and appears in the dropdown after Vite refreshes. Nested folders become nested paths, so `src/pages/lms/reports/ReviewPage.jsx` becomes `/reports/review`.
-
-Pages are available to Student, Instructor, and Admin by default. To limit a page to particular roles or override its label/path, export `devPage` from that page file:
-
-```jsx
-export const devPage = {
-  label: 'Review queue',
-  roles: ['instructor', 'admin'],
-  to: '/review-queue',
-}
-```
+`src/lib/lmsPages.js` still auto-discovers every `.jsx` file under `src/pages/lms` and derives its route/label from the filename (nested folders become nested paths, so `src/pages/lms/reports/ReviewPage.jsx` becomes `/reports/review`) — that's what powers real in-app routing (`getLmsPage`). The floating dev-only page navigator that used to sit on top of this for quick manual jumps between roles/pages has been removed; use the app's own navigation (or sign in as a seeded account per role via `npm run seed:dummy`) instead.

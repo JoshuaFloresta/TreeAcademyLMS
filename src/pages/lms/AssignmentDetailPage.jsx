@@ -6,6 +6,7 @@ import { useToast } from '../../lib/toastContext.js'
 import RichTextViewer from '../../components/RichTextViewer.jsx'
 import SubmissionComments from '../../components/SubmissionComments.jsx'
 import { downloadSubmissionAttachment, fetchAssignment, submitAssignment } from '../../lib/lms.js'
+import Loading from '../../components/Loading.jsx'
 
 const dueLabel = (dueAt) => (dueAt ? `Due ${new Date(dueAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}` : 'No due date')
 
@@ -40,7 +41,7 @@ export default function AssignmentDetailPage({ role, assignmentId }) {
   const queryClient = useQueryClient()
   const { data: assignment, isLoading, error } = useQuery({ queryKey: ['assignment', assignmentId], queryFn: () => fetchAssignment(assignmentId) })
 
-  if (isLoading) return <div className="empty-state"><ClipboardCheck size={26} /><strong>Loading assignment…</strong></div>
+  if (isLoading) return <Loading block label="Loading assignment…" />
   if (error || !assignment) return <div className="empty-state"><ClipboardCheck size={26} /><strong>Assignment not found</strong></div>
 
   return <>
@@ -64,7 +65,7 @@ export default function AssignmentDetailPage({ role, assignmentId }) {
         maxPoints={assignment.maxPoints}
         onSaved={() => { queryClient.invalidateQueries({ queryKey: ['assignment', assignmentId] }); queryClient.invalidateQueries({ queryKey: ['assignments'] }) }}
       />}
-      {role !== 'learner' && <p className="operations-note" style={{ marginTop: 16 }}>Grade submissions for this assignment from the Gradebook.</p>}
+      {role !== 'learner' && <p className="operations-note" style={{ marginTop: 16 }}>Grade submissions for this assignment from Submissions.</p>}
     </div>
   </>
 }

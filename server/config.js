@@ -1,4 +1,9 @@
-import 'dotenv/config'
+import dotenv from 'dotenv'
+
+// quiet: true suppresses dotenv's own stdout banner (recent versions print a random rotating
+// "tip" on every boot, including a promotional line pointing at a third-party domain unrelated
+// to dotenv's own product — not something this app's logs should echo on every server start).
+dotenv.config({ quiet: true })
 
 const bool = (value) => value === 'true'
 

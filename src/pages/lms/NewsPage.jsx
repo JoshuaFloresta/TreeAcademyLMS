@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { BookOpen } from 'lucide-react'
 import { fetchCalendar } from '../../lib/lms.js'
+import Loading from '../../components/Loading.jsx'
 
 function timeAgo(dateString) {
   const diffMs = Date.now() - new Date(dateString).getTime()
@@ -17,7 +18,7 @@ export default function NewsPage() {
 
   return <>
     <div className="page-title-row"><div><p className="eyebrow">FROM THE ACADEMY</p><h1>News &amp; insights</h1><p>Updates, guidance, and timely learning notes from the Tree Academy team.</p></div></div>
-    {isLoading && <div className="empty-state"><BookOpen size={26} /><strong>Loading news…</strong></div>}
+    {isLoading && <Loading block label="Loading news…" />}
     {error && <div className="empty-state"><BookOpen size={26} /><strong>Could not load news</strong><p>{error.message}</p></div>}
     {!isLoading && !error && sorted.length === 0 && <div className="empty-state"><BookOpen size={26} /><strong>No news yet</strong><p>Academy announcements will appear here.</p></div>}
     <div className="notification-list">

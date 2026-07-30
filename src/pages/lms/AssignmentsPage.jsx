@@ -5,6 +5,7 @@ import { useToast } from '../../lib/toastContext.js'
 import RichTextViewer from '../../components/RichTextViewer.jsx'
 import SubmissionComments from '../../components/SubmissionComments.jsx'
 import { downloadSubmissionAttachment, fetchAssignments, submitAssignment } from '../../lib/lms.js'
+import Loading from '../../components/Loading.jsx'
 
 function dueLabel(dueAt) {
   if (!dueAt) return 'No due date'
@@ -62,7 +63,7 @@ export default function AssignmentsPage({ role }) {
 
   return <>
     <div className="page-title-row"><div><p className="eyebrow">STAY ON TRACK</p><h1>Assignments</h1><p>Practice deliberately and get feedback from your instructors.</p></div><button className="filter-button">All courses <ChevronDown size={16} /></button></div>
-    {isLoading && <div className="empty-state"><ClipboardCheck size={26} /><strong>Loading assignments…</strong></div>}
+    {isLoading && <Loading block label="Loading assignments…" />}
     {error && <div className="empty-state"><ClipboardCheck size={26} /><strong>Could not load assignments</strong><p>{error.message}</p></div>}
     {!isLoading && !error && assignments.length === 0 && <div className="empty-state"><ClipboardCheck size={26} /><strong>No assignments yet</strong><p>Your instructors haven’t published any assignments.</p></div>}
     <div className="assignment-table">

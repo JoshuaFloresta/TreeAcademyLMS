@@ -23,6 +23,13 @@ const userSchema = new Schema({
   bio: { type: String, trim: true, maxlength: 600 },
   headline: { type: String, trim: true, maxlength: 120 },
   location: { type: String, trim: true, maxlength: 120 },
+  // Seeded from the enrollment application at provisioning time (see provisionLearnerAccount) and
+  // editable by the learner afterwards. Only blanks are seeded, so a learner's own edits survive a
+  // second pathway approval. `birthDate` is treated as private — see publicProfile in index.js.
+  birthDate: Date,
+  school: { type: String, trim: true, maxlength: 200 },
+  degree: { type: String, trim: true, maxlength: 200 },
+  facebookUrl: { type: String, trim: true, maxlength: 300 },
   inviteTokenHash: String,
   inviteExpiresAt: Date,
   lastSeenAt: Date,
@@ -57,6 +64,21 @@ const courseSchema = new Schema({
   archivedAt: Date,
   // An instructor may only author the catalogues explicitly assigned by an admin.
   assignedInstructorIds: [{ type: Schema.Types.ObjectId, ref: 'User', index: true }],
+  // An optional admin-uploaded fillable/signable agreement PDF for courses outside the 3 fixed
+  // enrollment pathways (which keep their own hardcoded realex-reblex/reclex documents). `fields`
+  // is read straight off the PDF's own AcroForm at upload time (see extractAgreementFields in
+  // enrollment-documents.js) rather than hand-authored, since the PDF is arbitrary per course.
+  agreementTemplate: {
+    fileKey: String,
+    originalName: String,
+    fields: [{
+      name: String,
+      type: { type: String, enum: ['text', 'checkbox', 'signature'] },
+      multiline: Boolean,
+      required: Boolean,
+    }],
+    uploadedAt: Date,
+  },
 }, { timestamps: true })
 
 // The new authoring hierarchy is kept alongside the legacy phase/lesson models so existing
@@ -148,11 +170,43 @@ const submissionSchema = new Schema({
   feedback: String,
 }, { timestamps: true })
 
+// A comment hangs off exactly one of the two things a learner can hand in. `submissionId` stays
+// optional-but-indexed rather than being folded into a generic target pair, so every comment
+// written before quiz attempts existed keeps working untouched.
 const submissionCommentSchema = new Schema({
-  submissionId: { type: Schema.Types.ObjectId, ref: 'Submission', required: true, index: true },
+  submissionId: { type: Schema.Types.ObjectId, ref: 'Submission', index: true },
+  quizAttemptId: { type: Schema.Types.ObjectId, ref: 'QuizAttempt', index: true },
   authorId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   authorRole: { type: String, enum: ['learner', 'instructor', 'admin'], required: true },
   body: { type: String, required: true, trim: true, maxlength: 4000 },
+}, { timestamps: true })
+// Declared with no `next` parameter on purpose — Mongoose then treats it as promise-based and a
+// thrown error propagates normally. Taking `next` here fails at runtime under Mongoose 9.
+submissionCommentSchema.pre('validate', function assertSingleTarget() {
+  if (Boolean(this.submissionId) === Boolean(this.quizAttemptId)) throw new Error('A comment must belong to exactly one submission or quiz attempt.')
+})
+
+// Quiz attempts used to be graded in memory and discarded, which meant a learner could sit a quiz
+// and leave no trace an instructor could review. Persisting them is what makes quizzes visible in
+// the staff Submissions feed alongside assignment submissions.
+const quizAttemptSchema = new Schema({
+  quizId: { type: Schema.Types.ObjectId, ref: 'Quiz', required: true, index: true },
+  courseId: { type: Schema.Types.ObjectId, ref: 'Course', required: true, index: true },
+  learnerId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  // The learner's raw answers plus the per-question verdict, stored as given so an instructor can
+  // see what was actually answered — not just the total. `correct: null` marks a question the
+  // auto-grader can't judge (essay), which is exactly what a human needs to look at.
+  answers: { type: Schema.Types.Mixed, default: [] },
+  results: { type: Schema.Types.Mixed, default: [] },
+  score: { type: Number, default: 0 },
+  total: { type: Number, default: 0 },
+  percent: { type: Number, default: 0 },
+  // Set only when an instructor overrides the automatic result (e.g. after marking an essay).
+  reviewedScore: Number,
+  feedback: String,
+  reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  reviewedAt: Date,
+  submittedAt: { type: Date, default: Date.now },
 }, { timestamps: true })
 
 const quizSchema = new Schema({
@@ -183,7 +237,7 @@ const enrollmentSchema = new Schema({
     name: { type: String, required: true },
     email: { type: String, required: true, lowercase: true },
     phone: String,
-    pathway: { type: String, enum: ['broker', 'consultant', 'agent'], required: true },
+    pathway: { type: String, enum: ['broker', 'consultant', 'appraiser'], required: true },
   },
   amount: { type: Number, required: true },
   currency: { type: String, default: 'PHP' },
@@ -219,19 +273,33 @@ const enrollmentSchema = new Schema({
   archivedAt: Date,
 }, { timestamps: true })
 
+// The generic, no-payment counterpart to Enrollment — for courses outside the 3 fixed pathways that
+// carry their own admin-uploaded agreementTemplate (see Course above). A row only ever exists
+// already-signed: it's created and filled in the same request (POST /api/course-agreements/:slug/apply),
+// since there's no payment gate to wait on the way the pathway Enrollment state machine has.
+const courseEnrollmentSchema = new Schema({
+  courseId: { type: Schema.Types.ObjectId, ref: 'Course', required: true, index: true },
+  applicant: {
+    name: { type: String, required: true },
+    email: { type: String, required: true, lowercase: true },
+    phone: String,
+  },
+  document: { pdfKey: String, signedAt: Date, signatureName: String },
+}, { timestamps: true })
+
 // Singleton (admin edits the one document via findOneAndUpdate({}, ..., {upsert: true})) —
 // replaces the hardcoded price in catalog.js so admins can adjust it without a deploy. Both the
 // full price and the upfront reservation fee are independently editable per pathway/program —
-// broker and agent enrollments sign the same "realex-reblex" agreement document, but that's a
+// broker and appraiser enrollments sign the same "realex-reblex" agreement document, but that's a
 // document-generation detail only (see enrollment-documents.js); pricing doesn't share their fee.
 const pricingSettingsSchema = new Schema({
   totalBroker: { type: Number, required: true, default: 14900 },
   totalConsultant: { type: Number, required: true, default: 14900 },
-  totalAgent: { type: Number, required: true, default: 14900 },
+  totalAppraiser: { type: Number, required: true, default: 14900 },
   currency: { type: String, default: 'PHP' },
   upfrontBroker: { type: Number, required: true, default: 1000 },
   upfrontConsultant: { type: Number, required: true, default: 5000 },
-  upfrontAgent: { type: Number, required: true, default: 1000 },
+  upfrontAppraiser: { type: Number, required: true, default: 1000 },
 }, { timestamps: true })
 
 const calendarEventSchema = new Schema({
@@ -241,6 +309,9 @@ const calendarEventSchema = new Schema({
   startsAt: { type: Date, required: true },
   endsAt: Date,
   eventType: { type: String, enum: ['live_review', 'deadline', 'announcement', 'office_hours'], default: 'live_review' },
+  // Where the session actually happens — Zoom/Meet/Teams. Shown to learners as a "Join" button on
+  // the event, so they don't have to hunt for the link in an announcement or an email.
+  meetingUrl: String,
 }, { timestamps: true })
 
 // Roll-call for a single calendar session (live_review/office_hours) tied to a course — one row
@@ -302,10 +373,39 @@ const badgeSchema = new Schema({
 const studentBadgeSchema = new Schema({
   badgeId: { type: Schema.Types.ObjectId, ref: 'Badge', required: true },
   learnerId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-  awardedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  // System-issued awards (via a BadgeRule) have no human awarder — required only for manual grants,
+  // so this stays optional rather than pointing awardedBy at whichever instructor happened to
+  // trigger the underlying event (they may not even teach that learner).
+  awardedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  awardedByRuleId: { type: Schema.Types.ObjectId, ref: 'BadgeRule' },
   note: { type: String, trim: true, maxlength: 400 },
 }, { timestamps: true })
 studentBadgeSchema.index({ badgeId: 1, learnerId: 1 }, { unique: true })
+
+// Instructor-defined "give this badge automatically when X happens" condition. Evaluated inline by
+// runBadgeRules (server/index.js) from the handful of routes that can make a trigger newly true —
+// grading, a quiz attempt/review, attendance, and module completion — rather than on a schedule,
+// since the app has no background job runner and re-checking on every write for a small cohort is
+// cheap.
+const badgeRuleSchema = new Schema({
+  badgeId: { type: Schema.Types.ObjectId, ref: 'Badge', required: true },
+  courseId: { type: Schema.Types.ObjectId, ref: 'Course', required: true, index: true },
+  trigger: {
+    type: { type: String, enum: ['course_completion', 'module_milestone', 'score_threshold', 'attendance_count'], required: true },
+    moduleId: { type: Schema.Types.ObjectId, ref: 'Module' }, // module_milestone
+    targetKind: { type: String, enum: ['assignment', 'quiz'] }, // score_threshold
+    targetId: Schema.Types.ObjectId, // score_threshold: the specific Assignment or Quiz
+    minPercent: Number, // score_threshold
+    minAttendance: Number, // attendance_count: sessions marked present/late
+  },
+  // Who is evaluated. 'course' is everyone the trigger event already concerns (the learner who was
+  // just graded, marked present, etc.) — 'selected' narrows that to a hand-picked list, e.g. a
+  // cohort or a subset the instructor wants to recognise even if others also meet the condition.
+  targetScope: { type: String, enum: ['course', 'selected'], default: 'course' },
+  learnerIds: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+  isActive: { type: Boolean, default: true },
+  createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+}, { timestamps: true })
 
 const certificateTemplateSchema = new Schema({
   title: { type: String, required: true, trim: true, maxlength: 160 },
@@ -379,16 +479,30 @@ const forumThreadSchema = new Schema({
   authorId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   title: { type: String, required: true, trim: true, maxlength: 160 },
   body: { type: String, required: true, trim: true, maxlength: 6000 },
+  imageUrl: { type: String },
   isPinned: { type: Boolean, default: false },
   isLocked: { type: Boolean, default: false },
   lastPostAt: { type: Date, default: Date.now },
+  viewCount: { type: Number, default: 0 },
 }, { timestamps: true })
 
 const forumPostSchema = new Schema({
   threadId: { type: Schema.Types.ObjectId, ref: 'ForumThread', required: true, index: true },
   authorId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   body: { type: String, required: true, trim: true, maxlength: 6000 },
+  imageUrl: { type: String },
+  editedAt: { type: Date },
 }, { timestamps: true })
+
+// One reaction per learner per thread — switching between like/dislike overwrites the row rather
+// than adding a second one; the unique index is what makes that swap (and re-clicking to undo)
+// safe under concurrent requests.
+const forumReactionSchema = new Schema({
+  threadId: { type: Schema.Types.ObjectId, ref: 'ForumThread', required: true, index: true },
+  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  type: { type: String, enum: ['like', 'dislike'], required: true },
+}, { timestamps: true })
+forumReactionSchema.index({ threadId: 1, userId: 1 }, { unique: true })
 
 const webinarSchema = new Schema({
   title: { type: String, required: true, trim: true, maxlength: 160 },
@@ -436,7 +550,9 @@ export const Assignment = models.Assignment || model('Assignment', assignmentSch
 export const Submission = models.Submission || model('Submission', submissionSchema)
 export const SubmissionComment = models.SubmissionComment || model('SubmissionComment', submissionCommentSchema)
 export const Quiz = models.Quiz || model('Quiz', quizSchema)
+export const QuizAttempt = models.QuizAttempt || model('QuizAttempt', quizAttemptSchema)
 export const Enrollment = models.Enrollment || model('Enrollment', enrollmentSchema)
+export const CourseEnrollment = models.CourseEnrollment || model('CourseEnrollment', courseEnrollmentSchema)
 export const PricingSettings = models.PricingSettings || model('PricingSettings', pricingSettingsSchema)
 export const CalendarEvent = models.CalendarEvent || model('CalendarEvent', calendarEventSchema)
 export const Attendance = models.Attendance || model('Attendance', attendanceSchema)
@@ -448,6 +564,7 @@ export const AuditLog = models.AuditLog || model('AuditLog', auditSchema)
 export const RefreshToken = models.RefreshToken || model('RefreshToken', refreshTokenSchema)
 export const Badge = models.Badge || model('Badge', badgeSchema)
 export const StudentBadge = models.StudentBadge || model('StudentBadge', studentBadgeSchema)
+export const BadgeRule = models.BadgeRule || model('BadgeRule', badgeRuleSchema)
 export const CertificateTemplate = models.CertificateTemplate || model('CertificateTemplate', certificateTemplateSchema)
 export const Certificate = models.Certificate || model('Certificate', certificateSchema)
 export const LearningProgress = models.LearningProgress || model('LearningProgress', learningProgressSchema)
@@ -458,6 +575,7 @@ export const RolePermission = models.RolePermission || model('RolePermission', r
 export const Announcement = models.Announcement || model('Announcement', announcementSchema)
 export const ForumThread = models.ForumThread || model('ForumThread', forumThreadSchema)
 export const ForumPost = models.ForumPost || model('ForumPost', forumPostSchema)
+export const ForumReaction = models.ForumReaction || model('ForumReaction', forumReactionSchema)
 export const Webinar = models.Webinar || model('Webinar', webinarSchema)
 export const WebinarRegistration = models.WebinarRegistration || model('WebinarRegistration', webinarRegistrationSchema)
 export const EmailTemplate = models.EmailTemplate || model('EmailTemplate', emailTemplateSchema)

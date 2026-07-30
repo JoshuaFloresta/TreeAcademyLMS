@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { ArrowRight, Check, ClipboardCheck, Play, X } from 'lucide-react'
 import RichTextViewer from '../../components/RichTextViewer.jsx'
 import { attemptQuiz, fetchQuiz, fetchQuizzes } from '../../lib/lms.js'
+import Loading from '../../components/Loading.jsx'
 
 function QuizRunner({ quizId, onExit, canAttempt }) {
   const { data: quiz, isLoading } = useQuery({ queryKey: ['quiz', quizId], queryFn: () => fetchQuiz(quizId) })
@@ -53,7 +54,7 @@ export default function QuizPage({ role }) {
 
   return <>
     <div className="page-title-row"><div><p className="eyebrow">PRACTICE WITH PURPOSE</p><h1>Quiz center</h1><p>Use quick practice sets to check your knowledge before the next live review.</p></div></div>
-    {isLoading && <div className="empty-state"><ClipboardCheck size={26} /><strong>Loading quizzes…</strong></div>}
+    {isLoading && <Loading block label="Loading quizzes…" />}
     {error && <div className="empty-state"><ClipboardCheck size={26} /><strong>Could not load quizzes</strong><p>{error.message}</p></div>}
     {!isLoading && !error && quizzes.length === 0 && <div className="empty-state"><ClipboardCheck size={26} /><strong>No quizzes published yet</strong><p>Practice sets will appear here once your instructors publish them.</p></div>}
     <div className="assignment-table">
