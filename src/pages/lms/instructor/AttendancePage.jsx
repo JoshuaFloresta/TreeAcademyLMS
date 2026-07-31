@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarDays, Check, CheckCircle2, Plus, Search, UserCheck } from 'lucide-react'
+import { CalendarDays, Check, CheckCircle2, Pencil, Plus, Search, UserCheck } from 'lucide-react'
 import Loading from '../../../components/Loading.jsx'
 import { useToast } from '../../../lib/toastContext.js'
 import { createCalendarEvent, fetchCalendar, fetchCourses, fetchEventAttendance, saveEventAttendance } from '../../../lib/lms.js'
@@ -16,6 +16,8 @@ const attendanceStatuses = [
   { value: 'excused', label: 'Excused' },
   { value: 'absent', label: 'Absent' },
 ]
+
+const statusLabel = Object.fromEntries(attendanceStatuses.map((status) => [status.value, status.label]))
 
 // Sessions you can take a roll call for. Deadlines and announcements have no attendees.
 const sessionTypes = ['live_review', 'office_hours']
@@ -72,6 +74,9 @@ function RollCall({ session, onSaved }) {
   // server just confirmed, rather than leaving stale local state shadowing it.
   const [draft, setDraft] = useState(null)
   const [search, setSearch] = useState('')
+  // A roll call that's already been saved opens read-only, so a stray click can't quietly rewrite a
+  // finalised record — changing it has to be a deliberate act via "Edit attendance".
+  const [editing, setEditing] = useState(false)
   // Memoised because the `?? []` fallback would otherwise mint a new array identity on every
   // render, invalidating the search filter's useMemo below each time.
   const roster = useMemo(() => draft ?? data?.roster ?? [], [draft, data?.roster])
@@ -81,11 +86,14 @@ function RollCall({ session, onSaved }) {
     onSuccess: () => {
       toast.success('Attendance saved.')
       setDraft(null)
+      setEditing(false)
       queryClient.invalidateQueries({ queryKey: ['event-attendance', session.id] })
       onSaved?.()
     },
     onError: (mutationError) => toast.error(mutationError.message),
   })
+
+  const cancelEdit = () => { setDraft(null); setEditing(false) }
 
   const setStatus = (learnerId, status) => setDraft((current) => (current ?? data?.roster ?? []).map((row) => (row.learnerId === learnerId ? { ...row, status } : row)))
   // Marks only who is currently visible, so searching then marking all can't silently change
@@ -104,6 +112,11 @@ function RollCall({ session, onSaved }) {
 
   const marked = roster.filter((row) => row.status).length
   const dirty = draft !== null
+  // Recorded state comes from the server's recordedAt, not from "does every row have a status" —
+  // a roll call legitimately saved as all-absent must not read as untouched.
+  const isRecorded = Boolean(data?.recordedAt)
+  const readOnly = isRecorded && !editing
+  const tally = attendanceStatuses.map((status) => ({ ...status, count: roster.filter((row) => row.status === status.value).length }))
 
   return <>
     <div className="attendance-toolbar">
@@ -111,10 +124,16 @@ function RollCall({ session, onSaved }) {
         <Search size={15} />
         <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search this program by name or email" aria-label="Search members" />
       </label>
-      <button type="button" className="button button-ghost button-compact" onClick={() => markAllPresent(new Set(visible.map((row) => row.learnerId)))} disabled={!visible.length}>
-        <Check size={14} /> Mark all present{search.trim() && visible.length !== roster.length ? ` (${visible.length})` : ''}
-      </button>
+      {readOnly
+        ? <button type="button" className="button button-ghost button-compact" onClick={() => setEditing(true)}><Pencil size={14} /> Edit attendance</button>
+        : <button type="button" className="button button-ghost button-compact" onClick={() => markAllPresent(new Set(visible.map((row) => row.learnerId)))} disabled={!visible.length}>
+          <Check size={14} /> Mark all present{search.trim() && visible.length !== roster.length ? ` (${visible.length})` : ''}
+        </button>}
     </div>
+
+    {readOnly && <div className="attendance-summary">
+      {tally.map((status) => <span key={status.value} className={`attendance-status-tag ${status.value}`}>{status.count} {status.label}</span>)}
+    </div>}
 
     <div className="attendance-roster">
       {!visible.length && <p className="operations-note">No members match “{search.trim()}”.</p>}
@@ -123,23 +142,30 @@ function RollCall({ session, onSaved }) {
           <span className="avatar">{(row.name ?? '?').split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase()}</span>
           <span><strong>{row.name}</strong><small>{row.email}</small></span>
         </span>
-        <div className="attendance-status-group">
-          {attendanceStatuses.map((status) => <button
-            type="button"
-            key={status.value}
-            className={`attendance-status-pill ${status.value} ${row.status === status.value ? 'active' : ''}`}
-            onClick={() => setStatus(row.learnerId, status.value)}
-            aria-pressed={row.status === status.value}
-          >{status.label}</button>)}
-        </div>
+        {readOnly
+          ? <span className={`attendance-status-tag ${row.status ?? 'unmarked'}`}>{statusLabel[row.status] ?? 'Not marked'}</span>
+          : <div className="attendance-status-group">
+            {attendanceStatuses.map((status) => <button
+              type="button"
+              key={status.value}
+              className={`attendance-status-pill ${status.value} ${row.status === status.value ? 'active' : ''}`}
+              onClick={() => setStatus(row.learnerId, status.value)}
+              aria-pressed={row.status === status.value}
+            >{status.label}</button>)}
+          </div>}
       </div>)}
     </div>
 
     <div className="attendance-submit-row">
       <span className="attendance-count">{marked} of {roster.length} marked{dirty ? ' · unsaved changes' : ''}</span>
-      <button type="button" className="button button-primary button-compact" disabled={mutation.isPending} onClick={() => mutation.mutate()}>
-        <Check size={14} /> {mutation.isPending ? 'Saving…' : 'Save attendance'}
-      </button>
+      {readOnly
+        ? <button type="button" className="button button-primary button-compact" onClick={() => setEditing(true)}><Pencil size={14} /> Edit attendance</button>
+        : <span className="attendance-actions">
+          {isRecorded && <button type="button" className="button button-ghost button-compact" onClick={cancelEdit} disabled={mutation.isPending}>Cancel</button>}
+          <button type="button" className="button button-primary button-compact" disabled={mutation.isPending} onClick={() => mutation.mutate()}>
+            <Check size={14} /> {mutation.isPending ? 'Saving…' : isRecorded ? 'Save changes' : 'Save attendance'}
+          </button>
+        </span>}
     </div>
   </>
 }

@@ -1311,3 +1311,13 @@ button.forum-stat.active svg { fill: currentColor; }
 .attendance-member small { display: block; margin-top: 2px; color: #9aa199; font-size: 9px; }
 .attendance-submit-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding-top: 14px; border-top: 1px solid #edf0ec; }
 .attendance-count { color: #8a9088; font-size: 10px; font-weight: 700; }
+.attendance-actions { display: flex; gap: 8px; }
+/* Read-only view of an already-recorded roll call: one static tag per learner instead of four
+   clickable pills, so a saved record can't be altered without pressing Edit first. */
+.attendance-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.attendance-status-tag { display: inline-flex; align-items: center; flex: 0 0 auto; padding: 5px 10px; border-radius: 999px; font-size: 9px; font-weight: 800; }
+.attendance-status-tag.present { color: #2f6a41; background: #e3f0e6; }
+.attendance-status-tag.late { color: #8a6b26; background: #f5ecd6; }
+.attendance-status-tag.excused { color: #3f5f80; background: #e2ecf5; }
+.attendance-status-tag.absent { color: #8a2e23; background: #f5e0dd; }
+.attendance-status-tag.unmarked { color: #7c847b; background: #eef0ed; }
