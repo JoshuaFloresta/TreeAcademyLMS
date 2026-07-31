@@ -317,7 +317,6 @@ function NewCourseForm({ onCreated }) {
     try { const course = await mutation.mutateAsync(); toast.success('Course created.'); setValues({ title: '', slug: '', description: '' }); setTouchedSlug(false); onCreated(course) } catch (e) { setError(e.message) }
   }
   return <form className="builder-new-course" onSubmit={submit}>
-    <p className="eyebrow">NEW COURSE</p>
     <input value={values.title} onChange={(event) => { const title = event.target.value; setValues((prev) => ({ ...prev, title, slug: touchedSlug ? prev.slug : slugify(title) })) }} placeholder="Course title" aria-label="Course title" />
     <input value={values.slug} onChange={(event) => { setTouchedSlug(true); setValues((prev) => ({ ...prev, slug: slugify(event.target.value) })) }} placeholder="course-slug" aria-label="Course slug" />
     <textarea value={values.description} onChange={(event) => setValues((prev) => ({ ...prev, description: event.target.value }))} placeholder="Short description (optional)" rows={2} />
@@ -411,6 +410,7 @@ export default function CourseBuilderPage({ role }) {
   const [editingLessonId, setEditingLessonId] = useState('')
   const [openModuleId, setOpenModuleId] = useState('')
   const [bannerOpen, setBannerOpen] = useState(false)
+  const [newCourseOpen, setNewCourseOpen] = useState(false)
   const { data: courseResults, isError: coursesFailed, error: coursesError } = useQuery({ queryKey: ['courses'], queryFn: fetchCourses, enabled: role !== 'learner' })
   const courses = Array.isArray(courseResults) ? courseResults.filter(Boolean) : []
   const activeId = selectedId || courses[0]?._id || ''
@@ -524,19 +524,27 @@ export default function CourseBuilderPage({ role }) {
   return <>
     <div className="page-title-row">
       <div><p className="eyebrow">TEACHING WORKSPACE</p><h1>Course builder</h1><p>Author courses, organise modules and lessons, and set assignments.</p></div>
+      <button className="button button-primary" onClick={() => setNewCourseOpen(true)}><Plus size={15} /> New course</button>
     </div>
-    <div className="builder-layout">
-      <aside className="builder-sidebar">
-        <div className="builder-course-list">
-          {coursesFailed && <p className="form-alert" role="alert">{coursesError?.message ?? 'Could not load courses. Please refresh and try again.'}</p>}
-          {courses.map((item) => <button type="button" key={item._id} className={`builder-course-item ${item._id === activeId ? 'active' : ''}`} onClick={() => setSelectedId(item._id)}>
-            <span><BookOpen size={15} /> {item.title}</span>
-            <StatusPill kind={item.isPublished ? 'green' : 'gold'}>{item.isPublished ? 'Live' : 'Draft'}</StatusPill>
-          </button>)}
-          {!courses.length && <p className="operations-note">No courses yet — create your first below.</p>}
-        </div>
-        <NewCourseForm onCreated={(created) => { const createdId = created?._id ?? created?.id; if (createdId) setSelectedId(createdId); refreshCourse() }} />
-      </aside>
+    {coursesFailed && <p className="form-alert" role="alert">{coursesError?.message ?? 'Could not load courses. Please refresh and try again.'}</p>}
+    {/* Course switcher as tabs rather than a sidebar column — the builder canvas needs the full page
+        width for its phase cards, and with a handful of courses the tabs stay readable. */}
+    <div className="builder-course-tabs" role="tablist" aria-label="Select course">
+      {courses.map((item) => <button
+        type="button"
+        key={item._id}
+        role="tab"
+        aria-selected={item._id === activeId}
+        className={`builder-course-tab ${item._id === activeId ? 'active' : ''}`}
+        onClick={() => setSelectedId(item._id)}
+      >
+        <BookOpen size={15} />
+        <span>{item.title}</span>
+        <StatusPill kind={item.isPublished ? 'green' : 'gold'}>{item.isPublished ? 'Live' : 'Draft'}</StatusPill>
+      </button>)}
+      {!courses.length && <p className="operations-note">No courses yet — create your first with “New course”.</p>}
+    </div>
+    <div className="builder-stage">
       <section className="builder-canvas">
         {!activeId ? <p className="operations-note">Select or create a course to begin.</p>
           : isLoading ? <Loading label="Loading course…" />
@@ -585,5 +593,13 @@ export default function CourseBuilderPage({ role }) {
           </>}
       </section>
     </div>
+    {newCourseOpen && <BuilderModal title="New course" onClose={() => setNewCourseOpen(false)}>
+      <NewCourseForm onCreated={(created) => {
+        const createdId = created?._id ?? created?.id
+        if (createdId) setSelectedId(createdId)
+        setNewCourseOpen(false)
+        refreshCourse()
+      }} />
+    </BuilderModal>}
   </>
 }
