@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(node -e \"const p=require\\('./package.json'\\);console.log\\('framer-motion:',p.dependencies['framer-motion']||p.devDependencies['framer-motion']\\)\")",
+      "Bash(node -e \"const m=require\\('./node_modules/framer-motion/package.json'\\);console.log\\('installed:',m.version\\);console.log\\('has AnimatePresence export:', Object.keys\\(require\\('./node_modules/framer-motion/package.json'\\).exports||{}\\).length>0\\)\")"
     ]
   }
 }

@@ -10,6 +10,7 @@ import Modal from '../components/Modal.jsx'
 import ProgramCard from '../components/landing/ProgramCard.jsx'
 import HowStep from '../components/landing/HowStep.jsx'
 import Instructors from '../components/Instructor.jsx'
+import Coaches from '../components/Coaches.jsx'
 import Syllabus from '../components/Syllabus.jsx'
 import PassFirst from '../components/PassFirst.jsx'
 import Testimonials from '../components/Testimonials.jsx'
@@ -125,6 +126,7 @@ export default function LandingPage() {
         <PassFirst />
         <Syllabus />
         <Instructors />
+        <Coaches />
 
         {/* Programs Section */}
         <section id="programs" className="programs shell section">
