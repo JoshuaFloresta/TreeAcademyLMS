@@ -71,7 +71,8 @@ export default function AdminEnrollmentsPage() {
   // Revenue is what was actually charged (payment.planAmount — the upfront fee alone on that
   // plan), not the listed enrollment price, and counts every enrollment that ever completed a
   // payment regardless of its current status (e.g. still counts a later-refunded one).
-  const totalRevenue = enrollments.filter((row) => row.payment?.paidAt).reduce((sum, row) => sum + Number(row.payment?.planAmount ?? 0), 0)
+  const paidEnrollments = enrollments.filter((row) => row.payment?.paidAt)
+  const totalRevenue = paidEnrollments.reduce((sum, row) => sum + Number(row.payment?.planAmount ?? 0), 0)
   // What's still owed on "pay upfront only" plans — the gap between the full enrollment price and
   // what was actually charged — summed across confirmed enrollments. Mirrors the per-row "Balance
   // due" note below.
@@ -118,7 +119,7 @@ export default function AdminEnrollmentsPage() {
     <div className="operation-summary">
       <div><span className="stat-icon"><Wallet size={19} /></span><span><strong>{peso(totalRevenue)}</strong><small>Total revenue</small></span></div>
       <div><span className="stat-icon"><CreditCard size={19} /></span><span><strong>{peso(outstandingBalance)}</strong><small>Outstanding balance</small></span></div>
-      <div><span className="stat-icon"><Check size={19} /></span><span><strong>{enrollments.length}</strong><small>Total enrollments</small></span></div>
+      <div><span className="stat-icon"><Check size={19} /></span><span><strong>{paidEnrollments.length}</strong><small>Total enrollments</small></span></div>
     </div>
 
     {selected.size > 0 && <div className="admin-bulkbar">
