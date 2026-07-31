@@ -11,13 +11,6 @@ import Loading from '../../components/Loading.jsx'
 const kindLabel = { article: 'Article', video: 'Video lesson', document: 'Document', link: 'Resource link' }
 const dueLabel = (dueAt) => (dueAt ? `Due ${new Date(dueAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}` : 'No due date')
 
-// Google Drive share links (…/file/d/ID/view) don't embed directly — swap to the /preview form so
-// the PDF renders inline; anything else falls back to the browser's native <iframe> handling.
-function embeddableUrl(url) {
-  const match = url.match(/\/file\/d\/([^/]+)/)
-  return match ? `https://drive.google.com/file/d/${match[1]}/preview` : url
-}
-
 function AssignmentRow({ assignment }) {
   const submission = assignment.mySubmission
   const status = submission?.grade != null ? `Graded · ${submission.grade}/${assignment.maxPoints}` : submission ? 'Submitted' : dueLabel(assignment.dueAt)
@@ -28,8 +21,8 @@ function AssignmentRow({ assignment }) {
   </Link>
 }
 
-// Each lesson is its own collapsible "section" — opening it reveals the attached PDF inline (or a
-// prompt to open it in a new tab when the link can't be embedded) plus any assignments under it.
+// Each lesson is its own collapsible "section" — opening it reveals a button to the attached PDF
+// plus any assignments under it.
 function LessonSection({ lesson }) {
   const [open, setOpen] = useState(false)
   return <li className="module-lesson-item">
@@ -41,10 +34,7 @@ function LessonSection({ lesson }) {
     {open && <div className="lesson-section-body">
       {lesson.body && <RichTextViewer html={lesson.body} className="assignment-block-instructions" />}
       {lesson.driveUrl
-        ? <div className="lesson-pdf-embed">
-          <iframe src={embeddableUrl(lesson.driveUrl)} title={lesson.title} loading="lazy" />
-          <a href={lesson.driveUrl} target="_blank" rel="noreferrer" className="lesson-resource-link"><ExternalLink size={12} /> Open in new tab</a>
-        </div>
+        ? <a href={lesson.driveUrl} target="_blank" rel="noreferrer" className="button button-ghost button-compact lesson-pdf-button"><ExternalLink size={14} /> View PDF</a>
         : !lesson.body && <p className="operations-note">No file attached to this section yet.</p>}
       {lesson.assignments?.map((assignment) => <AssignmentRow key={assignment.id} assignment={assignment} />)}
     </div>}
@@ -97,10 +87,7 @@ function CategoryModuleSection({ module }) {
       {module.type === 'file' && <div className="lesson-section-body">
         {module.instructions && <p className="assignment-block-instructions">{module.instructions}</p>}
         {module.resourceUrl
-          ? <div className="lesson-pdf-embed">
-            <iframe src={embeddableUrl(module.resourceUrl)} title={module.title} loading="lazy" />
-            <a href={module.resourceUrl} target="_blank" rel="noreferrer" className="lesson-resource-link"><ExternalLink size={12} /> Open in new tab</a>
-          </div>
+          ? <a href={module.resourceUrl} target="_blank" rel="noreferrer" className="button button-ghost button-compact lesson-pdf-button"><ExternalLink size={14} /> View PDF</a>
           : !module.instructions && <p className="operations-note">No file attached to this section yet.</p>}
       </div>}
     </>}
