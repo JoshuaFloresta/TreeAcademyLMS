@@ -236,14 +236,10 @@ export const emailTemplateDefaults = {
         <div class="accent-bar"></div>
 
         <div class="content">
-            <p class="welcome-text">Enrollment Confirmed!</p>
+            <p class="welcome-text">We’ve received the start of your enrollment for the {{pathway}} review pathway!</p>
 
             <p class="body-text">
-                Welcome to TREE Academy. Your enrollment for our Real Estate Review Program (Consultant, Broker, and Appraiser track) has been successfully processed. We are thrilled to partner with you on your path to professional licensure.
-            </p>
-
-            <p class="body-text">
-                Your portal account is ready. Set your password to finish activating it:
+                To finish setting up your account and continue, please create a new password using your registered email address.
             </p>
 
             <div class="credentials-box">
@@ -259,11 +255,11 @@ export const emailTemplateDefaults = {
             </div>
 
             <p class="body-text">
-                Click below to choose your password and sign in. This link is valid for 72 hours.
+                Click below to create your password. This link is valid for 72 hours — afterward, sign in on the login page with your new password.
             </p>
 
             <div class="button-wrapper">
-                <a href="{{setupUrl}}" class="btn">Set My Password</a>
+                <a href="{{setupUrl}}" class="btn">Create New Password</a>
             </div>
 
             <p class="body-text" style="font-size: 13px; color: #718096; text-align: center;">

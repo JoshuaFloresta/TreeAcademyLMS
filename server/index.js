@@ -608,7 +608,7 @@ async function issueAccountSetupUrl(user) {
 // used whenever a learner account is created: on payment confirmation (see markEnrollmentPaid) and
 // when staff create/import a user directly. setupUrl is null for an already-active account (no
 // first-time setup needed) — sendPaymentReceiptEmail falls back to the plain login page in that case.
-const sendCredentialsEmail = ({ name, email, setupUrl }) => sendTemplatedEmail('enrollment_credentials', email, { name, email, setupUrl: setupUrl ?? `${config.clientUrl}/auth`, loginUrl: `${config.clientUrl}/auth` })
+const sendCredentialsEmail = ({ name, email, setupUrl, pathway }) => sendTemplatedEmail('enrollment_credentials', email, { name, email, pathway: pathway ?? 'Tree Academy', setupUrl: setupUrl ?? `${config.clientUrl}/auth`, loginUrl: `${config.clientUrl}/auth` })
 
 const pathwayTitleById = new Map(catalog.pathways.map((pathway) => [pathway.id, pathway.title]))
 const planLabel = { full: 'Full payment', upfront: 'Upfront reservation fee', test: 'Test charge' }
@@ -659,7 +659,7 @@ async function provisionLearnerAccount(enrollment) {
   if (pathwayCourse) await LearningProgress.findOneAndUpdate(
     { learnerId: learner._id, courseId: pathwayCourse._id }, { $setOnInsert: { completedModuleIds: [] } }, { upsert: true, setDefaultsOnInsert: true })
   if (alreadyActive) return { delivery: 'existing_active_account', setupUrl: null }
-  const delivery = await bestEffortEmail(sendCredentialsEmail({ name: learner.name, email: learner.email, setupUrl }), 'enrollment_credentials email')
+  const delivery = await bestEffortEmail(sendCredentialsEmail({ name: learner.name, email: learner.email, setupUrl, pathway: pathwayTitleById.get(applicant.pathway) ?? applicant.pathway }), 'enrollment_credentials email')
   return { ...delivery, setupUrl }
 }
 
@@ -679,7 +679,7 @@ async function provisionCourseEnrollmentAccess(course, applicant) {
   await LearningProgress.findOneAndUpdate(
     { learnerId: learner._id, courseId: course._id }, { $setOnInsert: { completedModuleIds: [] } }, { upsert: true, setDefaultsOnInsert: true })
   if (alreadyActive) return { delivery: 'existing_active_account', setupUrl: null }
-  const delivery = await bestEffortEmail(sendCredentialsEmail({ name: learner.name, email: learner.email, setupUrl }), 'enrollment_credentials email')
+  const delivery = await bestEffortEmail(sendCredentialsEmail({ name: learner.name, email: learner.email, setupUrl, pathway: course.title }), 'enrollment_credentials email')
   return { ...delivery, setupUrl }
 }
 
@@ -824,6 +824,9 @@ app.post('/api/public/webinars/:id/register', asyncRoute(async (req, res) => {
   res.status(201).json({ registered: true })
 }))
 
+// Deliberately does not sign the learner in (no issueSession/refresh cookie) — the learner lands on
+// the plain sign-in page after this and signs in with the password they just chose, as a genuine
+// end-to-end check that it works, rather than being carried straight into the dashboard.
 app.post('/api/auth/activate', asyncRoute(async (req, res) => {
   if (!databaseReady) return res.status(503).json({ error: 'Account activation requires MongoDB.' })
   const { token, password } = activationInput.parse(req.body)
@@ -834,9 +837,8 @@ app.post('/api/auth/activate', asyncRoute(async (req, res) => {
   user.inviteTokenHash = undefined
   user.inviteExpiresAt = undefined
   await user.save()
-  const accessToken = await issueSession(res, user)
   await saveAudit('user.activated', 'User', user.id)
-  res.status(201).json({ accessToken, user: { id: user.id, name: user.name, email: user.email, role: user.role } })
+  res.status(200).json({ activated: true, email: user.email })
 }))
 
 app.post('/api/auth/login', asyncRoute(async (req, res) => {

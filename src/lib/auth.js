@@ -30,8 +30,10 @@ export async function login(email, password) {
   return setSession(await postJson('/api/auth/login', { email, password }))
 }
 
+// Deliberately does not establish a session — the server no longer issues one for this route, so
+// the learner lands on the plain sign-in page and signs in with the password they just chose.
 export async function activate(token, password) {
-  return setSession(await postJson('/api/auth/activate', { token, password }))
+  return postJson('/api/auth/activate', { token, password })
 }
 
 export async function refreshSession() {

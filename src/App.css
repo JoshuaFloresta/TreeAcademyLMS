@@ -205,6 +205,9 @@ em { font-family: var(--serif); font-weight: 400; }
 /* inline-block so the box sizes correctly inside a plain <p>; flex/grid parents blockify it anyway. */
 .spinner-sm { display: inline-block; vertical-align: middle; flex: none; width: 12px; height: 12px; border-width: 2px; }
 .spinner-lg { justify-self: center; width: 24px; height: 24px; margin-bottom: 6px; }
+/* The default spinner assumes a light background (near-white ring, forest accent) — near-invisible
+   on .button-primary's dark forest fill, so PrimaryButton's loading state needs a light-on-dark pair. */
+.button-spinner { border-color: rgba(255, 255, 255, .35); border-top-color: #fff; }
 /* Respect the OS "reduce motion" setting — the spinner still reads as busy without rotating. */
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
 /* Global "something is in flight" bar. Pinned above everything, ignores pointer events so it can
@@ -296,7 +299,9 @@ a.task-row:hover { background: #f7f8f5; }
 .module-accordion-chevron { color: #7b877d; transition: transform .18s ease; }
 .module-accordion-item.open .module-accordion-chevron { transform: rotate(180deg); }
 .module-accordion-body { padding: 4px 16px 18px 56px; background: #fbfbf9; border-top: 1px solid #eef0eb; }
-.lesson-resource-link { display: inline-flex; align-items: center; gap: 4px; margin-left: 10px; padding: 3px 8px; color: #2f6b46; background: #eaf2ec; border-radius: 999px; font-size: 9px; font-weight: 800; }
+/* Every usage stacks this as its own line below a description/iframe, not inline after adjacent
+   text — a left margin here only ever pushed it out of alignment with what's above it. */
+.lesson-resource-link { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; padding: 3px 8px; color: #2f6b46; background: #eaf2ec; border-radius: 999px; font-size: 9px; font-weight: 800; }
 .lesson-resource-link:hover { background: #dcebe0; }
 .module-lesson-list li.module-lesson-item { display: block; padding: 9px 0; }
 .module-lesson-row { display: flex; align-items: center; gap: 9px; }
@@ -324,6 +329,9 @@ a.task-row:hover { background: #f7f8f5; }
 .lesson-section-body { padding: 12px 0 16px 23px; }
 .lesson-pdf-embed { display: grid; gap: 8px; }
 .lesson-pdf-embed iframe { width: 100%; height: 480px; border: 1px solid #d9e1d8; border-radius: 6px; }
+/* This container already spaces its children via grid `gap` — .lesson-resource-link's own
+   margin-top would otherwise double up with it. */
+.lesson-pdf-embed .lesson-resource-link { margin-top: 0; }
 .assignment-row-link { display: flex; align-items: center; gap: 9px; margin-top: 10px; padding: 12px 14px; color: var(--forest); background: #f6f7f2; border: 1px solid #e3e6e1; border-radius: 6px; font-size: 12px; font-weight: 700; }
 .assignment-row-link:hover { border-color: #b7c6b6; }
 .assignment-row-link svg:first-child { color: #a8874d; }

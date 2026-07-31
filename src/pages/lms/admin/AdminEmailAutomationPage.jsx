@@ -18,8 +18,8 @@ const templateMeta = {
   },
   enrollment_credentials: {
     label: 'Welcome & account setup',
-    trigger: 'Sent the moment a payment is confirmed (the account is created automatically), and whenever staff create or import a user directly. {{setupUrl}} is a one-time link for the learner to choose their own password.',
-    placeholders: ['{{name}}', '{{email}}', '{{setupUrl}}', '{{loginUrl}}'],
+    trigger: 'Sent the moment a payment is confirmed (the account is created automatically), and whenever staff create or import a user directly. {{setupUrl}} is a one-time link for the learner to choose their own password — afterward they land on the sign-in page to use it.',
+    placeholders: ['{{name}}', '{{email}}', '{{pathway}}', '{{setupUrl}}', '{{loginUrl}}'],
   },
   payment_receipt: {
     label: 'Payment receipt',
