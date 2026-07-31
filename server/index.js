@@ -216,6 +216,7 @@ const loginInput = z.object({ email: z.string().email().max(254), password: z.st
 // Activation identifies the account by the setup token alone (POST /api/auth/activate looks the
 // user up via inviteTokenHash) — no email field, since the client has no reason to send one.
 const activationInput = z.object({ token: z.string().min(20).max(200), password: z.string().min(10).max(128) })
+const forgotPasswordInput = z.object({ email: z.string().email().max(254) })
 const usernameField = z.string().trim().toLowerCase().min(3).max(30).regex(/^[a-z0-9._-]+$/, 'Usernames use letters, numbers, dot, underscore, or hyphen.')
 // Only accept real Facebook profile links. Left open it becomes an unmoderated outbound link on a
 // page every logged-in member can view — a free redirect to anywhere, rendered under our branding.
@@ -615,6 +616,11 @@ async function issueAccountSetupUrl(user) {
 // first-time setup needed) — sendPaymentReceiptEmail falls back to the plain login page in that case.
 const sendCredentialsEmail = ({ name, email, setupUrl, pathway }) => sendTemplatedEmail('enrollment_credentials', email, { name, email, pathway: pathway ?? 'Tree Academy', setupUrl: setupUrl ?? `${config.clientUrl}/auth`, loginUrl: `${config.clientUrl}/auth` })
 
+// Self-service reset for anyone who already has an account — the enrollment flow only ever issues a
+// setup link for a brand-new account (provisionLearnerAccount returns early for an already-active
+// one), so without this there is no way back in for an existing learner who forgets their password.
+const sendPasswordResetEmail = ({ name, email, resetUrl }) => sendTemplatedEmail('password_reset', email, { name, email, resetUrl, loginUrl: `${config.clientUrl}/auth` })
+
 const pathwayTitleById = new Map(catalog.pathways.map((pathway) => [pathway.id, pathway.title]))
 const planLabel = { full: 'Full payment', upfront: 'Upfront reservation fee', test: 'Test charge' }
 
@@ -844,6 +850,23 @@ app.post('/api/auth/activate', asyncRoute(async (req, res) => {
   await user.save()
   await saveAudit('user.activated', 'User', user.id)
   res.status(200).json({ activated: true, email: user.email })
+}))
+
+// Always answers 200 with the same body whether or not the address is registered — a differing
+// response here would turn this into an account-enumeration oracle. The reset link is the same
+// one-time token issueAccountSetupUrl mints, so POST /api/auth/activate consumes it unchanged.
+app.post('/api/auth/forgot-password', asyncRoute(async (req, res) => {
+  const { email } = forgotPasswordInput.parse(req.body)
+  const sent = { sent: true }
+  if (!databaseReady) return res.json(sent)
+  const user = await User.findOne({ email: email.toLowerCase() })
+  // Suspended/inactive accounts are deliberately excluded — a reset would otherwise let a
+  // deactivated account be reactivated, since /api/auth/activate sets status back to active.
+  if (!user || !['active', 'invited'].includes(user.status)) return res.json(sent)
+  const resetUrl = await issueAccountSetupUrl(user)
+  await bestEffortEmail(sendPasswordResetEmail({ name: user.name, email: user.email, resetUrl }), 'password_reset email')
+  await saveAudit('user.password_reset_requested', 'User', user.id)
+  res.json(sent)
 }))
 
 app.post('/api/auth/login', asyncRoute(async (req, res) => {

@@ -527,7 +527,7 @@ const webinarRegistrationSchema = new Schema({
 webinarRegistrationSchema.index({ webinarId: 1, email: 1 }, { unique: true })
 
 const emailTemplateSchema = new Schema({
-  key: { type: String, enum: ['enrollment_received', 'webinar_registration', 'enrollment_credentials', 'payment_receipt', 'newsletter_confirmation'], unique: true, required: true },
+  key: { type: String, enum: ['enrollment_received', 'webinar_registration', 'enrollment_credentials', 'payment_receipt', 'newsletter_confirmation', 'password_reset'], unique: true, required: true },
   subject: { type: String, required: true, trim: true, maxlength: 200 },
   body: { type: String, required: true, trim: true, maxlength: 20000 },
   fromName: { type: String, trim: true, maxlength: 100, default: '' },

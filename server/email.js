@@ -357,6 +357,37 @@ export const emailTemplateDefaults = {
             </div>`,
     }),
   },
+  // Sent on request from the sign-in page's "Forgot password?" link (POST /api/auth/forgot-password).
+  // {{resetUrl}} is the same one-time, 72-hour link the account-setup email uses — it is consumed by
+  // POST /api/auth/activate, which is what actually writes the new password.
+  password_reset: {
+    subject: 'Reset your Tree Academy password',
+    body: emailShell({
+      title: 'Reset your Tree Academy password',
+      eyebrow: 'Password Reset',
+      bodyHtml: `            <p class="welcome-text">Hello {{name}},</p>
+
+            <p class="body-text">
+                We received a request to reset the password for the Tree Academy account registered to <strong>{{email}}</strong>.
+            </p>
+
+            <p class="body-text">
+                Click below to choose a new password. This link is valid for 72 hours — afterward, sign in on the login page with your new password.
+            </p>
+
+            <div class="button-wrapper">
+                <a href="{{resetUrl}}" class="btn">Set a New Password</a>
+            </div>
+
+            <p class="body-text" style="font-size: 13px; color: #718096; text-align: center;">
+                If the button above doesn't work, copy and paste <strong>{{resetUrl}}</strong> into your web browser.
+            </p>
+
+            <p class="body-text" style="font-size: 13px; color: #718096;">
+                If you didn't request this, you can safely ignore this email — your current password will keep working.
+            </p>`,
+    }),
+  },
 }
 
 function renderTemplate(text, vars) {

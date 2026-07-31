@@ -7,7 +7,7 @@ import FormField from '../components/FormField.jsx'
 import PasswordInput from '../components/PasswordInput.jsx'
 import PrimaryButton from '../components/PrimaryButton.jsx'
 import StatusPill from '../components/StatusPill.jsx'
-import { activate, login as loginRequest } from '../lib/auth.js'
+import { activate, login as loginRequest, requestPasswordReset } from '../lib/auth.js'
 
 // Accounts are provisioned by academy staff after enrollment approval (a setup link is emailed) —
 // there is no self-service signup or Google sign-in. This page handles both returning sign-in and,
@@ -27,6 +27,7 @@ export default function AuthPage({ onAuthenticated }) {
   const [activationError, setActivationError] = useState('')
   const [loginPending, setLoginPending] = useState(false)
   const [activationPending, setActivationPending] = useState(false)
+  const [resetPending, setResetPending] = useState(false)
   const form = useForm({ defaultValues: { email: '', password: '' } })
   const activationForm = useForm({ defaultValues: { password: '', confirmPassword: '' } })
 
@@ -41,6 +42,21 @@ export default function AuthPage({ onAuthenticated }) {
       setLoginError(error.message || 'We could not complete that request. Please try again.')
       setLoginPending(false)
     }
+  }
+
+  // Reuses the email already typed into the sign-in form rather than opening a separate screen —
+  // the response is deliberately identical for unknown addresses, so the notice stays neutral.
+  const sendReset = async () => {
+    const email = form.getValues('email').trim()
+    setLoginError('')
+    if (!email) { setNotice('Enter your email address above first, then choose "Forgot password?".'); return }
+    setResetPending(true)
+    try {
+      await requestPasswordReset(email)
+      setNotice(`If an account exists for ${email}, a password-reset link is on its way. The link is valid for 72 hours.`)
+    } catch (error) {
+      setNotice(error.message || 'We could not send that reset link. Please try again.')
+    } finally { setResetPending(false) }
   }
 
   const submitActivation = async (values) => {
@@ -60,7 +76,7 @@ export default function AuthPage({ onAuthenticated }) {
 
   const pendingContent = <div className="pending-state"><span className="big-status"><Clock3 /></span><p className="eyebrow">ENROLLMENT RECEIVED</p><h2>We’re reviewing your<br /><em>enrollment.</em></h2><p>Once the academy confirms your signed agreement and payment, we’ll send your account-setup link by email.</p><Link to="/" className="button button-primary">Return home <ArrowRight size={17} /></Link></div>
 
-  const loginContent = <><p className="eyebrow">WELCOME BACK</p><h2>Sign in to your<br /><em>learning space.</em></h2><p className="auth-intro">Use the email connected to your approved Tree Academy enrollment.</p>{isActivated && <p className="auth-notice">Your password has been set. Sign in below to continue.</p>}<form onSubmit={form.handleSubmit(login)} className="auth-form"><FormField label="Email address"><input type="email" placeholder="you@email.com" {...form.register('email', { required: true })} /></FormField><FormField label="Password"><PasswordInput placeholder="••••••••" {...form.register('password', { required: true })} /></FormField>{loginError && <p className="auth-error" role="alert">{loginError}</p>}<button type="button" className="forgot" onClick={() => setNotice('Password-reset delivery is ready to connect to the configured email provider.')}>Forgot password?</button><PrimaryButton type="submit" loading={loginPending}>{loginPending ? 'Signing in…' : 'Sign in'}</PrimaryButton></form><p className="signup-note">New to Tree Academy? <Link to="/enroll">Begin enrollment</Link></p>{notice && <p className="auth-notice">{notice}</p>}</>
+  const loginContent = <><p className="eyebrow">WELCOME BACK</p><h2>Sign in to your<br /><em>learning space.</em></h2><p className="auth-intro">Use the email connected to your approved Tree Academy enrollment.</p>{isActivated && <p className="auth-notice">Your password has been set. Sign in below to continue.</p>}<form onSubmit={form.handleSubmit(login)} className="auth-form"><FormField label="Email address"><input type="email" placeholder="you@email.com" {...form.register('email', { required: true })} /></FormField><FormField label="Password"><PasswordInput placeholder="••••••••" {...form.register('password', { required: true })} /></FormField>{loginError && <p className="auth-error" role="alert">{loginError}</p>}<button type="button" className="forgot" onClick={sendReset} disabled={resetPending}>{resetPending ? 'Sending reset link…' : 'Forgot password?'}</button><PrimaryButton type="submit" loading={loginPending}>{loginPending ? 'Signing in…' : 'Sign in'}</PrimaryButton></form><p className="signup-note">New to Tree Academy? <Link to="/enroll">Begin enrollment</Link></p>{notice && <p className="auth-notice">{notice}</p>}</>
 
   return <div className="auth-page"><div className="auth-art"><Brand light /><div className="auth-art-content"><StatusPill kind="gold">Your learning space</StatusPill><h1>A more confident<br /><em>way forward.</em></h1><p>One focused place for your course work, instructors, and professional momentum.</p><div className="auth-quote">“The structure made it easier to stay consistent while still handling my clients.”<span>— Marco T., Tree Academy learner</span></div></div></div><main className="auth-panel"><Link to="/" className="auth-back"><ArrowRight size={16} /> Back to home</Link>{activationToken ? activationContent : isPending ? pendingContent : loginContent}</main></div>
 }

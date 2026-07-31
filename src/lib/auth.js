@@ -36,6 +36,12 @@ export async function activate(token, password) {
   return postJson('/api/auth/activate', { token, password })
 }
 
+// Resolves the same way whether or not the address is registered (the server never reveals which),
+// so the caller must show a neutral "if that address has an account, check your email" message.
+export async function requestPasswordReset(email) {
+  return postJson('/api/auth/forgot-password', { email })
+}
+
 export async function refreshSession() {
   try {
     const response = await fetch(`${API_URL}/api/auth/refresh`, { method: 'POST', credentials: 'include' })

@@ -31,6 +31,11 @@ const templateMeta = {
     trigger: 'Sent immediately when someone submits the public newsletter form.',
     placeholders: ['{{email}}'],
   },
+  password_reset: {
+    label: 'Password reset',
+    trigger: 'Sent when someone uses "Forgot password?" on the sign-in page. {{resetUrl}} is a one-time link, valid 72 hours, that lets them choose a new password — this is the only way an existing learner can get back in, since the enrollment flow only issues a setup link for brand-new accounts.',
+    placeholders: ['{{name}}', '{{email}}', '{{resetUrl}}', '{{loginUrl}}'],
+  },
 }
 
 function TemplateCard({ template }) {
