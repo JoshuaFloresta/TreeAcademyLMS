@@ -153,14 +153,14 @@ export default function LandingPage() {
               <button type="button" className="button button-primary program-modal-next" onClick={() => setModalStep('price')}>Next <ArrowRight size={17} /></button>
             </div>
             <div className="access-price">
-              <div className="price-sticker">{modalPathway.modules}</div>
+              <div className="price-sticker">{modalPathway.examTag}</div>
               <p className="eyebrow">LICENSURE REVIEW · {modalPathway.duration}</p>
               <div className="price">{modalPathway.price}<span>PHP</span></div>
               <p>{modalPathway.upfrontFee}</p>
               <div className="price-divider" />
               <div className="price-feature">
                 <span><ModalPathwayIcon /></span>
-                <div><strong>{modalPathway.title}</strong><small>{modalPathway.kicker} · {modalPathway.modules}</small></div>
+                <div><strong>{modalPathway.title}</strong><small>{modalPathway.kicker} · {modalPathway.examTag}</small></div>
               </div>
               <div className="program-modal-mobile-cta">
                 {modalBlockedMessage

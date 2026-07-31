@@ -12,7 +12,7 @@ export default function ProgramCard({ pathway, stats, onSelect }) {
   const Icon = pathway.icon
   const note = seasonNote(stats)
   return <article className={`program-card ${pathway.tone}`}>
-    <div className="program-card-top"><span className="program-icon"><Icon size={21} /></span><span className="card-count">{pathway.modules}</span></div>
+    <div className="program-card-top"><span className="program-icon"><Icon size={21} /></span><span className="card-count">{pathway.examTag}</span></div>
     <div>
       <p className="eyebrow">{pathway.kicker}</p>
       <h3>{pathway.title}</h3>
