@@ -64,7 +64,15 @@ export const tasks = [
 export const faq = [
   ['Will I have lifetime access to the course materials and community, or does access expire?', 'Yes, you will receive full lifetime access! Once you enroll, you can revisit the course materials, resource libraries, and community spaces whenever you like, allowing you to learn at your own pace.'],
   ['Are the live group sessions recorded if I cannot make the scheduled time?', 'Yes, all live sessions are fully recorded. If you have a scheduling conflict or miss a live class, the recordings are uploaded directly to the learning platform shortly after each session so you can easily catch up.'],
-  ['How much time do I need to commit each week?', 'The course consists of live sessions held every Thursday and Friday, requiring a commitment of 3 hours per session (6 hours total per week).'],
+  ['How much time do I need to commit each week?', `The review schedule may be adjusted depending on the official PRC examination timetable.
+
+Current regular schedule:
+
+RECLEX: Every Thursday and Friday, 6:00 PM–9:00 PM — 6 hours per week
+REBLEX: Every Saturday, 6:00 PM–9:00 PM — 3 hours per week
+REALEX: Every Saturday, 6:00 PM–9:00 PM — 3 hours per week
+
+Participants will be informed in advance of any schedule changes.`],
   ['Is the course fully online or are there in-person components?', 'The program is 100% online, allowing you to attend live sessions and access all learning materials comfortably from anywhere.'],
   ['What credentials or certificate do I receive upon completion?', 'Upon successfully completing the program, you will receive an official Certificate of Completion to showcase your achievement and new skills.'],
   ['What is the refund policy?', 'Please note that all sales are final, and we do not offer refunds once enrollment is confirmed. We encourage you to review the course details thoroughly before registering.'],

@@ -225,7 +225,7 @@ export default function LandingPage() {
           <div className="faq-list">
             {faq.map(([question, answer], index) => (
               <button className={`faq-item ${openFaq === index ? 'expanded' : ''}`} key={question} onClick={() => setOpenFaq(openFaq === index ? -1 : index)}>
-                <span><strong>{question}</strong><p>{answer}</p></span>
+                <span><strong>{question}</strong><span className="faq-answer"><p>{answer}</p></span></span>
                 <span className="faq-icon">{openFaq === index ? '−' : '+'}</span>
               </button>
             ))}
