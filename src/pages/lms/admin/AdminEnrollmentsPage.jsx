@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, ArchiveRestore, Check, Clock3, CreditCard, X } from 'lucide-react'
+import { Archive, ArchiveRestore, CalendarClock, Check, CreditCard, Wallet, X } from 'lucide-react'
 import EnrollmentDocumentLinks from '../../../components/EnrollmentDocumentLinks.jsx'
 import StatusPill from '../../../components/StatusPill.jsx'
+import Modal from '../../../components/Modal.jsx'
 import { useConfirm } from '../../../lib/confirmContext.js'
 import { useToast } from '../../../lib/toastContext.js'
-import { archiveEnrollment, bulkDecideEnrollments, decideEnrollment, fetchAdminEnrollments } from '../../../lib/admin.js'
+import { archiveEnrollment, bulkDecideEnrollments, decideEnrollment, fetchAdminEnrollments, setEnrollmentBalanceDue } from '../../../lib/admin.js'
 import Loading from '../../../components/Loading.jsx'
 
 const pathwayLabel = { broker: 'Broker Review', consultant: 'Consultant Review', appraiser: 'Appraiser Review' }
@@ -18,6 +19,30 @@ const pillKind = (status) => (status === 'approved' ? 'green' : status === 'reje
 const rowId = (row) => row._id ?? row.id
 const peso = (value) => `₱${Number(value ?? 0).toLocaleString('en-PH')}`
 const formatDate = (value) => (value ? new Date(value).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' }) : '—')
+const formatDueDate = (value) => (value ? new Date(value).toLocaleDateString('en-PH', { dateStyle: 'medium' }) : '')
+
+// Lets staff set the reminder shown on the learner's own Statement of Account for what they still
+// owe on a "pay upfront only" plan — purely informational, doesn't collect anything itself.
+function BalanceDueModal({ row, onClose, onSaved }) {
+  const [dueDate, setDueDate] = useState(row?.payment?.balanceDueDate ? new Date(row.payment.balanceDueDate).toISOString().slice(0, 10) : '')
+  const [note, setNote] = useState(row?.payment?.balanceNote ?? '')
+  const toast = useToast()
+  const mutation = useMutation({ mutationFn: () => setEnrollmentBalanceDue(rowId(row), { balanceDueDate: dueDate || null, balanceNote: note.trim() || null }) })
+  const save = async (event) => {
+    event.preventDefault()
+    try { await mutation.mutateAsync(); toast.success('Balance due date updated.'); onSaved() }
+    catch (e) { toast.error(e.message) }
+  }
+  return <Modal open={Boolean(row)} onClose={onClose} labelledBy="balance-due-title" className="confirm-modal">
+    <p className="eyebrow">BALANCE DUE</p>
+    <h2 id="balance-due-title">{row?.applicant?.name}</h2>
+    <form className="webinar-register-form" onSubmit={save} style={{ textAlign: 'left', marginTop: 16 }}>
+      <label className="builder-field"><span>Due date</span><input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></label>
+      <label className="builder-field"><span>Note (optional, shown to the learner)</span><textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="e.g. Please settle by this date to keep your access active." /></label>
+      <div className="confirm-actions"><button type="button" className="button button-ghost" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={mutation.isPending}>{mutation.isPending ? 'Saving…' : 'Save'}</button></div>
+    </form>
+  </Modal>
+}
 
 export default function AdminEnrollmentsPage() {
   const queryClient = useQueryClient()
@@ -27,6 +52,7 @@ export default function AdminEnrollmentsPage() {
   const [error, setError] = useState('')
   const [selected, setSelected] = useState(() => new Set())
   const [showArchived, setShowArchived] = useState(false)
+  const [dueDateRow, setDueDateRow] = useState(null)
   const { data: enrollments = [], isLoading, isFetching, refetch } = useQuery({ queryKey: ['admin-enrollments', showArchived], queryFn: () => fetchAdminEnrollments({ archived: showArchived ? 'only' : undefined }) })
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin-enrollments'] })
 
@@ -42,8 +68,14 @@ export default function AdminEnrollmentsPage() {
   }
 
   const pending = showArchived ? [] : enrollments.filter((row) => row.status === 'paid_approval_pending')
-  const awaiting = pending.length
-  const confirmedTotal = enrollments.filter((row) => row.status === 'approved').reduce((sum, row) => sum + Number(row.amount ?? 0), 0)
+  // Revenue is what was actually charged (payment.planAmount — the upfront fee alone on that
+  // plan), not the listed enrollment price, and counts every enrollment that ever completed a
+  // payment regardless of its current status (e.g. still counts a later-refunded one).
+  const totalRevenue = enrollments.filter((row) => row.payment?.paidAt).reduce((sum, row) => sum + Number(row.payment?.planAmount ?? 0), 0)
+  // What's still owed on "pay upfront only" plans — the gap between the full enrollment price and
+  // what was actually charged — summed across confirmed enrollments. Mirrors the per-row "Balance
+  // due" note below.
+  const outstandingBalance = enrollments.filter((row) => row.status === 'approved').reduce((sum, row) => sum + (Number(row.amount ?? 0) - Number(row.payment?.planAmount ?? 0)), 0)
   const selectablePendingIds = pending.map(rowId)
   const allSelected = selectablePendingIds.length > 0 && selectablePendingIds.every((id) => selected.has(id))
 
@@ -84,8 +116,8 @@ export default function AdminEnrollmentsPage() {
       </div>
     </div>
     <div className="operation-summary">
-      <div><span className="stat-icon gold"><Clock3 size={19} /></span><span><strong>{String(awaiting).padStart(2, '0')}</strong><small>Awaiting approval</small></span></div>
-      <div><span className="stat-icon"><CreditCard size={19} /></span><span><strong>{peso(confirmedTotal)}</strong><small>Confirmed (approved)</small></span></div>
+      <div><span className="stat-icon"><Wallet size={19} /></span><span><strong>{peso(totalRevenue)}</strong><small>Total revenue</small></span></div>
+      <div><span className="stat-icon"><CreditCard size={19} /></span><span><strong>{peso(outstandingBalance)}</strong><small>Outstanding balance</small></span></div>
       <div><span className="stat-icon"><Check size={19} /></span><span><strong>{enrollments.length}</strong><small>Total enrollments</small></span></div>
     </div>
 
@@ -109,7 +141,10 @@ export default function AdminEnrollmentsPage() {
           <span>{pathwayLabel[row.applicant?.pathway] ?? row.applicant?.pathway}</span>
           <span>
             <StatusPill kind={pillKind(row.status)}>{statusLabel[row.status] ?? row.status}</StatusPill>
-            {row.payment?.plan === 'upfront' && <small style={{ display: 'block', marginTop: 4, color: '#a17e40', fontWeight: 700 }}>Balance due {peso(Number(row.amount ?? 0) - Number(row.payment?.planAmount ?? 0))} — follow up</small>}
+            {row.payment?.plan === 'upfront' && <small style={{ display: 'block', marginTop: 4, color: '#a17e40', fontWeight: 700 }}>
+              Balance due {peso(Number(row.amount ?? 0) - Number(row.payment?.planAmount ?? 0))}{row.payment?.balanceDueDate ? ` by ${formatDueDate(row.payment.balanceDueDate)}` : ' — follow up'}
+            </small>}
+            {row.payment?.plan === 'upfront' && row.payment?.balanceNote && <small style={{ display: 'block', marginTop: 2, color: '#8b9389', fontStyle: 'italic' }}>{row.payment.balanceNote}</small>}
           </span>
           <span><EnrollmentDocumentLinks enrollmentId={rowId(row)} applicantName={row.applicant?.name} documents={row.documents} /></span>
           <span>{formatDate(row.createdAt)}</span>
@@ -118,11 +153,13 @@ export default function AdminEnrollmentsPage() {
               <button className="button button-primary button-compact" onClick={() => decide(row, 'approved')}><Check size={14} /> Approve</button>
               <button className="button button-ghost button-compact" onClick={() => decide(row, 'rejected')}><X size={14} /> Reject</button>
             </>}
+            {row.payment?.plan === 'upfront' && <button className="button button-ghost button-compact" onClick={() => setDueDateRow(row)}><CalendarClock size={14} /> {row.payment?.balanceDueDate ? 'Edit due date' : 'Set due date'}</button>}
             {showArchived
               ? <button className="button button-ghost button-compact" onClick={() => archive(row, false)} disabled={archiveMutation.isPending}><ArchiveRestore size={14} /> Restore</button>
               : <button className="button button-ghost button-compact" onClick={() => archive(row, true)} disabled={archiveMutation.isPending}><Archive size={14} /> Archive</button>}
           </span>
         </div> })}
     </div>
+    <BalanceDueModal row={dueDateRow} onClose={() => setDueDateRow(null)} onSaved={() => { setDueDateRow(null); invalidate() }} />
   </>
 }

@@ -6,6 +6,7 @@ const builtInPageOptions = {
   // nav destination, so it's excluded from every role's page listing.
   'assignment-detail': { roles: [] },
   recognition: { roles: ['instructor', 'admin'] },
+  'statement-of-account': { label: 'Statement of Account', roles: ['learner'], to: '/statement' },
   'course-builder': { label: 'Course builder', roles: ['instructor', 'admin'], to: '/builder' },
   submissions: { label: 'Submissions', roles: ['instructor', 'admin'], to: '/submissions' },
   roster: { label: 'Student roster', roles: ['instructor', 'admin'], to: '/roster' },

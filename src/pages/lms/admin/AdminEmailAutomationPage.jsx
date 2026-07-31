@@ -26,6 +26,11 @@ const templateMeta = {
     trigger: 'Sent right alongside the welcome email whenever a payment is confirmed — covers both "pay in full" and "pay upfront only" plans.',
     placeholders: ['{{name}}', '{{email}}', '{{pathway}}', '{{planLabel}}', '{{amountPaid}}', '{{totalAmount}}', '{{balanceDue}}', '{{referenceNumber}}', '{{transactionId}}', '{{paidAt}}', '{{loginUrl}}'],
   },
+  newsletter_confirmation: {
+    label: 'Newsletter signup',
+    trigger: 'Sent immediately when someone submits the public newsletter form.',
+    placeholders: ['{{email}}'],
+  },
 }
 
 function TemplateCard({ template }) {

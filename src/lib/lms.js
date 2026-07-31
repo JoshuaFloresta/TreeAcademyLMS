@@ -132,6 +132,7 @@ export const saveEventAttendance = (eventId, records) => post(`/api/staff/calend
 export const fetchMyAttendance = (eventId) => get(`/api/calendar-events/${eventId}/attendance/me`)
 
 export const fetchNotifications = () => get('/api/notifications/me')
+export const fetchMyBilling = () => get('/api/billing/me')
 export const markNotificationRead = (id) => post(`/api/notifications/${id}/read`)
 export const markAllNotificationsRead = () => post('/api/notifications/read-all')
 

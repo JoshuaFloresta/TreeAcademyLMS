@@ -39,9 +39,6 @@ export const config = {
     from: process.env.EMAIL_FROM,
     enrollmentRecipient: process.env.ENROLLMENT_NOTIFICATION_TO ?? 'trainwithmastersonline@gmail.com',
   },
-  newsletter: {
-    makeWebhookUrl: process.env.MAKE_NEWSLETTER_WEBHOOK_URL,
-  },
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,

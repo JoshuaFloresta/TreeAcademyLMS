@@ -63,6 +63,9 @@ export const fetchAdminEnrollments = (params) => get(`/api/staff/enrollments${qs
 export const decideEnrollment = (id, decision, reason) => post(`/api/staff/enrollments/${id}/decision`, { decision, reason: reason || undefined })
 export const bulkDecideEnrollments = (ids, decision, reason) => post('/api/admin/enrollments/bulk-decision', { ids, decision, reason: reason || undefined })
 export const archiveEnrollment = (id, archived) => post(`/api/admin/enrollments/${id}/archive`, { archived })
+// The reminder shown on the learner's own Statement of Account for what they still owe on a "pay
+// upfront only" plan — purely informational, not an in-app payment collector.
+export const setEnrollmentBalanceDue = (id, body) => patch(`/api/staff/enrollments/${id}/balance-due`, body)
 
 // Submitted admission forms and signed agreements. The server streams the bytes rather than
 // handing out a URL, so this goes through authedFetch and becomes a local blob — which also lets

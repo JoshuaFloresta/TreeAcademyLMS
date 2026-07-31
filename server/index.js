@@ -127,6 +127,12 @@ const pricingSettingsInput = z.object({
 // this enum value, the TEST_PLAN_AMOUNT branch below, and the matching option in
 // src/components/enrollment/PaymentStep.jsx once testing is done.
 const paymentSessionInput = z.object({ plan: z.enum(['full', 'upfront', 'test']).optional() })
+// Staff-set reminder for a "pay upfront only" enrollment's remaining balance — purely
+// informational (shown on the learner's Statement of Account), not an in-app payment collector.
+const balanceDueInput = z.object({
+  balanceDueDate: z.coerce.date().nullable().optional(),
+  balanceNote: z.string().trim().max(500).nullable().optional(),
+})
 const TEST_PLAN_AMOUNT = 1
 
 // Falls back to catalog.js's static price when no admin override has been saved yet (or when
@@ -1023,14 +1029,7 @@ app.post('/api/newsletter', asyncRoute(async (req, res) => {
 
   if (shouldSendConfirmation) {
     try {
-      if (config.newsletter.makeWebhookUrl) {
-        const confirmationResponse = await fetch(config.newsletter.makeWebhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: normalized, source: 'Website Newsletter Form', submittedAt: new Date().toISOString(), status: 'Active' }),
-        })
-        if (!confirmationResponse.ok) throw new Error(`Newsletter provider rejected confirmation request (${confirmationResponse.status})`)
-      }
+      await sendTemplatedEmail('newsletter_confirmation', normalized, { email: normalized })
       await saveAudit('newsletter.confirmation_requested', 'NewsletterSubscriber', normalized)
     } catch (error) {
       if (databaseReady && createdSubscriber) await NewsletterSubscriber.deleteOne({ email: normalized })
@@ -1288,7 +1287,7 @@ app.get('/api/staff/enrollments', requireAuth, requireStaff, asyncRoute(async (r
   // this widely fetched. Staff read the full form by opening the document itself.
   const summarise = (row) => ({
     _id: String(row._id ?? row.id), applicant: row.applicant, status: row.status, amount: row.amount, currency: row.currency,
-    payment: row.payment ? { plan: row.payment.plan, planAmount: row.payment.planAmount, paidAt: row.payment.paidAt, referenceNumber: row.payment.referenceNumber } : undefined,
+    payment: row.payment ? { plan: row.payment.plan, planAmount: row.payment.planAmount, paidAt: row.payment.paidAt, referenceNumber: row.payment.referenceNumber, balanceDueDate: row.payment.balanceDueDate ?? null, balanceNote: row.payment.balanceNote ?? '' } : undefined,
     createdAt: row.createdAt, archivedAt: row.archivedAt ?? null, documents: enrollmentDocuments(row),
   })
   if (databaseReady) {
@@ -1313,6 +1312,22 @@ app.get('/api/staff/enrollments/:id/documents/:type', requireAuth, requireStaff,
   await saveAudit('enrollment.document_viewed', 'Enrollment', req.params.id, { type: req.params.type }, req.auth.sub)
   const safeName = (enrollment.applicant?.name ?? 'applicant').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '')
   sendPrivateDownload(res, await getFile(key), `${safeName}-${req.params.type}.pdf`, 'application/pdf')
+}))
+
+// Sets/clears the reminder shown on the learner's own Statement of Account for what they still
+// owe on a "pay upfront only" plan. Doesn't require any particular enrollment status — staff may
+// want to set this ahead of or after the balance actually being collected offline.
+app.patch('/api/staff/enrollments/:id/balance-due', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Enrollments require MongoDB.' })
+  const values = balanceDueInput.parse(req.body)
+  const enrollment = await Enrollment.findById(req.params.id)
+  if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
+  enrollment.payment ??= {}
+  if ('balanceDueDate' in values) enrollment.payment.balanceDueDate = values.balanceDueDate
+  if ('balanceNote' in values) enrollment.payment.balanceNote = values.balanceNote
+  await enrollment.save()
+  await saveAudit('enrollment.balance_due_set', 'Enrollment', enrollment.id, { balanceDueDate: enrollment.payment.balanceDueDate }, req.auth.sub)
+  res.json({ balanceDueDate: enrollment.payment.balanceDueDate ?? null, balanceNote: enrollment.payment.balanceNote ?? '' })
 }))
 
 app.post('/api/staff/enrollments/:id/decision', requireAuth, requireStaff, asyncRoute(async (req, res) => {
@@ -3375,6 +3390,33 @@ app.get('/api/notifications/me', requireAuth, asyncRoute(async (req, res) => {
   if (!databaseReady) return res.status(503).json({ error: 'Notifications require MongoDB.' })
   const notifications = await Notification.find({ recipientId: req.auth.sub }).sort({ createdAt: -1 }).limit(100).lean()
   res.json(notifications)
+}))
+
+// The learner's own Statement of Account — every enrollment tied to their email (Enrollment has no
+// learnerId; it's matched by applicant.email, same convention as migrate-backfill-enrollment-access.js),
+// with the balance/due-date fields staff can set via PATCH .../balance-due above. Never exposes
+// anything beyond what the applicant themselves already knows (no storage keys, no other learners'
+// data) — just their own billing history.
+app.get('/api/billing/me', requireAuth, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Billing requires MongoDB.' })
+  const rows = await Enrollment.find({ 'applicant.email': req.auth.email }).sort({ createdAt: -1 }).lean()
+  res.json(rows.map((row) => {
+    const planAmount = Number(row.payment?.planAmount ?? (row.status === 'approved' ? row.amount : 0))
+    return {
+      id: String(row._id),
+      pathway: row.applicant.pathway,
+      pathwayTitle: pathwayTitleById.get(row.applicant.pathway) ?? row.applicant.pathway,
+      status: row.status,
+      amount: row.amount,
+      currency: row.currency,
+      plan: row.payment?.plan ?? null,
+      amountPaid: planAmount,
+      balance: Math.max(0, Number(row.amount ?? 0) - planAmount),
+      paidAt: row.payment?.paidAt ?? null,
+      balanceDueDate: row.payment?.balanceDueDate ?? null,
+      balanceNote: row.payment?.balanceNote ?? '',
+    }
+  }))
 }))
 
 app.post('/api/notifications/:id/read', requireAuth, asyncRoute(async (req, res) => {

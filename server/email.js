@@ -167,6 +167,20 @@ export const emailTemplateDefaults = {
     subject: 'You’re registered: {{webinarTitle}}',
     body: '<p>Hello {{name}},</p><p>You’re confirmed for <strong>{{webinarTitle}}</strong> on {{webinarDate}}. We’ll send a reminder as the date approaches.</p><p>— Tree Academy</p>',
   },
+  // Sent the moment someone submits the public newsletter form (see POST /api/newsletter). Single
+  // opt-in — there is no separate confirm-by-clicking-a-link step today.
+  newsletter_confirmation: {
+    subject: 'You’re on the list, Tree Academy!',
+    body: emailShell({
+      title: 'Tree Academy Newsletter',
+      eyebrow: 'Newsletter',
+      bodyHtml: `            <p class="welcome-text">You're subscribed!</p>
+
+            <p class="body-text">
+                Thanks for signing up to hear from Tree Academy. We'll send review tips, cohort openings, and program updates to <strong>{{email}}</strong>.
+            </p>`,
+    }),
+  },
   // Sent the moment an enrollment's payment is confirmed (see markEnrollmentPaid/provisionLearnerAccount
   // in index.js) and whenever staff create/import a user directly — {{setupUrl}} is a one-time link
   // (POST /api/auth/activate) for the learner to choose their own password, {{loginUrl}} is the plain
@@ -353,6 +367,15 @@ function renderTemplate(text, vars) {
   return text.replace(/\{\{(\w+)\}\}/g, (match, key) => (key in vars ? escapeHtml(vars[key]) : match))
 }
 
+// Resend's own rejection reason (e.g. "domain not verified", "restricted API key", "you can only
+// send testing emails to your own address") is far more useful than the bare status code — without
+// it, a failed send in the logs just says "(403)" and gives no clue which of several possible
+// causes it actually is.
+async function emailProviderError(label, response) {
+  const body = await response.json().catch(() => ({}))
+  return new Error(`Email provider rejected ${label} (${response.status}): ${body.message ?? 'no further details'}`)
+}
+
 export async function ensureDefaultEmailTemplates() {
   for (const [key, defaults] of Object.entries(emailTemplateDefaults)) {
     await EmailTemplate.findOneAndUpdate({ key }, { $setOnInsert: { key, ...defaults, enabled: true } }, { upsert: true, setDefaultsOnInsert: true })
@@ -374,7 +397,7 @@ export async function sendTemplatedEmail(key, to, vars) {
     headers: { Authorization: `Bearer ${config.email.resendApiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ from, to: [to], subject: renderTemplate(template.subject, vars), html: renderTemplate(template.body, vars) }),
   })
-  if (!response.ok) throw new Error(`Email provider rejected templated email "${key}" (${response.status})`)
+  if (!response.ok) throw await emailProviderError(`templated email "${key}"`, response)
   return { delivery: 'sent' }
 }
 
@@ -395,7 +418,7 @@ export async function sendAccountSetupEmail({ name, email, token }) {
       html: `<p>Hello ${name},</p><p>Your Tree Academy enrollment is approved. Set a password to enter your learning space:</p><p><a href="${setupUrl}">Set up my account</a></p><p>This link expires in 72 hours.</p>`,
     }),
   })
-  if (!response.ok) throw new Error(`Email provider rejected account invite (${response.status})`)
+  if (!response.ok) throw await emailProviderError('account invite', response)
   return { delivery: 'sent' }
 }
 
@@ -420,6 +443,6 @@ export async function sendEnrollmentDocumentsEmail({ enrollmentId, applicant, do
       attachments,
     }),
   })
-  if (!response.ok) throw new Error(`Email provider rejected enrollment documents (${response.status})`)
+  if (!response.ok) throw await emailProviderError('enrollment documents', response)
   return { delivery: 'sent' }
 }

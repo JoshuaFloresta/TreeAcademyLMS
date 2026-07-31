@@ -239,6 +239,21 @@ a.task-row:hover { background: #f7f8f5; }
 /* Opening the page marks everything read, so the highlight is a record of what was new on arrival
    rather than a control — it needs to read as informative, not clickable. */
 .notification-item.unread { background: #fdfaf2; }
+
+/* Learner — Statement of Account */
+.statement-list { display: grid; gap: 16px; margin-top: 31px; }
+.statement-card { padding: 22px 24px; background: #fff; border: 1px solid #e1e5df; border-radius: 8px; }
+.statement-card-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.statement-card-head h2 { margin: 0 0 4px; color: var(--forest); font-size: 17px; }
+.statement-card-head small { color: #868c85; font-size: 11px; }
+.statement-figures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; padding-top: 16px; border-top: 1px solid #edf0ec; }
+.statement-figures > div { display: grid; gap: 5px; }
+.statement-figures span { color: #8b9389; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
+.statement-figures strong { color: var(--forest); font-size: 16px; }
+.statement-figures strong.statement-balance-due { color: #a83f32; }
+.statement-due-note { display: flex; align-items: center; gap: 7px; margin: 16px 0 0; padding: 10px 13px; color: #896c35; background: #f7f0dc; border-radius: 4px; font-size: 11px; line-height: 1.5; }
+.statement-due-note svg { flex: none; }
+.statement-paid-note { display: block; margin-top: 10px; color: #a4a9a2; font-size: 9px; }
 .notification-new { position: absolute; top: 19px; right: 20px; padding: 2px 7px; color: #7d6a3c; background: #f4ead1; border-radius: 999px; font-size: 8px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
 .operation-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 28px; }.operation-summary > div { display: flex; gap: 10px; align-items: center; padding: 15px; background: #fff; border: 1px solid #e2e6e0; }.operation-summary strong, .operation-summary small { display: block; }.operation-summary strong { color: var(--forest); font-size: 22px; letter-spacing: -.05em; }.operation-summary small { color: #8e948d; font-size: 9px; }.operations-table-head, .operations-row { display: grid; grid-template-columns: 1.3fr .8fr 1.15fr .85fr auto; gap: 10px; align-items: center; }.operations-actions { display: flex; gap: 6px; }.button-compact { height: 30px; padding: 0 10px; font-size: 9px; }.operations-table-head { padding: 13px 18px; color: #989e97; background: #f9faf8; border-bottom: 1px solid #e7eae6; font-size: 8px; font-weight: 800; letter-spacing: .08em; }.operations-row { padding: 15px 18px; border-bottom: 1px solid #edf0ec; }.operations-row:last-child { border: 0; }.operations-row span:not(.status-pill) strong, .operations-row span:not(.status-pill) small { display: block; }.operations-row span:not(.status-pill) strong { color: #465048; font-size: 11px; }.operations-row span:not(.status-pill) small { margin-top: 3px; color: #9aa099; font-size: 9px; }.operations-row > span:not(:first-child) { color: #6e756d; font-size: 10px; }.operations-row .status-pill { max-width: max-content; min-height: 22px; padding: 0 6px; font-size: 7px; }.row-menu { color: #647065; background: none; border: 0; }.operations-note { display: flex; gap: 7px; align-items: center; margin: 16px 0; color: #738074; font-size: 10px; }.operations-note svg { color: var(--forest); }.settings-card { display: flex; align-items: center; gap: 16px; max-width: 550px; margin-top: 31px; padding: 21px; background: #fff; border: 1px solid #e1e5df; }.settings-card .avatar.large { width: 54px; height: 54px; font-size: 13px; }.settings-card h2 { margin: 0 0 4px; color: var(--forest); font-size: 19px; }.settings-card p { margin: 0; color: #818880; font-size: 11px; }.settings-card .button { min-height: 35px; margin-left: auto; font-size: 10px; }
 .sidebar-backdrop { display: none; }

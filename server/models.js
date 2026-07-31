@@ -266,6 +266,10 @@ const enrollmentSchema = new Schema({
     // server/index.js's payment-session route) is removed.
     plan: { type: String, enum: ['full', 'upfront', 'test'] },
     planAmount: Number,
+    // Staff-set, for the "pay upfront only" plan's remaining balance — purely informational (shown
+    // on the learner's Statement of Account); nothing in-app enforces or collects it automatically.
+    balanceDueDate: Date,
+    balanceNote: { type: String, trim: true, maxlength: 500 },
   },
   reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   reviewedAt: Date,
@@ -523,7 +527,7 @@ const webinarRegistrationSchema = new Schema({
 webinarRegistrationSchema.index({ webinarId: 1, email: 1 }, { unique: true })
 
 const emailTemplateSchema = new Schema({
-  key: { type: String, enum: ['enrollment_received', 'webinar_registration', 'enrollment_credentials', 'payment_receipt'], unique: true, required: true },
+  key: { type: String, enum: ['enrollment_received', 'webinar_registration', 'enrollment_credentials', 'payment_receipt', 'newsletter_confirmation'], unique: true, required: true },
   subject: { type: String, required: true, trim: true, maxlength: 200 },
   body: { type: String, required: true, trim: true, maxlength: 20000 },
   fromName: { type: String, trim: true, maxlength: 100, default: '' },
