@@ -11,7 +11,7 @@ const instructor = {
     'Track Record: Evaluated residential, commercial, industrial, resort, development, and special-purpose properties.',
     'Founder & Educator: Established TREE Academy for Real Estate Excellence and created the Pass-First Review Program.',
   ],
-  specialties: ['Appraiser ', 'Broker ', 'Educator'],
+  specialties: ['Appraiser ', 'Broker ', 'Educator','Consultant', 'Innovator'],
   stats: [{ label: 'Years experience', value: '35+' }, { label: 'Students mentored', value: '500+' }],
 }
 

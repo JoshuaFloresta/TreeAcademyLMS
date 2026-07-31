@@ -3365,10 +3365,18 @@ app.get('/api/staff/calendar-events/:id/attendance', requireAuth, requireStaff, 
   const progresses = await LearningProgress.find({ courseId: event.courseId }).select('learnerId').lean()
   const learners = await User.find({ _id: { $in: progresses.map((progress) => progress.learnerId) } }).select('name email').sort({ name: 1 }).lean()
   const records = await Attendance.find({ eventId: event._id }).lean()
-  const statusByLearner = new Map(records.map((record) => [String(record.learnerId), record.status]))
+  const byLearner = new Map(records.map((record) => [String(record.learnerId), record]))
+  // recordedAt lets the roll-call screen distinguish "never taken" from "already saved" without
+  // inferring it from whether every status happens to be null — a roster legitimately saved as all
+  // absent would otherwise look untouched.
+  const markedTimes = records.map((record) => record.markedAt).filter(Boolean).map((value) => new Date(value).getTime())
   res.json({
     event: { id: event._id.toString(), title: event.title, startsAt: event.startsAt, courseId: String(event.courseId) },
-    roster: learners.map((learner) => ({ learnerId: learner._id.toString(), name: learner.name, email: learner.email, status: statusByLearner.get(String(learner._id)) ?? null })),
+    recordedAt: markedTimes.length ? new Date(Math.max(...markedTimes)) : null,
+    roster: learners.map((learner) => {
+      const record = byLearner.get(String(learner._id))
+      return { learnerId: learner._id.toString(), name: learner.name, email: learner.email, status: record?.status ?? null, markedAt: record?.markedAt ?? null }
+    }),
   })
 }))
 

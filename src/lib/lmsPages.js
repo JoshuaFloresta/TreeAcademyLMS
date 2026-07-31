@@ -10,6 +10,7 @@ const builtInPageOptions = {
   'course-builder': { label: 'Course builder', roles: ['instructor', 'admin'], to: '/builder' },
   submissions: { label: 'Submissions', roles: ['instructor', 'admin'], to: '/submissions' },
   roster: { label: 'Student roster', roles: ['instructor', 'admin'], to: '/roster' },
+  attendance: { label: 'Attendance', roles: ['instructor', 'admin'], to: '/attendance' },
   'enrollment-documents': { label: 'Enrollment Documents', roles: ['instructor', 'admin'], to: '/enrollment-documents' },
   // Retired from the nav — admins get the same numbers on Global Analytics. The page file is kept
   // so the route still resolves for anyone holding an old link.

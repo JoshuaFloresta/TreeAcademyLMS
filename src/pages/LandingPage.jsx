@@ -126,7 +126,6 @@ export default function LandingPage() {
         <PassFirst />
         <Syllabus />
         <Instructors />
-        <Coaches />
 
         {/* Programs Section */}
         <section id="programs" className="programs shell section">
