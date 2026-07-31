@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BookOpen, Camera, Check, ChevronDown, ClipboardList, Eye, EyeOff, FileText, HelpCircle, Layers, Link as LinkIcon, Minus, Pencil, Plus, Send, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BookOpen, Camera, Check, ChevronDown, ClipboardList, Eye, EyeOff, FileText, GripVertical, HelpCircle, Layers, Link as LinkIcon, Minus, Pencil, Plus, Send, Trash2 } from 'lucide-react'
 import StatusPill from '../../../components/StatusPill.jsx'
 import CourseBanner from '../../../components/lms/CourseBanner.jsx'
 import ImageCropModal from '../../../components/ImageCropModal.jsx'
@@ -150,18 +150,18 @@ function AddSectionControls({ course, module, position, onDone }) {
 
 // Mirrors the learner catalog's collapsible lesson row (CatalogPage.jsx's LessonSection), with
 // instructor-only reorder/edit/publish/delete controls in the head instead of a plain view.
-function BuilderLessonSection({ lesson, onEdit, onDelete, onTogglePublish, onMoveUp, onMoveDown, canMoveUp, canMoveDown }) {
+function BuilderLessonSection({ lesson, drag, onEdit, onDelete, onTogglePublish }) {
   const [open, setOpen] = useState(false)
-  if (lesson.kind === 'header') return <li className="module-header-row">
+  const rowClass = (base) => `${base}${drag.isDragging ? ' is-dragging' : ''}${drag.isOver ? ' is-drop-target' : ''}`
+  if (lesson.kind === 'header') return <li className={rowClass('module-header-row')} draggable onDragStart={drag.onDragStart} onDragOver={drag.onDragOver} onDrop={drag.onDrop} onDragEnd={drag.onDragEnd}>
     <span><Minus size={13} /> {lesson.title}</span>
     <div className="lesson-section-actions">
-      <button type="button" onClick={onMoveUp} disabled={!canMoveUp} aria-label="Move header up"><ArrowUp size={12} /></button>
-      <button type="button" onClick={onMoveDown} disabled={!canMoveDown} aria-label="Move header down"><ArrowDown size={12} /></button>
+      <button type="button" className="drag-handle" aria-label="Drag to reorder"><GripVertical size={12} /></button>
       <button type="button" onClick={onEdit} aria-label="Edit header"><Pencil size={12} /></button>
       <button type="button" className="builder-danger" onClick={onDelete} aria-label="Delete header"><Trash2 size={12} /></button>
     </div>
   </li>
-  return <li className="module-lesson-item">
+  return <li className={rowClass('module-lesson-item')} draggable onDragStart={drag.onDragStart} onDragOver={drag.onDragOver} onDrop={drag.onDrop} onDragEnd={drag.onDragEnd}>
     <div className="lesson-section-head">
       <button type="button" className="lesson-section-toggle" onClick={() => setOpen((current) => !current)} aria-expanded={open}>
         <ChevronDown size={14} className={`lesson-section-chevron ${open ? 'open' : ''}`} />
@@ -169,18 +169,18 @@ function BuilderLessonSection({ lesson, onEdit, onDelete, onTogglePublish, onMov
         <small style={{ marginLeft: 8, opacity: .6 }}>{kindLabel[lesson.kind] ?? lesson.kind}</small>
       </button>
       <div className="lesson-section-actions">
-        <button type="button" onClick={onMoveUp} disabled={!canMoveUp} aria-label="Move lesson up"><ArrowUp size={12} /></button>
-        <button type="button" onClick={onMoveDown} disabled={!canMoveDown} aria-label="Move lesson down"><ArrowDown size={12} /></button>
+        <button type="button" className="drag-handle" aria-label="Drag to reorder"><GripVertical size={12} /></button>
         <button type="button" onClick={onEdit} aria-label="Edit lesson"><Pencil size={12} /></button>
         <button type="button" onClick={onTogglePublish} aria-label={lesson.isPublished ? 'Unpublish lesson' : 'Publish lesson'}>{lesson.isPublished ? <Eye size={12} /> : <EyeOff size={12} />}</button>
         <button type="button" className="builder-danger" onClick={onDelete} aria-label="Delete lesson"><Trash2 size={12} /></button>
       </div>
     </div>
     {open && <div className="lesson-section-body">
-      {lesson.body && <RichTextViewer html={lesson.body} className="assignment-block-instructions" />}
-      {lesson.driveUrl
-        ? <a href={lesson.driveUrl} target="_blank" rel="noreferrer" className="lesson-resource-link"><LinkIcon size={12} /> Open PDF in new tab</a>
-        : !lesson.body && <p className="operations-note">No content added to this lesson yet.</p>}
+      {(lesson.body || lesson.driveUrl) && <div className="builder-lesson-body-row">
+        {lesson.body && <RichTextViewer html={lesson.body} className="assignment-block-instructions" />}
+        {lesson.driveUrl && <a href={lesson.driveUrl} target="_blank" rel="noreferrer" className="lesson-resource-link"><LinkIcon size={12} /> Open PDF in new tab</a>}
+      </div>}
+      {!lesson.body && !lesson.driveUrl && <p className="operations-note">No content added to this lesson yet.</p>}
       <div style={{ marginTop: 10 }}><StatusPill kind={lesson.isPublished ? 'green' : 'gold'}>{lesson.isPublished ? 'Published' : 'Draft'}</StatusPill></div>
     </div>}
   </li>
@@ -188,17 +188,17 @@ function BuilderLessonSection({ lesson, onEdit, onDelete, onTogglePublish, onMov
 
 // Assignment/quiz rows in the Sections list — editing still opens the full-page editor (rich
 // instructions/questions need the room), but creating, ordering, and deleting now happen inline.
-function BuilderAssignmentRow({ assignment, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown }) {
+function BuilderAssignmentRow({ assignment, drag, onDelete }) {
   const navigate = useNavigate()
-  return <li className="module-lesson-item">
+  const rowClass = `module-lesson-item${drag.isDragging ? ' is-dragging' : ''}${drag.isOver ? ' is-drop-target' : ''}`
+  return <li className={rowClass} draggable onDragStart={drag.onDragStart} onDragOver={drag.onDragOver} onDrop={drag.onDrop} onDragEnd={drag.onDragEnd}>
     <div className="lesson-section-head">
       <span className="lesson-section-toggle" style={{ cursor: 'default' }}>
         <ClipboardList size={13} /> {assignment.title}
         <small style={{ marginLeft: 8, opacity: .6 }}>Assignment · {dueLabel(assignment.dueAt)} · {assignment.maxPoints} pts</small>
       </span>
       <div className="lesson-section-actions">
-        <button type="button" onClick={onMoveUp} disabled={!canMoveUp} aria-label="Move assignment up"><ArrowUp size={12} /></button>
-        <button type="button" onClick={onMoveDown} disabled={!canMoveDown} aria-label="Move assignment down"><ArrowDown size={12} /></button>
+        <button type="button" className="drag-handle" aria-label="Drag to reorder"><GripVertical size={12} /></button>
         <button type="button" onClick={() => navigate(`/builder/assignments/${assignment._id}`)} aria-label="Edit assignment"><Pencil size={12} /></button>
         <button type="button" className="builder-danger" onClick={onDelete} aria-label="Delete assignment"><Trash2 size={12} /></button>
       </div>
@@ -206,17 +206,17 @@ function BuilderAssignmentRow({ assignment, onDelete, onMoveUp, onMoveDown, canM
   </li>
 }
 
-function BuilderQuizRow({ quiz, onDelete, onTogglePublish, onMoveUp, onMoveDown, canMoveUp, canMoveDown }) {
+function BuilderQuizRow({ quiz, drag, onDelete, onTogglePublish }) {
   const navigate = useNavigate()
-  return <li className="module-lesson-item">
+  const rowClass = `module-lesson-item${drag.isDragging ? ' is-dragging' : ''}${drag.isOver ? ' is-drop-target' : ''}`
+  return <li className={rowClass} draggable onDragStart={drag.onDragStart} onDragOver={drag.onDragOver} onDrop={drag.onDrop} onDragEnd={drag.onDragEnd}>
     <div className="lesson-section-head">
       <span className="lesson-section-toggle" style={{ cursor: 'default' }}>
         <HelpCircle size={13} /> {quiz.title}
         <small style={{ marginLeft: 8, opacity: .6 }}>Quiz · {quiz.questionCount} question{quiz.questionCount === 1 ? '' : 's'}</small>
       </span>
       <div className="lesson-section-actions">
-        <button type="button" onClick={onMoveUp} disabled={!canMoveUp} aria-label="Move quiz up"><ArrowUp size={12} /></button>
-        <button type="button" onClick={onMoveDown} disabled={!canMoveDown} aria-label="Move quiz down"><ArrowDown size={12} /></button>
+        <button type="button" className="drag-handle" aria-label="Drag to reorder"><GripVertical size={12} /></button>
         <button type="button" onClick={() => navigate(`/builder/quizzes/${quiz._id}`)} aria-label="Edit quiz"><Pencil size={12} /></button>
         <button type="button" onClick={onTogglePublish} aria-label={quiz.isPublished ? 'Unpublish quiz' : 'Publish quiz'}>{quiz.isPublished ? <Eye size={12} /> : <EyeOff size={12} />}</button>
         <button type="button" className="builder-danger" onClick={onDelete} aria-label="Delete quiz"><Trash2 size={12} /></button>
@@ -328,8 +328,30 @@ function NewCourseForm({ onCreated }) {
 
 // Full-width phase editor — rendered outside the sidebar/canvas grid entirely so it gets the
 // whole page to work with instead of fighting the course-switcher sidebar for space.
-function PhaseDetailEditor({ course, module, index, editingModuleId, setEditingModuleId, editingLessonId, setEditingLessonId, togglePhasePublish, toggleLessonPublish, toggleQuizPublish, reorderItem, removeLesson, removeAssignment, removeQuiz, refreshCourse, onBack }) {
+function PhaseDetailEditor({ course, module, index, editingModuleId, setEditingModuleId, editingLessonId, setEditingLessonId, togglePhasePublish, toggleLessonPublish, toggleQuizPublish, reorderItemTo, removeLesson, removeAssignment, removeQuiz, refreshCourse, onBack }) {
   const items = phaseItems(module)
+  const [dragKey, setDragKey] = useState(null)
+  const [overKey, setOverKey] = useState(null)
+  const keyOf = (item) => `${item.itemType}-${item._id}`
+  const dragPropsFor = (item, itemIndex) => ({
+    isDragging: dragKey === keyOf(item),
+    isOver: overKey === keyOf(item) && dragKey !== keyOf(item),
+    onDragStart: (event) => { setDragKey(keyOf(item)); event.dataTransfer.effectAllowed = 'move' },
+    onDragOver: (event) => {
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'move'
+      if (overKey !== keyOf(item)) setOverKey(keyOf(item))
+    },
+    onDrop: (event) => {
+      event.preventDefault()
+      const sourceIndex = items.findIndex((entry) => keyOf(entry) === dragKey)
+      setDragKey(null)
+      setOverKey(null)
+      if (sourceIndex === -1) return
+      reorderItemTo(module, sourceIndex, itemIndex)
+    },
+    onDragEnd: () => { setDragKey(null); setOverKey(null) },
+  })
   return <>
     <div className="page-title-row builder-editor-page-title">
       <div><p className="eyebrow">TEACHING WORKSPACE</p><h1>{course.title}</h1><p>Editing phase {module.phaseNumber ?? index + 1}.</p></div>
@@ -358,22 +380,15 @@ function PhaseDetailEditor({ course, module, index, editingModuleId, setEditingM
           {!items.length && <p className="operations-note">Nothing here yet — add the first section below.</p>}
           <ul className="module-lesson-list">
             {items.map((item, itemIndex) => {
-              const canMoveUp = itemIndex > 0
-              const canMoveDown = itemIndex < items.length - 1
-              const onMoveUp = () => reorderItem(module, item, -1)
-              const onMoveDown = () => reorderItem(module, item, 1)
-              if (item.itemType === 'assignment') return <BuilderAssignmentRow key={`assignment-${item._id}`} assignment={item} canMoveUp={canMoveUp} canMoveDown={canMoveDown} onMoveUp={onMoveUp} onMoveDown={onMoveDown} onDelete={() => removeAssignment(item)} />
-              if (item.itemType === 'quiz') return <BuilderQuizRow key={`quiz-${item._id}`} quiz={item} canMoveUp={canMoveUp} canMoveDown={canMoveDown} onMoveUp={onMoveUp} onMoveDown={onMoveDown} onDelete={() => removeQuiz(item)} onTogglePublish={() => toggleQuizPublish(item)} />
+              if (item.itemType === 'assignment') return <BuilderAssignmentRow key={`assignment-${item._id}`} assignment={item} drag={dragPropsFor(item, itemIndex)} onDelete={() => removeAssignment(item)} />
+              if (item.itemType === 'quiz') return <BuilderQuizRow key={`quiz-${item._id}`} quiz={item} drag={dragPropsFor(item, itemIndex)} onDelete={() => removeQuiz(item)} onTogglePublish={() => toggleQuizPublish(item)} />
               if (editingLessonId === item._id && item.kind === 'header') return <li key={`lesson-${item._id}`}><HeaderForm moduleId={module._id} lesson={item} position={item.position} onCancel={() => setEditingLessonId('')} onDone={() => { setEditingLessonId(''); refreshCourse() }} /></li>
               return editingLessonId === item._id
                 ? <li key={`lesson-${item._id}`}><LessonForm moduleId={module._id} lesson={item} position={item.position} onCancel={() => setEditingLessonId('')} onDone={() => { setEditingLessonId(''); refreshCourse() }} /></li>
                 : <BuilderLessonSection
                     key={`lesson-${item._id}`}
                     lesson={item}
-                    canMoveUp={canMoveUp}
-                    canMoveDown={canMoveDown}
-                    onMoveUp={onMoveUp}
-                    onMoveDown={onMoveDown}
+                    drag={dragPropsFor(item, itemIndex)}
                     onEdit={() => setEditingLessonId(item._id)}
                     onDelete={() => removeLesson(module, item)}
                     onTogglePublish={() => toggleLessonPublish(item)}
@@ -444,18 +459,19 @@ export default function CourseBuilderPage({ role }) {
     toggle(() => Promise.all([updateModule(module._id, { position: target }), updateModule(list[target]._id, { position: index })]))
   }
   // Lessons, module-level assignments, and quizzes are rendered as one ordered "Sections" list per
-  // phase (see phaseItems above) — reordering swaps `position` across whichever two collections
-  // the moved item and its neighbor happen to belong to.
-  const reorderItem = (module, item, direction) => {
+  // phase (see phaseItems above) — dragging an item to a new slot reassigns `position` across
+  // whichever mix of collections it passes over, so the drop point becomes its new position.
+  const reorderItemTo = (module, sourceIndex, targetIndex) => {
     const list = phaseItems(module)
-    const index = list.findIndex((entry) => entry.itemType === item.itemType && entry._id === item._id)
-    const target = index + direction
-    if (target < 0 || target >= list.length) return
-    const other = list[target]
-    toggle(() => Promise.all([
-      updateItemPosition[item.itemType](item._id, { position: target }),
-      updateItemPosition[other.itemType](other._id, { position: index }),
-    ]))
+    if (sourceIndex === targetIndex || sourceIndex < 0 || sourceIndex >= list.length || targetIndex < 0 || targetIndex >= list.length) return
+    const reordered = [...list]
+    const [moved] = reordered.splice(sourceIndex, 1)
+    reordered.splice(targetIndex, 0, moved)
+    const updates = reordered
+      .map((entry, position) => ({ entry, position }))
+      .filter(({ entry, position }) => entry.position !== position)
+      .map(({ entry, position }) => updateItemPosition[entry.itemType](entry._id, { position }))
+    if (updates.length) toggle(() => Promise.all(updates))
   }
   const removeModule = async (module) => {
     if (!(await confirm({ title: 'Delete this phase?', message: `“${module.title}” and its ${module.lessons.length} lesson${module.lessons.length === 1 ? '' : 's'} (plus any assignments tied to it) will be permanently deleted.`, confirmLabel: 'Delete phase' }))) return
@@ -497,7 +513,7 @@ export default function CourseBuilderPage({ role }) {
     togglePhasePublish={togglePhasePublish}
     toggleLessonPublish={toggleLessonPublish}
     toggleQuizPublish={toggleQuizPublish}
-    reorderItem={reorderItem}
+    reorderItemTo={reorderItemTo}
     removeLesson={removeLesson}
     removeAssignment={removeAssignment}
     removeQuiz={removeQuiz}

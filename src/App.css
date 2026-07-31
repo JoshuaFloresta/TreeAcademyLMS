@@ -362,7 +362,7 @@ a.task-row:hover { background: #f7f8f5; }
 .builder-phase-facts .is-live { color: #dcf0df; }.builder-phase-facts .is-live svg { color: #8fd49c; }
 .builder-phase-facts .is-draft { color: #fae6b6; }.builder-phase-facts .is-draft svg { color: #f0c76b; }
 .builder-phase-editor .course-syllabus { padding: 30px 32px 34px; }
-.builder-sections-heading { margin-bottom: 16px; padding-bottom: 17px; border-bottom: 1px solid #e9eee8; }
+.builder-sections-heading { align-items: center; margin-bottom: 16px; padding-bottom: 17px; border-bottom: 1px solid #e9eee8; }
 .builder-sections-heading .eyebrow { margin-bottom: 4px; color: #9c7c3d; }
 .builder-sections-heading h2 { margin: 0; color: var(--forest); font-size: 22px; }
 .builder-sections-heading small { display: block; max-width: 420px; margin-top: 5px; color: #7c877d; font-size: 11px; line-height: 1.5; }
@@ -377,6 +377,14 @@ a.task-row:hover { background: #f7f8f5; }
 .lesson-section-head .lesson-section-actions button:disabled { opacity: .35; cursor: not-allowed; }
 .module-lesson-item .lesson-section-body { margin: 0; padding: 0 14px 15px 37px; color: #59655b; }
 .module-lesson-item .lesson-section-body .operations-note { margin: 0; }
+.builder-lesson-body-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.builder-lesson-body-row .assignment-block-instructions { flex: 1 1 auto; min-width: 0; }
+.builder-lesson-body-row .lesson-resource-link { flex: 0 0 auto; margin-top: 0; }
+.module-lesson-list li[draggable="true"] { transition: opacity .15s ease, outline-color .15s ease; }
+.module-lesson-list li.is-dragging { opacity: .4; }
+.module-lesson-list li.is-drop-target { outline: 2px dashed #8fae90; outline-offset: -2px; }
+.drag-handle { cursor: grab; }
+.drag-handle:active { cursor: grabbing; }
 .builder-phase-editor .builder-lesson-form { margin: 0; padding: 16px; background: #f7faf6; border: 1px dashed #b9cbb9; border-radius: 7px; }
 .builder-phase-editor .builder-add-lesson { margin-top: 14px; padding: 9px 12px; color: var(--forest); background: #f2f7f1; border: 1px dashed #aec4b0; border-radius: 6px; }
 .builder-phase-editor .builder-add-lesson:hover { background: #e8f1e7; border-style: solid; }
