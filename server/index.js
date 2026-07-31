@@ -548,6 +548,11 @@ const courseIsAvailable = (course) => {
   if (course.availableUntil && new Date(course.availableUntil).getTime() < now) return false
   return true
 }
+// Same "is this pathway open" definition the public pathway-stats card uses (isPublished, not
+// archived, inside its availability window) — reused server-side to actually block a new
+// enrollment for a pathway the landing page shows as "Opens <date>" or "Enrollment closed",
+// not just hide the CTA client-side.
+const pathwayCourseIsOpen = (course) => Boolean(course && course.isPublished && !course.archivedAt && courseIsAvailable(course))
 // A learner only sees the course tied to the pathway on their approved enrollment — granted via a
 // LearningProgress row created at approval time (see provisionLearnerAccount) — not every course.
 async function learnerVisibleCourseFilter(learnerId) {
@@ -1062,6 +1067,9 @@ app.patch('/api/admin/pricing', requireAuth, requireAdmin, asyncRoute(async (req
 
 app.post('/api/enrollments', asyncRoute(async (req, res) => {
   const applicant = enrollmentInput.parse(req.body)
+  if (databaseReady && !pathwayCourseIsOpen(await courseForPathway(applicant.pathway))) {
+    return res.status(409).json({ error: 'Enrollment for this program is not currently open.' })
+  }
   const pricing = await getPricingSettings()
   const enrollmentData = { applicant: { ...applicant, email: applicant.email.toLowerCase() }, amount: totalAmountForPathway(pricing, applicant.pathway), currency: pricing.currency, status: 'application_pending' }
   const enrollment = databaseReady ? await Enrollment.create(enrollmentData) : { ...enrollmentData, id: id() }

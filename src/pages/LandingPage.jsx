@@ -13,7 +13,7 @@ import Instructors from '../components/Instructor.jsx'
 import Syllabus from '../components/Syllabus.jsx'
 import PassFirst from '../components/PassFirst.jsx'
 import Testimonials from '../components/Testimonials.jsx'
-import { faq, pathways } from '../lib/academyData.js'
+import { blockedPathwayMessage, faq, pathways } from '../lib/academyData.js'
 import { fetchPathwayStats, fetchPublicWebinars, registerForWebinar } from '../lib/publicCatalog.js'
 
 const webinarDeadlineLabel = (webinar) => {
@@ -54,6 +54,8 @@ export default function LandingPage() {
   const { data: webinars = [] } = useQuery({ queryKey: ['public-webinars'], queryFn: fetchPublicWebinars, staleTime: 60_000 })
   const modalPathway = pathways.find((pathway) => pathway.id === modalPathwayId)
   const ModalPathwayIcon = modalPathway?.icon
+  const modalStats = modalPathwayId ? pathwayStats[modalPathwayId] : null
+  const modalBlockedMessage = blockedPathwayMessage(modalStats)
 
   return (
     <div className="public-page">
@@ -145,7 +147,9 @@ export default function LandingPage() {
               <ul>
                 {modalPathway.features.map((feature) => <li key={feature}><Check /> {feature}</li>)}
               </ul>
-              <PrimaryButton to={`/enroll?pathway=${modalPathway.id}`} className="program-modal-desktop-cta">Review agreement &amp; enroll</PrimaryButton>
+              {modalBlockedMessage
+                ? <p className="program-modal-blocked-note program-modal-desktop-cta">{modalBlockedMessage}</p>
+                : <PrimaryButton to={`/enroll?pathway=${modalPathway.id}`} className="program-modal-desktop-cta">Review agreement &amp; enroll</PrimaryButton>}
               <button type="button" className="button button-primary program-modal-next" onClick={() => setModalStep('price')}>Next <ArrowRight size={17} /></button>
             </div>
             <div className="access-price">
@@ -159,7 +163,9 @@ export default function LandingPage() {
                 <div><strong>{modalPathway.title}</strong><small>{modalPathway.kicker} · {modalPathway.modules}</small></div>
               </div>
               <div className="program-modal-mobile-cta">
-                <PrimaryButton to={`/enroll?pathway=${modalPathway.id}`}>Review agreement &amp; enroll</PrimaryButton>
+                {modalBlockedMessage
+                  ? <p className="program-modal-blocked-note">{modalBlockedMessage}</p>
+                  : <PrimaryButton to={`/enroll?pathway=${modalPathway.id}`}>Review agreement &amp; enroll</PrimaryButton>}
                 <button type="button" className="program-modal-back" onClick={() => setModalStep('copy')}>Back to overview</button>
               </div>
             </div>

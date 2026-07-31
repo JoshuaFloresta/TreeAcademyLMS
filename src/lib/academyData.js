@@ -45,6 +45,16 @@ export const pathways = [
   },
 ]
 
+// Shared between the landing page's program modal and the enrollment page's own direct-link
+// safety net (someone can land on /enroll?pathway=x from a bookmark or old link without ever
+// seeing the modal) — the server is the actual gate (POST /api/enrollments), this just explains it.
+export const blockedPathwayMessage = (stats) => {
+  if (!stats) return ''
+  if (stats.closed) return 'Enrollment for this program is currently closed.'
+  if (stats.opensLater) return `Enrollment opens ${new Date(stats.availableFrom).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}.`
+  return ''
+}
+
 export const tasks = [
   { title: 'Property valuation practice set', course: 'Broker Review', due: 'Due tomorrow', state: 'late' },
   { title: 'Client consultation reflection', course: 'Consultant Review', due: 'Due Fri, 26 Jul', state: 'soon' },

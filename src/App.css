@@ -1203,6 +1203,7 @@ button.forum-stat.active svg { fill: currentColor; }
 
 /* Program modal — single-card stepper on phones */
 .program-modal-next, .program-modal-mobile-cta { display: none; }
+.program-modal-blocked-note { display: inline-flex; align-items: center; max-width: max-content; margin: 0; padding: 12px 18px; color: #f7ecd2; background: rgba(255,255,255,.08); border: 1px solid rgba(212,189,127,.4); border-radius: 8px; font-size: 12px; font-weight: 600; }
 @media (max-width: 480px) {
   .modal-panel.program-modal .access-section { display: block; }
   .modal-panel.program-modal .mobile-step-copy .access-price, .modal-panel.program-modal .mobile-step-price .access-copy { display: none; }
