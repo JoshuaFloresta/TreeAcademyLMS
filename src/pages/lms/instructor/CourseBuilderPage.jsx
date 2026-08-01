@@ -117,7 +117,10 @@ function HeaderForm({ moduleId, lesson, position, onCancel, onDone }) {
   const [title, setTitle] = useState(lesson?.title ?? '')
   const [error, setError] = useState('')
   const toast = useToast()
-  const mutation = useMutation({ mutationFn: () => (lesson ? updateLesson(lesson._id, { title: title.trim() }) : createLesson(moduleId, { title: title.trim(), kind: 'header', position })) })
+  // Headers publish on creation. They're content-less dividers with no publish toggle in the row's
+  // controls, so defaulting to isPublished:false (the Lesson schema default) left every header
+  // permanently invisible to learners with no way for an instructor to reveal it.
+  const mutation = useMutation({ mutationFn: () => (lesson ? updateLesson(lesson._id, { title: title.trim() }) : createLesson(moduleId, { title: title.trim(), kind: 'header', position, isPublished: true })) })
   const submit = async (event) => {
     event.preventDefault()
     if (title.trim().length < 2) return

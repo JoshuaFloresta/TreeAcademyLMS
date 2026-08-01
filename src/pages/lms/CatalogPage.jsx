@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ArrowRight, BookOpen, CalendarClock, Check, ChevronDown, ClipboardCheck, ExternalLink, Layers, Pencil, Play } from 'lucide-react'
+import { ArrowLeft, ArrowRight, BookOpen, CalendarClock, Check, ChevronDown, ClipboardCheck, ExternalLink, Layers, Minus, Pencil, Play } from 'lucide-react'
 import CourseBanner from '../../components/lms/CourseBanner.jsx'
 import RichTextViewer from '../../components/RichTextViewer.jsx'
 import { useToast } from '../../lib/toastContext.js'
@@ -25,6 +25,10 @@ function AssignmentRow({ assignment }) {
 // plus any assignments under it.
 function LessonSection({ lesson }) {
   const [open, setOpen] = useState(false)
+  // A 'header' lesson is a content-less divider grouping the sections beneath it, so it renders as
+  // a plain heading — matching the instructor's Course Builder — rather than a collapsible row
+  // that would open to nothing and be labelled with the raw kind string.
+  if (lesson.kind === 'header') return <li className="module-header-row"><span><Minus size={13} /> {lesson.title}</span></li>
   return <li className="module-lesson-item">
     <button type="button" className="lesson-section-head" onClick={() => setOpen((current) => !current)} aria-expanded={open}>
       <ChevronDown size={14} className={`lesson-section-chevron ${open ? 'open' : ''}`} />
