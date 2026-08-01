@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ArrowRight, BookOpen, CalendarClock, Check, ChevronDown, ClipboardCheck, ExternalLink, Layers, Minus, Pencil, Play } from 'lucide-react'
 import CourseBanner from '../../components/lms/CourseBanner.jsx'
+import StatusPill from '../../components/StatusPill.jsx'
 import RichTextViewer from '../../components/RichTextViewer.jsx'
 import { useToast } from '../../lib/toastContext.js'
 import { completeModule, fetchCourse, fetchCourseCategories, fetchCourseCategory, fetchCourses, updateModule } from '../../lib/lms.js'
@@ -193,9 +194,27 @@ function PhaseGrid({ role, onOpenPhase, onOpenCategory }) {
 
   return <>
     <div className="page-title-row">
-      <div><p className="eyebrow">ALL-ACCESS LIBRARY</p><h1>Modules catalog</h1><p>Your review phases, in order.</p></div>
+      <div><p className="eyebrow">ALL-ACCESS LIBRARY</p><h1>Modules catalog</h1><p>{!isStaff && courses.length > 1 ? 'Choose a program to see its review phases.' : 'Your review phases, in order.'}</p></div>
       {isStaff && courses.length > 1 && <select value={activeCourseId} onChange={(event) => setCourseId(event.target.value)} className="filter-button" aria-label="Select course">{courses.map((item) => <option key={item._id} value={item._id}>{item.title}</option>)}</select>}
     </div>
+    {/* A learner approved for more than one pathway holds several courses, but the page only ever
+        rendered courses[0] — the switcher above was staff-only, leaving the second program with no
+        way in. Tabs rather than a dropdown: a learner has a handful of programs, and showing their
+        names side by side makes it obvious a second one exists. */}
+    {!isStaff && courses.length > 1 && <div className="course-tabs" role="tablist" aria-label="Select program">
+      {courses.map((item) => <button
+        type="button"
+        key={item._id}
+        role="tab"
+        aria-selected={item._id === activeCourseId}
+        className={`course-tab ${item._id === activeCourseId ? 'active' : ''}`}
+        onClick={() => setCourseId(item._id)}
+      >
+        <BookOpen size={15} />
+        <span>{item.title}</span>
+        <StatusPill kind={(item.progressPercent ?? 0) >= 100 ? 'green' : 'gold'}>{item.progressPercent ?? 0}%</StatusPill>
+      </button>)}
+    </div>}
     {coursesLoading && <Loading block label="Loading…" />}
     {error && <div className="empty-state"><BookOpen size={26} /><strong>Could not load your course</strong><p>{error.message}</p></div>}
     {!coursesLoading && !error && courses.length === 0 && <div className="empty-state"><BookOpen size={26} /><strong>No course access yet</strong><p>Once your enrollment is approved, your review phases will appear here.</p></div>}

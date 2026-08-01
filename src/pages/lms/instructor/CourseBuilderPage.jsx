@@ -532,13 +532,13 @@ export default function CourseBuilderPage({ role }) {
     {coursesFailed && <p className="form-alert" role="alert">{coursesError?.message ?? 'Could not load courses. Please refresh and try again.'}</p>}
     {/* Course switcher as tabs rather than a sidebar column — the builder canvas needs the full page
         width for its phase cards, and with a handful of courses the tabs stay readable. */}
-    <div className="builder-course-tabs" role="tablist" aria-label="Select course">
+    <div className="course-tabs" role="tablist" aria-label="Select course">
       {courses.map((item) => <button
         type="button"
         key={item._id}
         role="tab"
         aria-selected={item._id === activeId}
-        className={`builder-course-tab ${item._id === activeId ? 'active' : ''}`}
+        className={`course-tab ${item._id === activeId ? 'active' : ''}`}
         onClick={() => setSelectedId(item._id)}
       >
         <BookOpen size={15} />
