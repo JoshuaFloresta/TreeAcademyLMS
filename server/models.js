@@ -243,7 +243,8 @@ const enrollmentSchema = new Schema({
   currency: { type: String, default: 'PHP' },
   // Optional itemisation of `amount` (Tuition, Materials, Exam fee…) for a breakdown receipt. Empty
   // means one implicit line for the full amount, so an ordinary enrollment needs nothing filled in.
-  feeBreakdown: [{ label: { type: String, required: true, trim: true, maxlength: 120 }, amount: { type: Number, required: true, min: 0 } }],
+  // A line may be negative — that's how a discount or written-off amount is itemised and explained.
+  feeBreakdown: [{ label: { type: String, required: true, trim: true, maxlength: 120 }, amount: { type: Number, required: true } }],
   // 'manual' marks a billing record staff created for a learner who never went through the public
   // enrollment flow — no intake, no signed agreement. Most of the current roster was onboarded that
   // way and had no billing record at all until this existed.

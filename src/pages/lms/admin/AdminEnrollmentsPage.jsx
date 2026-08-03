@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, ArchiveRestore, CalendarClock, Check, CreditCard, Wallet, X } from 'lucide-react'
+import { Archive, ArchiveRestore, CalendarClock, Check, CreditCard, Receipt, Wallet, X } from 'lucide-react'
 import EnrollmentDocumentLinks from '../../../components/EnrollmentDocumentLinks.jsx'
+import BillingDetailModal from '../../../components/admin/BillingDetailModal.jsx'
 import StatusPill from '../../../components/StatusPill.jsx'
 import Modal from '../../../components/Modal.jsx'
 import { useConfirm } from '../../../lib/confirmContext.js'
@@ -53,6 +54,7 @@ export default function AdminEnrollmentsPage() {
   const [selected, setSelected] = useState(() => new Set())
   const [showArchived, setShowArchived] = useState(false)
   const [dueDateRow, setDueDateRow] = useState(null)
+  const [billingRow, setBillingRow] = useState(null)
   const { data: enrollments = [], isLoading, isFetching, refetch } = useQuery({ queryKey: ['admin-enrollments', showArchived], queryFn: () => fetchAdminEnrollments({ archived: showArchived ? 'only' : undefined }) })
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin-enrollments'] })
 
@@ -151,6 +153,7 @@ export default function AdminEnrollmentsPage() {
               <button className="button button-primary button-compact" onClick={() => decide(row, 'approved')}><Check size={14} /> Approve</button>
               <button className="button button-ghost button-compact" onClick={() => decide(row, 'rejected')}><X size={14} /> Reject</button>
             </>}
+            <button className="button button-ghost button-compact" onClick={() => setBillingRow(row)}><Receipt size={14} /> Payments</button>
             {row.status === 'approved' && Number(row.balance ?? 0) > 0 && <button className="button button-ghost button-compact" onClick={() => setDueDateRow(row)}><CalendarClock size={14} /> {row.payment?.balanceDueDate ? 'Edit due date' : 'Set due date'}</button>}
             {showArchived
               ? <button className="button button-ghost button-compact" onClick={() => archive(row, false)} disabled={archiveMutation.isPending}><ArchiveRestore size={14} /> Restore</button>
@@ -159,5 +162,7 @@ export default function AdminEnrollmentsPage() {
         </div> })}
     </div>
     <BalanceDueModal row={dueDateRow} onClose={() => setDueDateRow(null)} onSaved={() => { setDueDateRow(null); invalidate() }} />
+    {/* Same panel the Billing page uses — one implementation, so the two screens can't drift apart. */}
+    {billingRow && <BillingDetailModal enrollmentId={rowId(billingRow)} name={billingRow.applicant?.name} email={billingRow.applicant?.email} pathwayTitle={pathwayLabel[billingRow.applicant?.pathway] ?? billingRow.applicant?.pathway} onClose={() => setBillingRow(null)} onChanged={invalidate} />}
   </>
 }

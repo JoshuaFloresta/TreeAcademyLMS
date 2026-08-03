@@ -500,6 +500,8 @@ a.task-row:hover { background: #f7f8f5; }
 .billing-section { display: grid; gap: 9px; }
 .billing-section h3 { margin: 0; color: var(--forest); font-size: 13px; font-weight: 800; letter-spacing: -.01em; }
 .billing-hint { margin: 0; color: #7a8079; font-size: 11.5px; line-height: 1.55; }
+.billing-total-field { max-width: 200px; }
+.billing-warn { color: #a8443a; font-weight: 700; }
 .billing-breakdown { display: grid; gap: 7px; }
 .billing-breakdown-row { display: grid; grid-template-columns: minmax(0, 1fr) 110px 34px; gap: 7px; }
 .billing-breakdown-row input { padding: 8px 10px; background: #fff; border: 1px solid #dbe0da; border-radius: 6px; font-size: 12px; }

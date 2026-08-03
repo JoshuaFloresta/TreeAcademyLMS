@@ -145,9 +145,12 @@ const paymentInput = z.object({
 // without re-sending the rest.
 const paymentPatchInput = paymentInput.partial()
 const paymentVoidInput = z.object({ reason: z.string().trim().min(3, 'Say why this payment is being voided.').max(500) })
+// Negative amounts are allowed so a discount, scholarship, or written-off balance can be an itemised
+// line with its own explanation ("Early-bird discount −₱5,000") rather than an unexplained drop in
+// the total. The reconciliation check below still forces the lines to sum to the amount.
 const feeBreakdownInput = z.array(z.object({
   label: z.string().trim().min(1, 'Each line needs a label.').max(120),
-  amount: z.coerce.number().min(0).max(1_000_000),
+  amount: z.coerce.number().min(-1_000_000).max(1_000_000),
 })).max(20)
 const billingPatchInput = z.object({
   amount: z.coerce.number().min(1).max(1_000_000).optional(),
