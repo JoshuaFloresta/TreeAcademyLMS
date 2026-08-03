@@ -18,7 +18,7 @@ async function responseData(response) {
 }
 
 export default function EnrollmentPage() {
-  const [params] = useSearchParams()
+  const [params, setParams] = useSearchParams()
   const navigate = useNavigate()
   const paymentState = params.get('payment')
   const [step, setStep] = useState(paymentState ? 4 : 1)
@@ -42,6 +42,24 @@ export default function EnrollmentPage() {
   // gate (POST /api/enrollments rejects it either way), but this avoids sending someone through
   // the whole admission form only to be rejected at the very end.
   const pathwayBlockedMessage = blockedPathwayMessage(pathwayStats[pathway.id])
+  // The pathway lives in the URL, so switching it is just a param change — shareable, and the
+  // document type, pricing, and blocked-state checks above all re-derive from it automatically.
+  // Only offered before the enrollment record exists: once POST /api/enrollments has run, the
+  // pathway is committed server-side and the signed agreement is keyed to it.
+  const canChangePathway = step === 1 && !application
+  const changePathway = (id) => {
+    const next = new URLSearchParams(params)
+    next.set('pathway', id)
+    setParams(next, { replace: true })
+  }
+  // Closed / not-yet-open pathways are shown but not selectable, so nobody can switch into a dead
+  // end where the form is replaced by a blocked notice and there's no selector left to switch back.
+  const pathwayOptions = pathways.map((item) => {
+    const stats = pathwayStats[item.id]
+    const note = !stats ? '' : stats.closed ? ' — enrollment closed'
+      : stats.opensLater ? ` — opens ${new Date(stats.availableFrom).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''
+    return { id: item.id, title: item.title, note, disabled: Boolean(note) }
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -89,7 +107,7 @@ export default function EnrollmentPage() {
   const activeProgress = step >= 4 ? 4 : step
   const content = pathwayBlockedMessage && step === 1 && !application
     ? <div className="enrollment-fallback"><h2>This program isn’t open right now.</h2><p>{pathwayBlockedMessage} Please check back once enrollment opens, or explore our other pathways.</p><Link className="button button-primary" to="/">Return home</Link></div>
-    : step === 1 ? <ApplicationStep pathway={pathway} applicant={application} onSubmit={submitApplication} onBack={() => navigate('/')} submitting={busy} error={formError} />
+    : step === 1 ? <ApplicationStep pathway={pathway} applicant={application} onSubmit={submitApplication} onBack={() => navigate('/')} submitting={busy} error={formError} pathwayOptions={pathwayOptions} onPathwayChange={canChangePathway ? changePathway : undefined} />
     : step === 2 ? <DocumentStep enrollmentId={application?.id} type={documentType} applicant={application} application={intake} onSubmit={(payload) => submitDocument(documentType, payload)} onBack={() => setStep(1)} submitting={busy} error={formError} />
       : step === 3 ? <PaymentStep amount={application?.amount} currency={application?.currency} upfrontAmount={upfrontAmount} onPay={launchPayment} message={paymentMessage} onBack={() => setStep(2)} loading={busy} />
         : <div className="enrollment-fallback"><h2>Something went wrong.</h2><p>Your enrollment session is not available right now. Please refresh or return home to try again.</p><button type="button" className="button button-ghost" onClick={() => navigate('/enroll')}>Restart enrollment</button></div>
