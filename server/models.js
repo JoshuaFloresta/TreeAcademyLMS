@@ -241,6 +241,13 @@ const enrollmentSchema = new Schema({
   },
   amount: { type: Number, required: true },
   currency: { type: String, default: 'PHP' },
+  // Optional itemisation of `amount` (Tuition, Materials, Exam fee…) for a breakdown receipt. Empty
+  // means one implicit line for the full amount, so an ordinary enrollment needs nothing filled in.
+  feeBreakdown: [{ label: { type: String, required: true, trim: true, maxlength: 120 }, amount: { type: Number, required: true, min: 0 } }],
+  // 'manual' marks a billing record staff created for a learner who never went through the public
+  // enrollment flow — no intake, no signed agreement. Most of the current roster was onboarded that
+  // way and had no billing record at all until this existed.
+  origin: { type: String, enum: ['enrollment', 'manual'], default: 'enrollment', index: true },
   status: {
     type: String,
     enum: ['application_pending', 'documents_pending', 'documents_complete', 'payment_pending', 'contract_pending', 'contract_signed', 'paid_approval_pending', 'approved', 'rejected', 'refunded'],
@@ -257,17 +264,15 @@ const enrollmentSchema = new Schema({
     reclex: { pdfKey: String, signedAt: Date, signatureName: String },
   },
   contract: { envelopeId: String, signedPdfKey: String, signedAt: Date },
+  // In-flight checkout session state plus the staff balance reminder. NOT the record of money
+  // received — that is the Payment collection below, which can hold more than one transaction.
+  // These fields stay because the checkout/session ones describe the PayMongo session itself, and
+  // existing admin views read `plan`/`planAmount` as a summary of the first payment.
   payment: {
     provider: String, transactionId: String, checkoutId: String, checkoutUrl: String, referenceNumber: String, paidAt: Date, refundedAt: Date,
     // `plan` records whether the learner chose to pay the full price or just the pathway's
-    // upfront/reservation fee at checkout — `planAmount` is what was actually charged, so staff
-    // can see the remaining balance (enrollment.amount - planAmount) and follow up manually.
-    // 'test' is historical only — a temporary ₱1 checkout option that was removed from the UI and
-    // from paymentSessionInput, so nothing can create one now. It stays in the enum because four
-    // enrollments were actually paid that way; dropping it would make those rows fail validation on
-    // any later save (e.g. a staff member setting a balance note), and rewriting what they were
-    // charged would falsify a payment record.
-    plan: { type: String, enum: ['full', 'upfront', 'test'] },
+    // upfront/reservation fee at checkout — `planAmount` is what was actually charged.
+    plan: { type: String, enum: ['full', 'upfront'] },
     planAmount: Number,
     // Staff-set, for the "pay upfront only" plan's remaining balance — purely informational (shown
     // on the learner's Statement of Account); nothing in-app enforces or collects it automatically.
@@ -279,6 +284,36 @@ const enrollmentSchema = new Schema({
   decisionReason: String,
   archivedAt: Date,
 }, { timestamps: true })
+
+// One row per payment actually received — the ledger behind a Statement of Account. The embedded
+// `enrollment.payment` above can only ever hold a single transaction, which made the real business
+// flow impossible to represent: upfront fee now, balance settled offline weeks later had nowhere to
+// go. Totals are summed from these rows rather than inferred from enrollment status.
+//
+// Rows are voided, never deleted. Erasing the evidence that money was received is not something an
+// admin screen should be able to do; a voided row keeps its figures and drops out of the totals.
+const paymentSchema = new Schema({
+  enrollmentId: { type: Schema.Types.ObjectId, ref: 'Enrollment', required: true, index: true },
+  amount: { type: Number, required: true, min: 0 },
+  currency: { type: String, default: 'PHP' },
+  // 'paymongo' rows are written by the signature-verified webhook; the rest are staff-recorded
+  // offline collections, which is how every balance payment currently arrives.
+  method: { type: String, enum: ['paymongo', 'cash', 'bank_transfer', 'gcash', 'maya', 'check', 'other'], required: true },
+  // What the payment was *for* — the label the statement and receipt show against it.
+  kind: { type: String, enum: ['upfront', 'balance', 'full', 'adjustment'], default: 'balance' },
+  receivedAt: { type: Date, required: true },
+  reference: { type: String, trim: true, maxlength: 200 },
+  note: { type: String, trim: true, maxlength: 500 },
+  // Null on webhook-written rows — there is no human behind those.
+  recordedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  voidedAt: Date,
+  voidedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  voidReason: { type: String, trim: true, maxlength: 500 },
+}, { timestamps: true })
+// Statements read a whole enrollment's ledger in date order. Deliberately not unique on
+// (enrollmentId, reference): two offline cash payments legitimately have no reference at all, so
+// duplicate protection lives in the webhook's WebhookEvent dedupe and the migration's own check.
+paymentSchema.index({ enrollmentId: 1, receivedAt: 1 })
 
 // The generic, no-payment counterpart to Enrollment — for courses outside the 3 fixed pathways that
 // carry their own admin-uploaded agreementTemplate (see Course above). A row only ever exists
@@ -559,6 +594,7 @@ export const SubmissionComment = models.SubmissionComment || model('SubmissionCo
 export const Quiz = models.Quiz || model('Quiz', quizSchema)
 export const QuizAttempt = models.QuizAttempt || model('QuizAttempt', quizAttemptSchema)
 export const Enrollment = models.Enrollment || model('Enrollment', enrollmentSchema)
+export const Payment = models.Payment || model('Payment', paymentSchema)
 export const CourseEnrollment = models.CourseEnrollment || model('CourseEnrollment', courseEnrollmentSchema)
 export const PricingSettings = models.PricingSettings || model('PricingSettings', pricingSettingsSchema)
 export const CalendarEvent = models.CalendarEvent || model('CalendarEvent', calendarEventSchema)

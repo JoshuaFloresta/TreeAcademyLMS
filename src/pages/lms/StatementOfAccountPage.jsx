@@ -16,7 +16,7 @@ const statusMeta = {
   rejected: { label: 'Rejected', kind: 'red' },
   refunded: { label: 'Refunded', kind: 'red' },
 }
-const planLabel = { full: 'Paid in full', upfront: 'Upfront reservation fee', test: 'Test charge' }
+const planLabel = { full: 'Paid in full', upfront: 'Upfront reservation fee' }
 const peso = (value) => `₱${Number(value ?? 0).toLocaleString('en-PH')}`
 const formatDate = (value) => (value ? new Date(value).toLocaleDateString('en-PH', { dateStyle: 'medium' }) : '—')
 

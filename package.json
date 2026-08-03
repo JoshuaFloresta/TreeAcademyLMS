@@ -13,6 +13,8 @@
     "migrate:backfill-access": "node server/migrate-backfill-enrollment-access.js",
     "migrate:backfill-profiles": "node server/migrate-backfill-profiles.js",
     "migrate:backfill-quiz-modules": "node server/migrate-backfill-quiz-modules.js",
+    "migrate:backfill-billing": "node server/migrate-backfill-billing.js",
+    "migrate:payments": "node server/migrate-payments.js",
     "migrate:storage": "node server/migrate-storage.js",
     "migrate:rename-agent-pathway": "node server/migrate-rename-agent-to-appraiser.js",
     "build": "vite build",

@@ -10,7 +10,7 @@ import EnrollmentSentModal from '../components/enrollment/EnrollmentSentModal.js
 import HelpLauncher from '../components/enrollment/HelpLauncher.jsx'
 import { API_URL, fetchPricing } from '../lib/api.js'
 import { fetchPathwayStats } from '../lib/publicCatalog.js'
-import { blockedPathwayMessage, pathways } from '../lib/academyData.js'
+import { blockedPathwayMessage, pathways, upfrontKeyByPathway } from '../lib/academyData.js'
 
 async function responseData(response) {
   const data = await response.json().catch(() => ({}))
@@ -35,7 +35,6 @@ export default function EnrollmentPage() {
   const pathway = pathways.find((item) => item.id === params.get('pathway')) ?? pathways[0]
   const documentType = pathway.id === 'consultant' ? 'reclex' : 'realex-reblex'
   const [pricing, setPricing] = useState(null)
-  const upfrontKeyByPathway = { broker: 'upfrontBroker', consultant: 'upfrontConsultant', appraiser: 'upfrontAppraiser' }
   const upfrontAmount = pricing ? pricing[upfrontKeyByPathway[pathway.id]] : null
   const [pathwayStats, setPathwayStats] = useState({})
   // Catches a direct/bookmarked link to a pathway that's since closed or isn't open yet — the

@@ -45,6 +45,22 @@ export const pathways = [
   },
 ]
 
+// The `price`/`upfrontFee` strings above are fallback copy only. PricingSettings (admin-edited, and
+// what checkout actually charges) is the source of truth, so whenever /api/pricing loads it wins —
+// otherwise the landing page can silently advertise a figure the checkout no longer honours, which
+// is exactly what happened when broker/appraiser drifted to half their real price.
+export const totalKeyByPathway = { broker: 'totalBroker', consultant: 'totalConsultant', appraiser: 'totalAppraiser' }
+export const upfrontKeyByPathway = { broker: 'upfrontBroker', consultant: 'upfrontConsultant', appraiser: 'upfrontAppraiser' }
+export const peso = (value) => `₱${Number(value).toLocaleString('en-PH')}`
+export const pathwayPricing = (pathway, pricing) => {
+  const total = Number(pricing?.[totalKeyByPathway[pathway.id]])
+  const upfront = Number(pricing?.[upfrontKeyByPathway[pathway.id]])
+  return {
+    price: Number.isFinite(total) && total > 0 ? peso(total) : pathway.price,
+    upfrontFee: Number.isFinite(upfront) && upfront > 0 ? `${peso(upfront)} upfront fee` : pathway.upfrontFee,
+  }
+}
+
 // Shared between the landing page's program modal and the enrollment page's own direct-link
 // safety net (someone can land on /enroll?pathway=x from a bookmark or old link without ever
 // seeing the modal) — the server is the actual gate (POST /api/enrollments), this just explains it.

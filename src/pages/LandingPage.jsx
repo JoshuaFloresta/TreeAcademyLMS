@@ -15,8 +15,9 @@ import Coaches from '../components/Coaches.jsx'
 import Syllabus from '../components/Syllabus.jsx'
 import PassFirst from '../components/PassFirst.jsx'
 import Testimonials from '../components/Testimonials.jsx'
-import { blockedPathwayMessage, faq, pathways } from '../lib/academyData.js'
+import { blockedPathwayMessage, faq, pathwayPricing, pathways } from '../lib/academyData.js'
 import { fetchPathwayStats, fetchPublicWebinars, registerForWebinar } from '../lib/publicCatalog.js'
+import { fetchPricing } from '../lib/api.js'
 
 const webinarDeadlineLabel = (webinar) => {
   const deadline = new Date(webinar.registrationDeadline ?? webinar.startsAt)
@@ -54,7 +55,11 @@ export default function LandingPage() {
   const [registeringWebinar, setRegisteringWebinar] = useState(null)
   const { data: pathwayStats = {} } = useQuery({ queryKey: ['public-pathway-stats'], queryFn: fetchPathwayStats, staleTime: 60_000 })
   const { data: webinars = [] } = useQuery({ queryKey: ['public-webinars'], queryFn: fetchPublicWebinars, staleTime: 60_000 })
+  // Live pricing, so what's advertised here is always what checkout will charge. Failure is fine —
+  // pathwayPricing falls back to the static copy in academyData.js rather than showing nothing.
+  const { data: pricing } = useQuery({ queryKey: ['public-pricing'], queryFn: fetchPricing, staleTime: 60_000, retry: 1 })
   const modalPathway = pathways.find((pathway) => pathway.id === modalPathwayId)
+  const modalPrice = modalPathway ? pathwayPricing(modalPathway, pricing) : null
   const ModalPathwayIcon = modalPathway?.icon
   const modalStats = modalPathwayId ? pathwayStats[modalPathwayId] : null
   const modalBlockedMessage = blockedPathwayMessage(modalStats)
@@ -157,8 +162,8 @@ export default function LandingPage() {
             <div className="access-price">
               <div className="price-sticker">{modalPathway.examTag}</div>
               <p className="eyebrow">LICENSURE REVIEW · {modalPathway.duration}</p>
-              <div className="price">{modalPathway.price}<span>PHP</span></div>
-              <p>{modalPathway.upfrontFee}</p>
+              <div className="price">{modalPrice.price}<span>PHP</span></div>
+              <p>{modalPrice.upfrontFee}</p>
               <div className="price-divider" />
               <div className="price-feature">
                 <span><ModalPathwayIcon /></span>
