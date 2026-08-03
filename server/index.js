@@ -1407,14 +1407,22 @@ app.get('/api/staff/enrollments', requireAuth, requireStaff, asyncRoute(async (r
   // The stored row carries the whole intake form and the PDF storage keys. The list only renders a
   // summary, so send a summary — raw applicant answers and file keys have no business in a payload
   // this widely fetched. Staff read the full form by opening the document itself.
-  const summarise = (row) => ({
+  // `amountPaid`/`balance` come from the Payment ledger, not from payment.planAmount — a learner can
+  // have several payments, and a manually billed one has no embedded payment at all. Without these
+  // this page's revenue and outstanding totals would disagree with the Billing page and with what
+  // the learner sees on their own statement.
+  const summarise = (row, paid = 0) => ({
     _id: String(row._id ?? row.id), applicant: row.applicant, status: row.status, amount: row.amount, currency: row.currency,
+    origin: row.origin ?? 'enrollment',
+    amountPaid: paid, balance: Math.max(0, Number(row.amount ?? 0) - paid),
     payment: row.payment ? { plan: row.payment.plan, planAmount: row.payment.planAmount, paidAt: row.payment.paidAt, referenceNumber: row.payment.referenceNumber, balanceDueDate: row.payment.balanceDueDate ?? null, balanceNote: row.payment.balanceNote ?? '' } : undefined,
     createdAt: row.createdAt, archivedAt: row.archivedAt ?? null, documents: enrollmentDocuments(row),
   })
   if (databaseReady) {
     const filter = scope === 'all' ? {} : scope === 'only' ? { archivedAt: { $ne: null } } : { archivedAt: null }
-    return res.json((await Enrollment.find(filter).sort({ createdAt: -1 }).lean()).map(summarise))
+    const rows = await Enrollment.find(filter).sort({ createdAt: -1 }).lean()
+    const paid = await paidByEnrollment(rows.map((row) => row._id))
+    return res.json(rows.map((row) => summarise(row, paid.get(String(row._id)) ?? 0)))
   }
   const rows = [...memory.enrollments.values()].reverse()
   res.json((scope === 'all' ? rows : rows.filter((row) => (scope === 'only' ? row.archivedAt : !row.archivedAt))).map(summarise))

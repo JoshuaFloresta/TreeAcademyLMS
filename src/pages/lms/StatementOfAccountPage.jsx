@@ -16,8 +16,14 @@ const statusMeta = {
   rejected: { label: 'Rejected', kind: 'red' },
   refunded: { label: 'Refunded', kind: 'red' },
 }
-const planLabel = { full: 'Paid in full', upfront: 'Upfront reservation fee' }
 const peso = (value) => `₱${Number(value ?? 0).toLocaleString('en-PH')}`
+// Derived from the ledger, not from payment.plan. `plan` is only ever set by PayMongo checkout, so
+// a learner billed manually had one — showing "Not yet paid" above figures that said ₱5,000 paid.
+const paymentSummary = (row) => {
+  if (!Number(row.amountPaid)) return 'Not yet paid'
+  if (Number(row.balance) <= 0) return 'Paid in full'
+  return `Partially paid — ${peso(row.balance)} remaining`
+}
 const formatDate = (value) => (value ? new Date(value).toLocaleDateString('en-PH', { dateStyle: 'medium' }) : '—')
 
 // A learner's own billing history — every enrollment tied to their email, with the fee, what
@@ -37,7 +43,7 @@ export default function StatementOfAccountPage() {
         const meta = statusMeta[row.status] ?? { label: row.status, kind: 'gold' }
         return <article className="statement-card" key={row.id}>
           <div className="statement-card-head">
-            <div><h2>{row.pathwayTitle}</h2><small>{row.plan ? planLabel[row.plan] ?? row.plan : 'Not yet paid'}</small></div>
+            <div><h2>{row.pathwayTitle}</h2><small>{paymentSummary(row)}</small></div>
             <StatusPill kind={meta.kind}>{meta.label}</StatusPill>
           </div>
           <div className="statement-figures">

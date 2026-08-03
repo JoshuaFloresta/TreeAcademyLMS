@@ -67,6 +67,15 @@ export const archiveEnrollment = (id, archived) => post(`/api/admin/enrollments/
 // upfront only" plan — purely informational, not an in-app payment collector.
 export const setEnrollmentBalanceDue = (id, body) => patch(`/api/staff/enrollments/${id}/balance-due`, body)
 
+// Billing — the Payment ledger. A payment is never deleted, only voided, so there is no del() here.
+export const fetchStaffBilling = () => get('/api/staff/billing')
+export const createBillingRecord = (body) => post('/api/staff/billing/enrollments', body)
+export const updateEnrollmentBilling = (id, body) => patch(`/api/staff/enrollments/${id}/billing`, body)
+export const fetchEnrollmentPayments = (id) => get(`/api/staff/enrollments/${id}/payments`)
+export const recordPayment = (id, body) => post(`/api/staff/enrollments/${id}/payments`, body)
+export const updatePayment = (id, body) => patch(`/api/staff/payments/${id}`, body)
+export const voidPayment = (id, reason) => post(`/api/staff/payments/${id}/void`, { reason })
+
 // Submitted admission forms and signed agreements. The server streams the bytes rather than
 // handing out a URL, so this goes through authedFetch and becomes a local blob — which also lets
 // the caller decide between opening it in a tab and saving it, from the same single request.

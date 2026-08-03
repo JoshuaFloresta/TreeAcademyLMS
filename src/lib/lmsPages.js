@@ -21,6 +21,7 @@ const builtInPageOptions = {
   'admin-courses': { label: 'Course Catalog & Pricing', roles: ['admin'], to: '/admin/courses' },
   'admin-roles': { label: 'Roles & Permissions', roles: ['admin'], to: '/admin/roles' },
   'admin-enrollments': { label: 'Enrollment Management', roles: ['admin'], to: '/admin/enrollments' },
+  'admin-billing': { label: 'Billing & Payments', roles: ['admin'], to: '/admin/billing' },
   'admin-audit': { label: 'Audit Logs', roles: ['admin'], to: '/admin/audit' },
   'admin-content': { label: 'Content Library', roles: ['admin'], to: '/admin/content' },
   'admin-support': { label: 'Support / Helpdesk', roles: ['admin'], to: '/admin/support' },

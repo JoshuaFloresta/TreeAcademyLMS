@@ -68,15 +68,12 @@ export default function AdminEnrollmentsPage() {
   }
 
   const pending = showArchived ? [] : enrollments.filter((row) => row.status === 'paid_approval_pending')
-  // Revenue is what was actually charged (payment.planAmount — the upfront fee alone on that
-  // plan), not the listed enrollment price, and counts every enrollment that ever completed a
-  // payment regardless of its current status (e.g. still counts a later-refunded one).
-  const paidEnrollments = enrollments.filter((row) => row.payment?.paidAt)
-  const totalRevenue = paidEnrollments.reduce((sum, row) => sum + Number(row.payment?.planAmount ?? 0), 0)
-  // What's still owed on "pay upfront only" plans — the gap between the full enrollment price and
-  // what was actually charged — summed across confirmed enrollments. Mirrors the per-row "Balance
-  // due" note below.
-  const outstandingBalance = enrollments.filter((row) => row.status === 'approved').reduce((sum, row) => sum + (Number(row.amount ?? 0) - Number(row.payment?.planAmount ?? 0)), 0)
+  // Revenue and outstanding both come from the server's ledger totals (amountPaid/balance), so these
+  // agree with the Billing page and with each learner's own statement. Counting payment.planAmount
+  // here used to miss every offline payment and every manually billed learner.
+  const paidEnrollments = enrollments.filter((row) => Number(row.amountPaid ?? 0) > 0)
+  const totalRevenue = enrollments.reduce((sum, row) => sum + Number(row.amountPaid ?? 0), 0)
+  const outstandingBalance = enrollments.filter((row) => row.status === 'approved').reduce((sum, row) => sum + Number(row.balance ?? 0), 0)
   const selectablePendingIds = pending.map(rowId)
   const allSelected = selectablePendingIds.length > 0 && selectablePendingIds.every((id) => selected.has(id))
 
@@ -142,10 +139,10 @@ export default function AdminEnrollmentsPage() {
           <span>{pathwayLabel[row.applicant?.pathway] ?? row.applicant?.pathway}</span>
           <span>
             <StatusPill kind={pillKind(row.status)}>{statusLabel[row.status] ?? row.status}</StatusPill>
-            {row.payment?.plan === 'upfront' && <small style={{ display: 'block', marginTop: 4, color: '#a17e40', fontWeight: 700 }}>
-              Balance due {peso(Number(row.amount ?? 0) - Number(row.payment?.planAmount ?? 0))}{row.payment?.balanceDueDate ? ` by ${formatDueDate(row.payment.balanceDueDate)}` : ' — follow up'}
+            {row.status === 'approved' && Number(row.balance ?? 0) > 0 && <small style={{ display: 'block', marginTop: 4, color: '#a17e40', fontWeight: 700 }}>
+              Balance due {peso(row.balance)}{row.payment?.balanceDueDate ? ` by ${formatDueDate(row.payment.balanceDueDate)}` : ' — follow up'}
             </small>}
-            {row.payment?.plan === 'upfront' && row.payment?.balanceNote && <small style={{ display: 'block', marginTop: 2, color: '#8b9389', fontStyle: 'italic' }}>{row.payment.balanceNote}</small>}
+            {row.status === 'approved' && Number(row.balance ?? 0) > 0 && row.payment?.balanceNote && <small style={{ display: 'block', marginTop: 2, color: '#8b9389', fontStyle: 'italic' }}>{row.payment.balanceNote}</small>}
           </span>
           <span><EnrollmentDocumentLinks enrollmentId={rowId(row)} applicantName={row.applicant?.name} documents={row.documents} /></span>
           <span>{formatDate(row.createdAt)}</span>
@@ -154,7 +151,7 @@ export default function AdminEnrollmentsPage() {
               <button className="button button-primary button-compact" onClick={() => decide(row, 'approved')}><Check size={14} /> Approve</button>
               <button className="button button-ghost button-compact" onClick={() => decide(row, 'rejected')}><X size={14} /> Reject</button>
             </>}
-            {row.payment?.plan === 'upfront' && <button className="button button-ghost button-compact" onClick={() => setDueDateRow(row)}><CalendarClock size={14} /> {row.payment?.balanceDueDate ? 'Edit due date' : 'Set due date'}</button>}
+            {row.status === 'approved' && Number(row.balance ?? 0) > 0 && <button className="button button-ghost button-compact" onClick={() => setDueDateRow(row)}><CalendarClock size={14} /> {row.payment?.balanceDueDate ? 'Edit due date' : 'Set due date'}</button>}
             {showArchived
               ? <button className="button button-ghost button-compact" onClick={() => archive(row, false)} disabled={archiveMutation.isPending}><ArchiveRestore size={14} /> Restore</button>
               : <button className="button button-ghost button-compact" onClick={() => archive(row, true)} disabled={archiveMutation.isPending}><Archive size={14} /> Archive</button>}

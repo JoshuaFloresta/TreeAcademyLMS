@@ -494,6 +494,33 @@ a.task-row:hover { background: #f7f8f5; }
 @keyframes enrollment-sent-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes enrollment-sent-pop { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 
+/* billing & payments (admin) */
+.admin-table-billing .admin-table-head, .admin-table-billing .admin-table-row { grid-template-columns: minmax(0, 2fr) minmax(0, 1.3fr) 100px 100px 130px 110px; }
+.billing-detail { display: grid; gap: 20px; text-align: left; margin-top: 18px; }
+.billing-section { display: grid; gap: 9px; }
+.billing-section h3 { margin: 0; color: var(--forest); font-size: 13px; font-weight: 800; letter-spacing: -.01em; }
+.billing-hint { margin: 0; color: #7a8079; font-size: 11.5px; line-height: 1.55; }
+.billing-breakdown { display: grid; gap: 7px; }
+.billing-breakdown-row { display: grid; grid-template-columns: minmax(0, 1fr) 110px 34px; gap: 7px; }
+.billing-breakdown-row input { padding: 8px 10px; background: #fff; border: 1px solid #dbe0da; border-radius: 6px; font-size: 12px; }
+.billing-breakdown-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.billing-sum { color: #6f766e; font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* The server rejects a breakdown that doesn't reconcile with the total, so flag it before saving. */
+.billing-sum.off { color: #a8443a; }
+.billing-payments { display: grid; gap: 7px; }
+.billing-payment { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 11px 13px; background: #f7f8f5; border: 1px solid #e4e8e0; border-radius: 8px; }
+.billing-payment > div { display: grid; gap: 2px; }
+.billing-payment strong { color: var(--forest); font-size: 14px; font-variant-numeric: tabular-nums; }
+.billing-payment small { color: #7a8079; font-size: 11px; line-height: 1.45; }
+.billing-payment .billing-note { color: #8b9389; font-style: italic; }
+/* A voided row keeps its figures and stays visible — it just stops counting toward the total. */
+.billing-payment.voided { background: #faf6f5; border-color: #ecd9d5; }
+.billing-payment.voided strong { color: #a8443a; text-decoration: line-through; }
+.billing-void-note { display: inline-flex; align-items: center; gap: 5px; color: #a8443a !important; font-weight: 700; }
+.billing-payment-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: end; }
+.billing-payment-form .button { grid-column: 3; justify-self: end; }
+@media (max-width: 640px) { .billing-payment-form { grid-template-columns: 1fr; } .billing-payment-form .button { grid-column: 1; justify-self: stretch; } .admin-table-billing .admin-table-head { display: none; } }
+
 /* enrollment help — a compact popover anchored above its launcher, not a modal and not a full-height
    drawer: it never dims the page, so the form stays readable behind it while an answer is open.
    Layered below .enrollment-sent-backdrop (z 60) so the success modal always wins. */
