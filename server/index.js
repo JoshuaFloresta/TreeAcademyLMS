@@ -110,7 +110,9 @@ app.get('/uploads/{*filePath}', async (req, res) => {
 
 const enrollmentInput = z.object({
   name: z.string().trim().min(2).max(100),
-  email: z.string().email().max(254),
+  // Trimmed to match applicationInput below: a pasted address with a trailing space used to be
+  // stored untrimmed here and then never compare equal to its own trimmed self on the next step.
+  email: z.string().trim().email().max(254),
   phone: z.string().trim().max(30).optional(),
   pathway: z.enum(['broker', 'consultant', 'appraiser']),
 })
@@ -565,6 +567,9 @@ const courseForPathway = (pathway) => Course.findOne({ slug: `${pathway}-review`
 // provisionLearnerAccount's access grant all join a course by matching exactly this slug, so it can
 // neither be moved off one of the 3 pathway courses nor reused by a different one.
 const RESERVED_COURSE_SLUGS = ['broker-review', 'consultant-review', 'appraiser-review']
+// Which agreement a pathway signs. Single source of truth — the document route validates against
+// this and the application route reports it as the next step, so the two can't drift apart.
+const pathwayDocumentType = (pathway) => (pathway === 'consultant' ? 'reclex' : 'realex-reblex')
 const id = () => crypto.randomUUID()
 const publicEnrollment = (enrollment) => ({ id: enrollment._id?.toString() ?? enrollment.id, status: enrollment.status, amount: enrollment.amount, currency: enrollment.currency })
 
@@ -1111,16 +1116,22 @@ app.post('/api/enrollments/:id/application', asyncRoute(async (req, res) => {
   const enrollment = await findEnrollment(req.params.id)
   if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
   if (!['application_pending', 'documents_pending'].includes(enrollment.status)) return res.status(409).json({ error: 'This application can no longer be changed.' })
-  if (values.email.toLowerCase() !== enrollment.applicant.email) return res.status(422).json({ error: 'The application email must match the enrollment email.' })
-
   const pdfKey = await createApplicationPdf({ data: values })
+  // Name, phone, and email are all re-synced from the form on every submit so going Back to correct
+  // any of them works. Accepting a changed email is safe only because the status guard above limits
+  // this route to the pre-payment window — no account exists yet, so there is no credential to
+  // redirect. Rejecting the change instead stranded anyone who mistyped their address, since the
+  // account-setup email would go somewhere they could never read.
   enrollment.applicant.name = values.full_name
   enrollment.applicant.phone = values.mobile
+  enrollment.applicant.email = values.email.toLowerCase()
   enrollment.intake = { data: values, submittedAt: new Date(), pdfKey }
   enrollment.status = 'documents_pending'
   if (databaseReady) await enrollment.save()
   await saveAudit('enrollment.application_submitted', 'Enrollment', req.params.id)
-  res.json({ ...publicEnrollment(enrollment), nextStep: 'realex-reblex' })
+  // Must match the document route's own requiredType check — hardcoding 'realex-reblex' told a
+  // consultant applicant to sign the broker agreement, which that route would then reject.
+  res.json({ ...publicEnrollment(enrollment), nextStep: pathwayDocumentType(enrollment.applicant.pathway) })
 }))
 
 app.post('/api/enrollments/:id/documents/:type', asyncRoute(async (req, res) => {
@@ -1134,7 +1145,7 @@ app.post('/api/enrollments/:id/documents/:type', asyncRoute(async (req, res) => 
   if (signatureName.localeCompare(enrollment.applicant.name, undefined, { sensitivity: 'accent' }) !== 0) return res.status(422).json({ error: 'Your typed electronic signature must match the legal name used for enrollment.' })
   if (!consent) return res.status(422).json({ error: 'Electronic-signature consent is required.' })
 
-  const requiredType = enrollment.applicant.pathway === 'consultant' ? 'reclex' : 'realex-reblex'
+  const requiredType = pathwayDocumentType(enrollment.applicant.pathway)
   if (type !== requiredType) {
     return res.status(409).json({ error: 'This enrollment requires the correct pathway document before payment.' })
   }

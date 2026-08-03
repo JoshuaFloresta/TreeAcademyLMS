@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { ArrowDownRight, ArrowRight, CalendarClock, Check, CheckCircle2, ChevronRight, ClipboardCheck, FileSignature, Mail, MoreHorizontal, Play, Users, Zap } from 'lucide-react'
+import { ArrowDownRight, ArrowRight, CalendarClock, Check, CheckCircle2, ChevronRight, ClipboardCheck, FileSignature, Mail, Minus, MoreHorizontal, Play, Plus, Users, Zap } from 'lucide-react'
 import PublicHeader from '../components/PublicHeader.jsx'
 import PublicFooter from '../components/PublicFooter.jsx'
 import NewsletterForm from '../components/NewsletterForm.jsx'
 import PrimaryButton from '../components/PrimaryButton.jsx'
 import StatusPill from '../components/StatusPill.jsx'
 import Modal from '../components/Modal.jsx'
+import HelpLauncher from '../components/enrollment/HelpLauncher.jsx'
 import ProgramCard from '../components/landing/ProgramCard.jsx'
 import HowStep from '../components/landing/HowStep.jsx'
 import Instructors from '../components/Instructor.jsx'
@@ -225,7 +226,7 @@ export default function LandingPage() {
             {faq.map(([question, answer], index) => (
               <button className={`faq-item ${openFaq === index ? 'expanded' : ''}`} key={question} onClick={() => setOpenFaq(openFaq === index ? -1 : index)}>
                 <span><strong>{question}</strong><span className="faq-answer"><p>{answer}</p></span></span>
-                <span className="faq-icon">{openFaq === index ? '−' : '+'}</span>
+                <span className="faq-icon">{openFaq === index ? <Minus size={15} /> : <Plus size={15} />}</span>
               </button>
             ))}
           </div>
@@ -240,6 +241,7 @@ export default function LandingPage() {
         </section>
       </main>
       <PublicFooter />
+      <HelpLauncher />
     </div>
   )
 }

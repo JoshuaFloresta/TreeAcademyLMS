@@ -189,7 +189,9 @@ function EventDetailBody({ event, isStaff, onEdit, onDeleted }) {
 
 function EventDetailModal({ event, isStaff, onClose, onEdit, onDeleted }) {
   return <Modal open={Boolean(event)} onClose={onClose} labelledBy="event-detail-title" className="event-detail-modal">
-    {event && <EventDetailBody event={event} isStaff={isStaff} onEdit={onEdit} onDeleted={onDeleted} />}
+    {/* Keyed so switching directly from one event to another remounts, rather than carrying the
+        previous event's unsaved attendance draft into a different session's roster. */}
+    {event && <EventDetailBody key={event._id} event={event} isStaff={isStaff} onEdit={onEdit} onDeleted={onDeleted} />}
   </Modal>
 }
 

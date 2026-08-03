@@ -184,8 +184,8 @@ function PhaseDetailPage({ courseId, phaseId, role, onBack }) {
   </>
 }
 
-function PhaseGrid({ role, onOpenPhase, onOpenCategory }) {
-  const [courseId, setCourseId] = useState('')
+function PhaseGrid({ role, initialCourseId = '', onOpenPhase, onOpenCategory }) {
+  const [courseId, setCourseId] = useState(initialCourseId)
   const { data: courses = [], isLoading: coursesLoading, error } = useQuery({ queryKey: ['courses'], queryFn: fetchCourses })
   const isStaff = role !== 'learner'
   const activeCourseId = courseId || courses[0]?._id || ''
@@ -253,7 +253,12 @@ export default function CatalogPage({ role }) {
   const phaseId = params.get('phase')
   const categoryId = params.get('category')
 
-  if (courseId && phaseId) return <PhaseDetailPage courseId={courseId} phaseId={phaseId} role={role} onBack={() => setParams({})} />
-  if (courseId && categoryId) return <CategoryDetailPage courseId={courseId} categoryId={categoryId} onBack={() => setParams({})} />
-  return <PhaseGrid role={role} onOpenPhase={(course, phase) => setParams({ course, phase })} onOpenCategory={(course, category) => setParams({ course, category })} />
+  // Going "back" keeps ?course= so the grid reopens on the program the learner was actually in.
+  // PhaseGrid unmounts while a phase is open, so its own state can't survive the round trip — a
+  // learner holding two programs would otherwise be bounced back to their first one every time.
+  const backToGrid = () => setParams(courseId ? { course: courseId } : {})
+
+  if (courseId && phaseId) return <PhaseDetailPage courseId={courseId} phaseId={phaseId} role={role} onBack={backToGrid} />
+  if (courseId && categoryId) return <CategoryDetailPage courseId={courseId} categoryId={categoryId} onBack={backToGrid} />
+  return <PhaseGrid role={role} initialCourseId={courseId ?? ''} onOpenPhase={(course, phase) => setParams({ course, phase })} onOpenCategory={(course, category) => setParams({ course, category })} />
 }

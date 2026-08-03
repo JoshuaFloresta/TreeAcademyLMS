@@ -12,14 +12,16 @@ const required = (label) => <>{label} <i aria-hidden="true">*</i></>
 
 // Date fields are auto-stamped with today and locked (readOnly) — they record when the document was
 // actually signed. Signature lines (kind: 'signature') render the live drawn signature + printed name.
+// `label` names the field the way it reads on the page, for the missing-field alert below. It is
+// ignored by InteractivePdfFields, which only reads kind/group/type/required/readOnly/multiline.
 const realexFieldDefs = [
   { name: 'exam_reblex', group: 'exam_type' },
   { name: 'exam_realex', group: 'exam_type' },
-  { name: 'p_name', required: true },
-  { name: 'p_address', required: true, multiline: true },
-  { name: 'p_contact', required: true },
-  { name: 'p_email', required: true, type: 'email' },
-  { name: 'p_prc_app', required: true },
+  { name: 'p_name', required: true, label: 'Full legal name' },
+  { name: 'p_address', required: true, multiline: true, label: 'Complete address' },
+  { name: 'p_contact', required: true, label: 'Contact number' },
+  { name: 'p_email', required: true, type: 'email', label: 'Email address' },
+  { name: 'p_prc_app', required: true, label: 'PRC application status' },
   { name: 'p_signature', kind: 'signature' },
   { name: 'p_date', type: 'date', readOnly: true },
   { name: 'prov_date', type: 'date', readOnly: true },
@@ -28,20 +30,34 @@ const realexFieldDefs = [
 const reclexFieldDefs = [
   { name: 'agmt_no' },
   { name: 'agmt_date', type: 'date', readOnly: true },
-  { name: 'agmt_place', required: true },
-  { name: 'r_name', required: true },
-  { name: 'r_lic_type', required: true },
-  { name: 'r_lic_no', required: true },
-  { name: 'r_contact', required: true },
-  { name: 'r_email', required: true, type: 'email' },
-  { name: 'r_address', required: true, multiline: true },
-  { name: 'r_target_exam', required: true },
+  { name: 'agmt_place', required: true, label: 'Place of signing' },
+  { name: 'r_name', required: true, label: 'Full legal name' },
+  { name: 'r_lic_type', required: true, label: 'License type' },
+  { name: 'r_lic_no', required: true, label: 'License number' },
+  { name: 'r_contact', required: true, label: 'Contact number' },
+  { name: 'r_email', required: true, type: 'email', label: 'Email address' },
+  { name: 'r_address', required: true, multiline: true, label: 'Complete address' },
+  { name: 'r_target_exam', required: true, label: 'Target examination' },
   { name: 'b_signature', kind: 'signature' },
   { name: 'a_date', type: 'date', readOnly: true },
   { name: 'b_date', type: 'date', readOnly: true },
   { name: 'w1_name' },
   { name: 'w2_name' },
 ]
+
+// Required fields sit inside the PDF overlay, where a native validation bubble can land off-screen
+// or on a page the applicant has not scrolled to — reportValidity() alone made the button look dead.
+// Naming what is missing mirrors how ApplicationStep reports step 1.
+const missingFieldLabels = (form, defs) => {
+  const labels = { consent: 'Electronic-signature consent', ...Object.fromEntries(defs.filter((field) => field.label).map((field) => [field.name, field.label])) }
+  const missing = []
+  form.querySelectorAll('[required]').forEach((field) => {
+    if (field.checkValidity()) return
+    const label = labels[field.name] ?? field.name
+    if (!missing.includes(label)) missing.push(label)
+  })
+  return missing
+}
 
 export default function DocumentStep({ enrollmentId, type, applicant, application, onSubmit, onBack, submitting, error }) {
   const [signature, setSignature] = useState('')
@@ -66,27 +82,35 @@ export default function DocumentStep({ enrollmentId, type, applicant, applicatio
     return data
   }
 
+  const typedSignatureName = (form) => new FormData(form).get('signatureName')?.trim() ?? ''
+
+  // Shared by submit and the PDF download — the download path was silently returning on an invalid
+  // form too, so both now report the same reason instead of appearing to do nothing.
+  const validate = (form, action) => {
+    const missing = missingFieldLabels(form, fieldDefs)
+    if (missing.length) {
+      setLocalError(`Please complete the following required field${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}.`)
+      form.querySelector('[required]:invalid')?.focus()
+      return false
+    }
+    if (isRealex && !form.querySelector('[name="exam_reblex"]:checked, [name="exam_realex"]:checked')) { setLocalError('Please select REBLEX or REALEX in the document above.'); return false }
+    if (!signature) { setLocalError(`Please draw your signature before ${action}.`); return false }
+    if (typedSignatureName(form).toLocaleLowerCase() !== (applicant?.name ?? '').trim().toLocaleLowerCase()) { setLocalError('Your typed signature must match your full legal name.'); return false }
+    setLocalError('')
+    return true
+  }
+
   const submit = (event) => {
     event.preventDefault()
     const form = event.currentTarget
-    if (!form.reportValidity()) return
-    if (isRealex && !form.querySelector('[name="exam_reblex"]:checked, [name="exam_realex"]:checked')) return setLocalError('Please select REBLEX or REALEX in the document above.')
-    if (!signature) return setLocalError('Please draw your signature before submitting this document.')
-    const signatureName = new FormData(form).get('signatureName')?.trim()
-    if (signatureName.toLocaleLowerCase() !== applicant.name.toLocaleLowerCase()) return setLocalError('Your typed signature must match your full legal name.')
-    setLocalError('')
-    onSubmit({ fields: deriveFields(form), signatureName, signatureDataUrl: signature, consent: true })
+    if (!validate(form, 'submitting this document')) return
+    onSubmit({ fields: deriveFields(form), signatureName: typedSignatureName(form), signatureDataUrl: signature, consent: true })
   }
 
   const downloadPdf = async () => {
-    if (!formRef.current) return
     const form = formRef.current
-    if (!form.reportValidity()) return
-    if (isRealex && !form.querySelector('[name="exam_reblex"]:checked, [name="exam_realex"]:checked')) return setLocalError('Please select REBLEX or REALEX in the document above.')
-    if (!signature) return setLocalError('Please draw your signature before downloading the PDF.')
-    const signatureName = new FormData(form).get('signatureName')?.trim()
-    if (signatureName.toLocaleLowerCase() !== applicant.name.toLocaleLowerCase()) return setLocalError('Your typed signature must match your full legal name.')
-    setLocalError('')
+    if (!form || !validate(form, 'downloading the PDF')) return
+    const signatureName = typedSignatureName(form)
     setDownloading(true)
     try {
       const fields = deriveFields(form)

@@ -56,6 +56,9 @@ function NewSessionForm({ courseId, date, onCreated }) {
   const submit = (event) => {
     event.preventDefault()
     if (values.title.trim().length < 2) return
+    // Neither the client nor calendarEventInput cross-checks these, so without this a typo could
+    // create a session that ends before it begins.
+    if (values.endTime <= values.startTime) { toast.error('The end time must be after the start time.'); return }
     mutation.mutate()
   }
   return <form className="attendance-new-session" onSubmit={submit}>
@@ -261,7 +264,10 @@ export default function AttendancePage({ role }) {
 
         {sessions.length > 1 && !sessionId && <p className="operations-note">This date has {sessions.length} sessions — choose one above to take its roll call.</p>}
 
-        {activeSession && <RollCall session={activeSession} onSaved={() => queryClient.invalidateQueries({ queryKey: ['calendar'] })} />}
+        {/* key forces a remount when the session changes. Without it React reuses this instance and
+            its draft/search/editing state, so unsaved marks from one session would carry over to
+            another on the same date — and saving would write them against the wrong session. */}
+        {activeSession && <RollCall key={activeSession.id} session={activeSession} onSaved={() => queryClient.invalidateQueries({ queryKey: ['calendar'] })} />}
       </div>}
   </>
 }
