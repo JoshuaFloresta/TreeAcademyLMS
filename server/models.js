@@ -262,8 +262,11 @@ const enrollmentSchema = new Schema({
     // `plan` records whether the learner chose to pay the full price or just the pathway's
     // upfront/reservation fee at checkout — `planAmount` is what was actually charged, so staff
     // can see the remaining balance (enrollment.amount - planAmount) and follow up manually.
-    // TODO(remove before launch): drop 'test' once the temporary ₱1 test plan (see
-    // server/index.js's payment-session route) is removed.
+    // 'test' is historical only — a temporary ₱1 checkout option that was removed from the UI and
+    // from paymentSessionInput, so nothing can create one now. It stays in the enum because four
+    // enrollments were actually paid that way; dropping it would make those rows fail validation on
+    // any later save (e.g. a staff member setting a balance note), and rewriting what they were
+    // charged would falsify a payment record.
     plan: { type: String, enum: ['full', 'upfront', 'test'] },
     planAmount: Number,
     // Staff-set, for the "pay upfront only" plan's remaining balance — purely informational (shown

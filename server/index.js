@@ -124,19 +124,13 @@ const pricingSettingsInput = z.object({
   upfrontConsultant: z.coerce.number().min(1).max(1_000_000),
   upfrontAppraiser: z.coerce.number().min(1).max(1_000_000),
 })
-// TODO(remove before launch): 'test' is a temporary ₱1 plan for exercising the real PayMongo
-// checkout → webhook → auto-provisioning path end-to-end without charging the real price. Remove
-// this enum value, the TEST_PLAN_AMOUNT branch below, and the matching option in
-// src/components/enrollment/PaymentStep.jsx once testing is done.
-const paymentSessionInput = z.object({ plan: z.enum(['full', 'upfront', 'test']).optional() })
+const paymentSessionInput = z.object({ plan: z.enum(['full', 'upfront']).optional() })
 // Staff-set reminder for a "pay upfront only" enrollment's remaining balance — purely
 // informational (shown on the learner's Statement of Account), not an in-app payment collector.
 const balanceDueInput = z.object({
   balanceDueDate: z.coerce.date().nullable().optional(),
   balanceNote: z.string().trim().max(500).nullable().optional(),
 })
-const TEST_PLAN_AMOUNT = 1
-
 // Falls back to catalog.js's static price when no admin override has been saved yet (or when
 // running without MongoDB), so the enrollment/payment flow always has a price to show.
 async function getPricingSettings() {
@@ -1198,9 +1192,7 @@ app.post('/api/enrollments/:id/payment-session', asyncRoute(async (req, res) => 
   const { plan } = paymentSessionInput.parse(req.body ?? {})
   const resolvedPlan = plan ?? 'full'
   const pricing = await getPricingSettings()
-  const chargeAmount = resolvedPlan === 'test' ? TEST_PLAN_AMOUNT
-    : resolvedPlan === 'upfront' ? upfrontAmountForPathway(pricing, enrollment.applicant.pathway)
-    : enrollment.amount
+  const chargeAmount = resolvedPlan === 'upfront' ? upfrontAmountForPathway(pricing, enrollment.applicant.pathway) : enrollment.amount
 
   if (!config.paymongo.secretKey) {
     enrollment.payment = { provider: 'paymongo-payment-link', checkoutUrl: config.paymongo.paymentLink, referenceNumber: req.params.id, plan: resolvedPlan, planAmount: chargeAmount }
@@ -1212,7 +1204,7 @@ app.post('/api/enrollments/:id/payment-session', asyncRoute(async (req, res) => 
     data: {
       attributes: {
         billing: { name: enrollment.applicant.name, email: enrollment.applicant.email, phone: enrollment.applicant.phone },
-        line_items: [{ name: resolvedPlan === 'test' ? `${catalog.product.name} — TEST ₱1 charge` : resolvedPlan === 'upfront' ? `${catalog.product.name} — upfront fee` : catalog.product.name, description: `PASS-FIRST enrollment for ${enrollment.applicant.name}`, amount: Math.round(chargeAmount * 100), currency: enrollment.currency, quantity: 1 }],
+        line_items: [{ name: resolvedPlan === 'upfront' ? `${catalog.product.name} — upfront fee` : catalog.product.name, description: `PASS-FIRST enrollment for ${enrollment.applicant.name}`, amount: Math.round(chargeAmount * 100), currency: enrollment.currency, quantity: 1 }],
         payment_method_types: config.paymongo.paymentMethods,
         send_email_receipt: true,
         show_description: true,
