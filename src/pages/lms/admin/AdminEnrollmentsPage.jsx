@@ -163,6 +163,7 @@ export default function AdminEnrollmentsPage() {
     </div>
     <BalanceDueModal row={dueDateRow} onClose={() => setDueDateRow(null)} onSaved={() => { setDueDateRow(null); invalidate() }} />
     {/* Same panel the Billing page uses — one implementation, so the two screens can't drift apart. */}
-    {billingRow && <BillingDetailModal enrollmentId={rowId(billingRow)} name={billingRow.applicant?.name} email={billingRow.applicant?.email} pathwayTitle={pathwayLabel[billingRow.applicant?.pathway] ?? billingRow.applicant?.pathway} onClose={() => setBillingRow(null)} onChanged={invalidate} />}
+    {/* key forces a remount per learner so an unsaved total/breakdown draft can never carry across. */}
+    {billingRow && <BillingDetailModal key={rowId(billingRow)} enrollmentId={rowId(billingRow)} name={billingRow.applicant?.name} email={billingRow.applicant?.email} pathwayTitle={pathwayLabel[billingRow.applicant?.pathway] ?? billingRow.applicant?.pathway} onClose={() => setBillingRow(null)} onChanged={invalidate} />}
   </>
 }

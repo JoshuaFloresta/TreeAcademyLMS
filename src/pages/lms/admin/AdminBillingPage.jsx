@@ -96,7 +96,7 @@ export default function AdminBillingPage() {
         </div>)}
     </div>
 
-    {detailRow && <BillingDetailModal enrollmentId={detailRow.id} name={detailRow.name} email={detailRow.email} pathwayTitle={pathwayLabel[detailRow.pathway] ?? detailRow.pathway} onClose={() => setDetailRow(null)} onChanged={invalidate} />}
+    {detailRow && <BillingDetailModal key={detailRow.id} enrollmentId={detailRow.id} name={detailRow.name} email={detailRow.email} pathwayTitle={pathwayLabel[detailRow.pathway] ?? detailRow.pathway} onClose={() => setDetailRow(null)} onChanged={invalidate} />}
     <NewRecordModal open={newOpen} onClose={() => setNewOpen(false)} onCreated={() => { setNewOpen(false); invalidate() }} />
   </>
 }

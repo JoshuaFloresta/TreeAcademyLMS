@@ -788,13 +788,19 @@ async function markEnrollmentPaid(enrollment, paymentPatch) {
   if (!wasAwaitingPayment) return null
   // Guarded on wasAwaitingPayment so a repeated webhook delivery for an already-approved enrollment
   // cannot add a second ledger row on top of WebhookEvent's own dedupe.
+  //
+  // Read from the MERGED payment object, not from paymentPatch. plan/planAmount are written at
+  // checkout-creation time and the webhook's patch carries only provider/transactionId/paidAt — so
+  // reading the patch alone left planAmount undefined, fell through to the full enrollment price,
+  // and recorded every upfront payer as having settled in full.
+  const settled = enrollment.payment ?? {}
   await recordPayment({
     enrollment,
-    amount: paymentPatch?.planAmount ?? enrollment.amount,
+    amount: settled.planAmount ?? enrollment.amount,
     method: 'paymongo',
-    kind: paymentPatch?.plan === 'upfront' ? 'upfront' : 'full',
-    receivedAt: paymentPatch?.paidAt,
-    reference: paymentPatch?.transactionId ?? paymentPatch?.referenceNumber,
+    kind: settled.plan === 'upfront' ? 'upfront' : 'full',
+    receivedAt: settled.paidAt,
+    reference: settled.transactionId ?? settled.referenceNumber,
   })
   const invitation = await provisionLearnerAccount(enrollment)
   await bestEffortEmail(sendPaymentReceiptEmail(enrollment, invitation?.setupUrl), 'payment_receipt email')
@@ -1428,7 +1434,9 @@ app.get('/api/staff/enrollments', requireAuth, requireStaff, asyncRoute(async (r
     return res.json(rows.map((row) => summarise(row, paid.get(String(row._id)) ?? 0)))
   }
   const rows = [...memory.enrollments.values()].reverse()
-  res.json((scope === 'all' ? rows : rows.filter((row) => (scope === 'only' ? row.archivedAt : !row.archivedAt))).map(summarise))
+  // Explicit arrow, not `.map(summarise)` — map passes the index as the second argument, which would
+  // land in `paid` and report the row's position as the amount collected.
+  res.json((scope === 'all' ? rows : rows.filter((row) => (scope === 'only' ? row.archivedAt : !row.archivedAt))).map((row) => summarise(row, 0)))
 }))
 
 // Streams a submitted admission form or signed agreement to staff. The file itself lives in private
@@ -3872,6 +3880,10 @@ app.use((error, _req, res, next) => {
   if (error?.expose === true && Number.isInteger(error.status) && error.status >= 400 && error.status < 500) {
     return res.status(error.status).json({ error: error.message })
   }
+  // A malformed :id (anything that isn't a valid ObjectId) makes Mongoose throw before the route can
+  // return its own 404. That is a client error, not a server fault — answering 500 and logging a
+  // stack trace for every mistyped URL buries real failures in noise.
+  if (error?.name === 'CastError' && error.kind === 'ObjectId') return res.status(404).json({ error: 'Not found.' })
   console.error(error)
   res.status(500).json({ error: 'Unexpected server error.' })
 })
