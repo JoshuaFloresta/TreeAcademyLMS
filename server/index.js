@@ -12,7 +12,7 @@ import { z } from 'zod'
 import { config, integrations, isAllowedOrigin, isProduction } from './config.js'
 import { catalog } from './catalog.js'
 import { Announcement, Assignment, Attendance, Badge, BadgeRule, CalendarEvent, Category, CategoryHeader, Certificate, CertificateTemplate, ContentAsset, Course, CourseEnrollment, EmailTemplate, Enrollment, ForumPost, Payment, ForumReaction, ForumThread, LearningModule, LearningProgress, Lesson, Module, NewsletterSubscriber, Notification, Presence, PricingSettings, Quiz, QuizAttempt, Report, RolePermission, StudentBadge, Submission, SubmissionComment, SupportTicket, Voucher, VoucherRedemption, Webinar, WebinarRegistration, WebhookEvent, AuditLog, RefreshToken, User } from './models.js'
-import { createToken, hashToken, requireAdmin, requireAuth, requireStaff, signAccessToken, verifyHmac, verifyPaymongoSignature } from './security.js'
+import { requireAdmin, requireAuth, requireStaff, verifyHmac, verifyPaymongoSignature } from './security.js'
 import { emailTemplateDefaults, ensureDefaultEmailTemplates, sampleVarsFor, sendEnrollmentDocumentsEmail, sendTemplatedEmail } from './email.js'
 import { renderCertificate, saveCertificateTemplate, saveSubmissionAttachment } from './certificates.js'
 import { createApplicationPdf, createFilledAgreement, createFilledDocument, createFilledDocumentBytes, extractAgreementFields, saveAgreementTemplate } from './enrollment-documents.js'
@@ -23,6 +23,12 @@ import { asyncRoute, httpError, id, requireDb, sendPrivateDownload } from './lib
 import { agreementTemplateUpload, avatarUpload, bannerUpload, certificateUpload, forumImageUpload, saveAvatarUpload, saveBannerUpload, saveForumImageUpload, submissionUpload } from './lib/uploads.js'
 import { saveAudit } from './lib/audit.js'
 import { notifyUsers } from './lib/notify.js'
+import { bestEffortEmail, issueAccountSetupUrl, sendCredentialsEmail } from './lib/accounts.js'
+import { issueSession, sessionUser } from './lib/session.js'
+import { blankToNull, usernameField } from './lib/zod-helpers.js'
+import { ENROLLMENT_DOCUMENT_TYPES, enrollmentDocuments } from './lib/enrollment-doc-meta.js'
+import { router as authRouter } from './routes/auth.js'
+import { router as usersRouter } from './routes/users.js'
 
 const app = express()
 const server = http.createServer(app)
@@ -53,6 +59,9 @@ app.get('/uploads/{*filePath}', async (req, res) => {
     res.status(404).end()
   }
 })
+
+app.use(authRouter)
+app.use(usersRouter)
 
 const enrollmentInput = z.object({
   name: z.string().trim().min(2).max(100),
@@ -230,35 +239,6 @@ const reclexInput = z.object({
   w2_name: z.string().trim().max(100).optional(),
 })
 const newsletterInput = z.object({ email: z.string().email().max(254) })
-// Login must accept any stored password and let bcrypt decide — the 10-char minimum is an
-// account-creation policy, not a sign-in gate. Enforcing it here just turns a wrong password
-// into a confusing "check the highlighted fields" 422 instead of "email or password is incorrect".
-const loginInput = z.object({ email: z.string().email().max(254), password: z.string().min(1).max(128) })
-// Activation identifies the account by the setup token alone (POST /api/auth/activate looks the
-// user up via inviteTokenHash) — no email field, since the client has no reason to send one.
-const activationInput = z.object({ token: z.string().min(20).max(200), password: z.string().min(10).max(128) })
-const forgotPasswordInput = z.object({ email: z.string().email().max(254) })
-const usernameField = z.string().trim().toLowerCase().min(3).max(30).regex(/^[a-z0-9._-]+$/, 'Usernames use letters, numbers, dot, underscore, or hyphen.')
-// Only accept real Facebook profile links. Left open it becomes an unmoderated outbound link on a
-// page every logged-in member can view — a free redirect to anywhere, rendered under our branding.
-const facebookUrlField = z.string().trim().max(300)
-  .refine((value) => /^https:\/\/(www\.|m\.|web\.)?(facebook\.com|fb\.me|fb\.com)\/[^\s]*$/i.test(value), 'Enter a full Facebook profile link, e.g. https://facebook.com/yourname')
-// Fields a member may change on their own profile. Deliberately excludes `name` and `email`: those
-// come from the signed enrollment agreement and are what staff match records against, so only an
-// admin can change them (see adminUserUpdateInput).
-// A cleared input arrives as '' from the browser; every optional profile field means "unset" by it.
-const blankToNull = (schema) => z.preprocess((value) => (typeof value === 'string' && !value.trim() ? null : value), schema.nullable().optional())
-const profileInput = z.object({
-  bio: z.string().trim().max(600).optional(),
-  headline: z.string().trim().max(120).optional(),
-  location: z.string().trim().max(120).optional(),
-  username: blankToNull(usernameField),
-  birthDate: blankToNull(z.coerce.date().min(new Date('1900-01-01'), 'Enter a valid date of birth.').max(new Date(), 'Date of birth cannot be in the future.')),
-  school: blankToNull(z.string().trim().max(200)),
-  degree: blankToNull(z.string().trim().max(200)),
-  facebookUrl: blankToNull(facebookUrlField),
-})
-const passwordChangeInput = z.object({ currentPassword: z.string().min(1).max(128), newPassword: z.string().min(10).max(128) })
 const badgeInput = z.object({ title: z.string().trim().min(2).max(120), description: z.string().trim().max(400).optional(), color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(), icon: z.string().trim().max(40).optional() })
 const awardInput = z.object({ learnerId: z.string().min(1), note: z.string().trim().max(400).optional() })
 // Each trigger type needs different fields — validated as one flat object rather than a
@@ -604,18 +584,6 @@ const publicEnrollment = (enrollment) => ({
     : null,
 })
 
-// What a staff member is allowed to know about an enrollment's paperwork: which documents exist and
-// when they were signed — never the storage keys. Keys are how the file is fetched, so handing them
-// to the browser would turn a rendered list into a set of addresses for signed legal agreements.
-// Downloads go through GET /api/staff/enrollments/:id/documents/:type, which re-checks the caller.
-const ENROLLMENT_DOCUMENT_TYPES = {
-  application: { label: 'Admission form', key: (row) => row.intake?.pdfKey, signedAt: (row) => row.intake?.submittedAt },
-  'realex-reblex': { label: 'REALEX / REBLEX agreement', key: (row) => row.documents?.realexReblex?.pdfKey, signedAt: (row) => row.documents?.realexReblex?.signedAt },
-  reclex: { label: 'RECLEX agreement', key: (row) => row.documents?.reclex?.pdfKey, signedAt: (row) => row.documents?.reclex?.signedAt },
-}
-const enrollmentDocuments = (row) => Object.entries(ENROLLMENT_DOCUMENT_TYPES)
-  .filter(([, spec]) => spec.key(row))
-  .map(([type, spec]) => ({ type, label: spec.label, signedAt: spec.signedAt(row) ?? null }))
 
 async function findEnrollment(enrollmentId) {
   if (dbState.ready) return Enrollment.findById(enrollmentId)
@@ -781,41 +749,6 @@ async function claimVoucherUse(enrollment, learner) {
     console.error('voucher redemption count failed:', error.message)
   }
 }
-
-// Notification/receipt emails must never fail the request that triggered them (account creation,
-// document signing, payment confirmation) — the underlying record is already saved by the time we
-// send. A rejected/misconfigured email provider should only affect delivery, never the operation.
-async function bestEffortEmail(promise, label) {
-  try {
-    return await promise
-  } catch (error) {
-    console.error(`${label} failed:`, error.message)
-    return { delivery: 'failed' }
-  }
-}
-
-const ACCOUNT_SETUP_WINDOW_MS = 72 * 60 * 60 * 1000
-
-// Issues a one-time setup link (instead of emailing a plaintext temp password) so a newly
-// provisioned learner sets their own password on first login — consumed by POST /api/auth/activate.
-async function issueAccountSetupUrl(user) {
-  const token = createToken()
-  user.inviteTokenHash = hashToken(token)
-  user.inviteExpiresAt = new Date(Date.now() + ACCOUNT_SETUP_WINDOW_MS)
-  await user.save()
-  return `${config.clientUrl}/auth?mode=activate&token=${token}`
-}
-
-// Admin-customizable via the "enrollment_credentials" template (Settings > Email Automation) —
-// used whenever a learner account is created: on payment confirmation (see markEnrollmentPaid) and
-// when staff create/import a user directly. setupUrl is null for an already-active account (no
-// first-time setup needed) — sendPaymentReceiptEmail falls back to the plain login page in that case.
-const sendCredentialsEmail = ({ name, email, setupUrl, pathway }) => sendTemplatedEmail('enrollment_credentials', email, { name, email, pathway: pathway ?? 'Tree Academy', setupUrl: setupUrl ?? `${config.clientUrl}/auth`, loginUrl: `${config.clientUrl}/auth` })
-
-// Self-service reset for anyone who already has an account — the enrollment flow only ever issues a
-// setup link for a brand-new account (provisionLearnerAccount returns early for an already-active
-// one), so without this there is no way back in for an existing learner who forgets their password.
-const sendPasswordResetEmail = ({ name, email, resetUrl }) => sendTemplatedEmail('password_reset', email, { name, email, resetUrl, loginUrl: `${config.clientUrl}/auth` })
 
 const pathwayTitleById = new Map(catalog.pathways.map((pathway) => [pathway.id, pathway.title]))
 const planLabel = { full: 'Full payment', upfront: 'Upfront reservation fee' }
@@ -984,25 +917,6 @@ function paymentReturnUrl(state, enrollmentId) {
   return url.toString()
 }
 
-// When the client is hosted on a different site than the API (e.g. Vercel frontend + Render API),
-// `SameSite=Lax` makes the browser withhold this cookie on cross-site XHR — sign-in appears to
-// work but the session dies on the first refresh. `None` restores it, and requires `Secure`,
-// which is why it only applies in production (localhost dev stays on Lax over plain HTTP).
-const cookieOptions = (extra = {}) => ({ httpOnly: true, secure: isProduction, sameSite: isProduction ? 'none' : 'lax', ...extra })
-
-function refreshCookie(res, token) {
-  res.cookie('treeacademy_refresh', token, cookieOptions({ maxAge: 1000 * 60 * 60 * 24 * 14, path: '/api/auth' }))
-}
-
-async function issueSession(res, user, impersonatorId = null) {
-  const refreshToken = createToken()
-  await RefreshToken.create({ userId: user._id, tokenHash: hashToken(refreshToken), expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 14), impersonatorId })
-  refreshCookie(res, refreshToken)
-  return signAccessToken(user)
-}
-
-const sessionUser = (user, extra = {}) => ({ id: user.id, name: user.name, email: user.email, role: user.role, avatarUrl: user.avatarUrl, ...extra })
-
 async function issueCertificate({ template, learner, issuedBy }) {
   const existing = await Certificate.findOne({ templateId: template._id, learnerId: learner._id })
   if (existing) return existing
@@ -1089,193 +1003,8 @@ app.post('/api/public/webinars/:id/register', asyncRoute(async (req, res) => {
   res.status(201).json({ registered: true })
 }))
 
-// Deliberately does not sign the learner in (no issueSession/refresh cookie) — the learner lands on
-// the plain sign-in page after this and signs in with the password they just chose, as a genuine
-// end-to-end check that it works, rather than being carried straight into the dashboard.
-app.post('/api/auth/activate', asyncRoute(async (req, res) => {
-  if (!dbState.ready) return res.status(503).json({ error: 'Account activation requires MongoDB.' })
-  const { token, password } = activationInput.parse(req.body)
-  const user = await User.findOne({ inviteTokenHash: hashToken(token), inviteExpiresAt: { $gt: new Date() } })
-  if (!user) return res.status(400).json({ error: 'This account-setup link is invalid or expired.' })
-  user.passwordHash = await bcrypt.hash(password, 12)
-  user.status = 'active'
-  user.inviteTokenHash = undefined
-  user.inviteExpiresAt = undefined
-  await user.save()
-  await saveAudit('user.activated', 'User', user.id)
-  res.status(200).json({ activated: true, email: user.email })
-}))
-
-// Always answers 200 with the same body whether or not the address is registered — a differing
-// response here would turn this into an account-enumeration oracle. The reset link is the same
-// one-time token issueAccountSetupUrl mints, so POST /api/auth/activate consumes it unchanged.
-app.post('/api/auth/forgot-password', asyncRoute(async (req, res) => {
-  const { email } = forgotPasswordInput.parse(req.body)
-  const sent = { sent: true }
-  if (!dbState.ready) return res.json(sent)
-  const user = await User.findOne({ email: email.toLowerCase() })
-  // Suspended/inactive accounts are deliberately excluded — a reset would otherwise let a
-  // deactivated account be reactivated, since /api/auth/activate sets status back to active.
-  if (!user || !['active', 'invited'].includes(user.status)) return res.json(sent)
-  const resetUrl = await issueAccountSetupUrl(user)
-  await bestEffortEmail(sendPasswordResetEmail({ name: user.name, email: user.email, resetUrl }), 'password_reset email')
-  await saveAudit('user.password_reset_requested', 'User', user.id)
-  res.json(sent)
-}))
-
-app.post('/api/auth/login', asyncRoute(async (req, res) => {
-  if (!dbState.ready) return res.status(503).json({ error: 'Sign-in requires MongoDB.' })
-  const { email, password } = loginInput.parse(req.body)
-  const user = await User.findOne({ email: email.toLowerCase() })
-  if (!user || user.status !== 'active' || !user.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) return res.status(401).json({ error: 'Email or password is incorrect.' })
-  user.lastSeenAt = new Date()
-  await user.save()
-  const accessToken = await issueSession(res, user)
-  res.json({ accessToken, user: sessionUser(user) })
-}))
-
-app.post('/api/auth/refresh', asyncRoute(async (req, res) => {
-  if (!dbState.ready) return res.status(503).json({ error: 'Session refresh requires MongoDB.' })
-  const token = req.cookies.treeacademy_refresh
-  if (!token) return res.status(401).json({ error: 'Refresh token required.' })
-  const record = await RefreshToken.findOne({ tokenHash: hashToken(token), expiresAt: { $gt: new Date() } })
-  if (!record) return res.status(401).json({ error: 'Refresh token is invalid or expired.' })
-  const user = await User.findById(record.userId)
-  await RefreshToken.deleteOne({ _id: record._id })
-  if (!user || user.status !== 'active') return res.status(401).json({ error: 'Account is inactive.' })
-  // Preserve an in-progress impersonation across token rotation so the admin stays in the target's view.
-  const impersonator = record.impersonatorId ? await User.findById(record.impersonatorId).select('name role') : null
-  const accessToken = await issueSession(res, user, impersonator?._id ?? null)
-  res.json({ accessToken, user: sessionUser(user, impersonator ? { impersonating: true, impersonatorName: impersonator.name } : {}) })
-}))
-
-app.post('/api/auth/logout', asyncRoute(async (req, res) => {
-  if (dbState.ready && req.cookies.treeacademy_refresh) await RefreshToken.deleteOne({ tokenHash: hashToken(req.cookies.treeacademy_refresh) })
-  res.clearCookie('treeacademy_refresh', cookieOptions({ path: '/api/auth' }))
-  res.status(204).end()
-}))
-
-app.post('/api/auth/stop-impersonation', requireAuth, asyncRoute(async (req, res) => {
-  if (!dbState.ready) return res.status(503).json({ error: 'Impersonation requires MongoDB.' })
-  const token = req.cookies.treeacademy_refresh
-  const record = token ? await RefreshToken.findOne({ tokenHash: hashToken(token) }) : null
-  if (!record?.impersonatorId) return res.status(400).json({ error: 'This session is not an impersonation.' })
-  const admin = await User.findOne({ _id: record.impersonatorId, status: 'active' })
-  if (!admin) return res.status(403).json({ error: 'The original account is no longer available.' })
-  await RefreshToken.deleteOne({ _id: record._id })
-  const accessToken = await issueSession(res, admin)
-  await saveAudit('user.impersonation_ended', 'User', record.userId.toString(), {}, admin.id)
-  res.json({ accessToken, user: sessionUser(admin) })
-}))
-
-app.post('/api/auth/change-password', requireAuth, asyncRoute(async (req, res) => {
-  if (!dbState.ready) return res.status(503).json({ error: 'Password changes require MongoDB.' })
-  const { currentPassword, newPassword } = passwordChangeInput.parse(req.body)
-  const user = await User.findById(req.auth.sub)
-  if (!user?.passwordHash || !(await bcrypt.compare(currentPassword, user.passwordHash))) return res.status(401).json({ error: 'Your current password is incorrect.' })
-  user.passwordHash = await bcrypt.hash(newPassword, 12)
-  await user.save()
-  await RefreshToken.deleteMany({ userId: user._id })
-  await saveAudit('user.password_changed', 'User', user.id, {}, user.id)
-  res.clearCookie('treeacademy_refresh', cookieOptions({ path: '/api/auth' }))
-  res.status(204).end()
-}))
-
-const PROFILE_FIELDS = 'name email username role avatarUrl bio headline location birthDate school degree facebookUrl createdAt'
-
-// Birth date is the one profile field peers never see: it's identity-verification material, and it
-// arrives from the enrollment form rather than being volunteered publicly. Owners and staff do see
-// it, because staff need it to match a learner against their signed agreement.
-const publicProfile = (user, { privileged }) => (privileged ? user : { ...user, birthDate: undefined })
-
-app.get('/api/users/:id', requireAuth, asyncRoute(async (req, res) => {
-  if (!dbState.ready) return res.status(503).json({ error: 'Profiles require MongoDB.' })
-  const user = await User.findById(req.params.id).select(PROFILE_FIELDS).lean()
-  if (!user) return res.status(404).json({ error: 'User not found.' })
-  const isStaff = ['instructor', 'admin'].includes(req.auth.role)
-  const privileged = isStaff || String(user._id) === req.auth.sub
-  const [badges, certificates, enrollments] = await Promise.all([
-    StudentBadge.find({ learnerId: user._id }).populate('badgeId', 'title description color icon').sort({ createdAt: -1 }).lean(),
-    Certificate.find({ learnerId: user._id }).populate('templateId', 'title scope').sort({ createdAt: -1 }).lean(),
-    // Staff open a member's profile to check what that person actually signed, so the submitted
-    // application and agreement are surfaced here. Only staff — a learner never sees another
-    // learner's paperwork, and the keys themselves are never sent (see enrollmentDocuments).
-    isStaff ? Enrollment.find({ 'applicant.email': user.email }).sort({ createdAt: -1 }).lean() : [],
-  ])
-  res.json({
-    user: publicProfile(user, { privileged }),
-    badges,
-    certificates,
-    ...(isStaff && { enrollments: enrollments.map((row) => ({ id: String(row._id), pathway: row.applicant?.pathway, status: row.status, createdAt: row.createdAt, documents: enrollmentDocuments(row) })) }),
-  })
-}))
-
-app.patch('/api/users/me', requireAuth, asyncRoute(async (req, res) => {
-  if (!dbState.ready) return res.status(503).json({ error: 'Profile updates require MongoDB.' })
-  const updates = profileInput.parse(req.body)
-  // `username` is uniquely indexed, so check before writing to return a readable message instead of
-  // a raw duplicate-key error. Excluding self keeps re-saving an unchanged profile from 409-ing.
-  if (updates.username && await User.findOne({ username: updates.username, _id: { $ne: req.auth.sub } }).select('_id').lean()) {
-    return res.status(409).json({ error: 'That preferred name is already taken.' })
-  }
-  const user = await User.findByIdAndUpdate(req.auth.sub, updates, { new: true, runValidators: true }).select(PROFILE_FIELDS)
-  if (!user) return res.status(404).json({ error: 'User not found.' })
-  // Field *names* only — the values are personal data and audit rows are read by every admin.
-  await saveAudit('user.profile_updated', 'User', user.id, { fields: Object.keys(updates) }, user.id)
-  res.json(user)
-}))
-
-app.post('/api/users/me/avatar', requireAuth, avatarUpload.single('avatar'), asyncRoute(async (req, res) => {
-  if (!dbState.ready) return res.status(503).json({ error: 'Avatar uploads require MongoDB.' })
-  if (!req.file) return res.status(400).json({ error: 'Choose a JPG, PNG, or WEBP image under 3MB.' })
-  const avatarUrl = await saveAvatarUpload(req.file)
-  const user = await User.findByIdAndUpdate(req.auth.sub, { avatarUrl }, { new: true })
-  await saveAudit('user.avatar_updated', 'User', user.id, {}, user.id)
-  res.json({ avatarUrl, user: sessionUser(user) })
-}))
-
-app.get('/api/auth/google', (_req, res) => {
-  if (!config.google.clientId || !config.google.clientSecret) return res.status(503).json({ error: 'Google sign-in is not configured.' })
-  const state = createToken()
-  res.cookie('treeacademy_google_state', state, cookieOptions({ maxAge: 10 * 60 * 1000, path: '/api/auth/google' }))
-  const query = new URLSearchParams({
-    client_id: config.google.clientId,
-    redirect_uri: config.google.redirectUri,
-    response_type: 'code',
-    scope: 'openid email profile',
-    state,
-  })
-  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${query}`)
-})
-
-app.get('/api/auth/google/callback', asyncRoute(async (req, res) => {
-  const failure = (reason) => res.redirect(`${config.clientUrl}/auth?oauth=${encodeURIComponent(reason)}`)
-  if (!dbState.ready || !config.google.clientId || !config.google.clientSecret || !req.query.code || req.query.state !== req.cookies.treeacademy_google_state) return failure('unavailable')
-  res.clearCookie('treeacademy_google_state', cookieOptions({ path: '/api/auth/google' }))
-  const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ code: req.query.code, client_id: config.google.clientId, client_secret: config.google.clientSecret, redirect_uri: config.google.redirectUri, grant_type: 'authorization_code' }),
-  })
-  if (!tokenResponse.ok) return failure('denied')
-  const tokens = await tokenResponse.json()
-  const identityResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(tokens.id_token)}`)
-  if (!identityResponse.ok) return failure('identity')
-  const identity = await identityResponse.json()
-  if (identity.aud !== config.google.clientId || identity.email_verified !== 'true') return failure('identity')
-  const user = await User.findOne({ email: identity.email.toLowerCase() })
-  if (!user || user.status === 'suspended') return failure('not-approved')
-  user.googleSubject = identity.sub
-  if (user.status === 'invited') {
-    user.status = 'active'
-    user.inviteTokenHash = undefined
-    user.inviteExpiresAt = undefined
-  }
-  await user.save()
-  await issueSession(res, user)
-  await saveAudit('user.google_signed_in', 'User', user.id)
-  res.redirect(`${config.clientUrl}/dashboard?oauth=success`)
-}))
+// Auth (login/refresh/logout/impersonation/activation/password reset/Google OAuth) and profile
+// routes (/api/users/*) now live in routes/auth.js and routes/users.js — see app.use() below.
 
 app.post('/api/newsletter', asyncRoute(async (req, res) => {
   const { email } = newsletterInput.parse(req.body)
