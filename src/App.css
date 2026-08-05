@@ -192,6 +192,27 @@ em { font-family: var(--serif); font-weight: 400; }
 .payment-plan-option strong { color: var(--forest); font-size: 13px; }
 .payment-plan-option small { color: #7a8079; font-size: 10px; line-height: 1.5; }
 .payment-plan-option b { color: var(--forest); font-size: 16px; font-weight: 800; white-space: nowrap; }
+.payment-plan-option b s { margin-right: 7px; color: #9aa099; font-size: 12px; font-weight: 650; }
+
+/* Enrollment — voucher code */
+.voucher-field { display: grid; gap: 7px; margin-top: 18px; }
+.voucher-field > label { color: #5e655d; font-size: 11px; font-weight: 750; }
+.voucher-row { display: flex; gap: 8px; }
+.voucher-row input { flex: 1; min-height: 42px; padding: 8px 12px; color: var(--forest); background: #fff; border: 1px solid #dbe0da; border-radius: 6px; outline-color: var(--gold); font: inherit; font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.voucher-row input:disabled { background: #f4f5f2; }
+.voucher-row .button { flex: 0 0 auto; }
+.voucher-applied { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 18px; padding: 12px 14px; background: #f2f7f1; border: 1px solid #c4d8c6; border-radius: 6px; }
+.voucher-applied-code { display: inline-flex; gap: 7px; align-items: center; color: var(--forest); font-size: 12px; font-weight: 800; letter-spacing: .05em; }
+.voucher-applied-note { color: #5e755f; font-size: 11px; }
+.voucher-remove { display: grid; margin-left: auto; padding: 4px; place-items: center; color: #6c7b6d; background: none; border: 0; cursor: pointer; }
+.voucher-remove:hover { color: var(--forest); }
+.voucher-error { width: 100%; margin: 0; color: #9d3d3d; font-size: 11px; }
+.voucher-summary { display: grid; gap: 6px; margin-top: 14px; padding: 14px; background: #fff; border: 1px solid #dbe0da; border-radius: 6px; }
+.voucher-summary span { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; color: #5e655d; font-size: 12px; }
+.voucher-summary b { color: var(--forest); font-weight: 800; }
+.voucher-summary-off, .voucher-summary-off b { color: #3f7a4f; }
+.voucher-summary-total { padding-top: 7px; border-top: 1px solid #e6e9e5; font-weight: 750; }
+.voucher-summary small { color: #7a8079; font-size: 10px; line-height: 1.5; }
 
 /* auth */
 .auth-page { min-height: 100vh; display: grid; grid-template-columns: 1.05fr .95fr; background: #fff; }.auth-art { position: relative; min-height: 100vh; padding: 35px 10%; overflow: hidden; color: #f9f9f7; background: var(--forest); }.auth-art::after { content: ''; position: absolute; width: 580px; height: 580px; left: -180px; bottom: -270px; border: 1px solid #77917e; border-radius: 50%; box-shadow: 0 0 0 45px rgba(255,255,255,.02), 0 0 0 90px rgba(255,255,255,.02); }.auth-art-content { position: relative; z-index: 1; max-width: 520px; margin: 17vh auto 0; }.auth-art .status-pill { color: #f6e8c9; background: #355c45; border-color: #557360; }.auth-art h1 { margin: 23px 0; font-size: clamp(46px, 5vw, 68px); }.auth-art-content > p { max-width: 435px; color: #c7d7c9; font-size: 16px; line-height: 1.7; }.auth-quote { max-width: 370px; margin-top: 65px; padding: 19px; color: #f0f3ee; background: rgba(255,255,255,.08); border-left: 3px solid var(--gold); font-family: var(--serif); font-size: 17px; font-style: italic; line-height: 1.45; }.auth-quote span { display: block; margin-top: 12px; color: #c7d7c9; font-family: inherit; font-size: 10px; font-style: normal; }.auth-panel { width: min(100%, 510px); align-self: center; justify-self: center; padding: 45px 32px; }.auth-back { display: inline-flex; align-items: center; gap: 7px; margin-bottom: 76px; color: #767c74; font-size: 11px; font-weight: 700; }.auth-back svg { transform: rotate(180deg); }.auth-panel h2 { margin: 0 0 16px; color: var(--forest); font-size: 42px; }.auth-intro { color: #737972; font-size: 13px; line-height: 1.6; }.auth-form { display: grid; gap: 15px; margin-top: 26px; }.auth-form .form-field input { background: #fbfbfa; }.auth-form .button { margin-top: 5px; }.forgot { justify-self: start; padding: 0; color: var(--forest); background: none; border: 0; font-size: 11px; font-weight: 750; }.or { display: flex; align-items: center; gap: 10px; margin-block: 22px; color: #8a8f88; font-size: 10px; text-align: center; }.or::before, .or::after { content: ''; height: 1px; flex: 1; background: #e4e5e1; }.google-button { width: 100%; display: flex; align-items: center; justify-content: center; gap: 9px; height: 47px; color: #444943; background: #fff; border: 1px solid #d9ddd8; font-size: 12px; font-weight: 750; }.signup-note { margin-top: 22px; color: #777d76; font-size: 11px; text-align: center; }.signup-note a { color: var(--forest); font-weight: 800; }.auth-notice { margin-top: 17px; padding: 10px; color: #516b56; background: #edf4ee; font-size: 10px; line-height: 1.5; }.demo-switch { display: flex; align-items: center; justify-content: space-between; gap: 5px; margin-top: 27px; padding-top: 17px; border-top: 1px solid #e5e7e3; color: #8a8f88; font-size: 10px; }.demo-switch div { display: flex; gap: 4px; }.demo-switch button { padding: 5px 7px; color: var(--forest); background: #edf2ed; border: 0; font-size: 9px; font-weight: 750; }.pending-state { max-width: 385px; }.big-status { display: grid; width: 60px; height: 60px; margin-bottom: 24px; place-items: center; color: var(--gold); background: var(--gold-light); border-radius: 50%; }.pending-state h2 { font-size: 42px; }.pending-state > p:not(.eyebrow) { color: #70766e; font-size: 14px; line-height: 1.7; }.pending-state .button { margin-top: 14px; }
@@ -643,6 +664,23 @@ a.task-row:hover { background: #f7f8f5; }
 .admin-webinar-registrations li { display: flex; gap: 10px; align-items: baseline; font-size: 11px; }
 .admin-webinar-registrations strong { color: var(--forest); }
 .admin-webinar-registrations small { color: #9aa099; }
+
+/* Admin — vouchers. Reuses the webinar card/list shells; only the form and the code badge differ. */
+.admin-voucher-form { display: grid; gap: 10px; max-width: 720px; margin: 22px 0; padding: 18px; background: #fff; border: 1px solid #e1e5df; }
+.admin-voucher-form input, .admin-voucher-form select { width: 100%; min-height: 40px; padding: 8px 11px; color: var(--forest); background: #fff; border: 1px solid #cdd7cc; border-radius: 4px; outline-color: var(--gold); font: inherit; font-size: 13px; }
+.admin-voucher-form .operations-note { margin-top: 4px; }
+.admin-voucher-code { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); letter-spacing: .04em; }
+.admin-voucher-scope-hint { margin: 0; padding: 9px 11px; color: #56604f; background: #f5f8f4; border-left: 2px solid var(--gold); font-size: 11px; line-height: 1.55; }
+.admin-voucher-redemptions { display: grid; gap: 4px; margin: 13px 0 0; padding: 12px; background: #f8faf7; border-radius: 5px; list-style: none; }
+.admin-voucher-redemptions li { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid #e9ede7; font-size: 11px; }
+.admin-voucher-redemptions li:last-child { border-bottom: 0; }
+.admin-voucher-redeemer { display: grid; gap: 2px; }
+.admin-voucher-redeemer strong { color: var(--forest); font-size: 12px; }
+.admin-voucher-redeemer a { color: var(--forest); text-decoration: underline; text-underline-offset: 2px; }
+.admin-voucher-redeemer small, .admin-voucher-redeemed-amounts small { color: #9aa099; font-size: 10px; }
+.admin-voucher-redeemed-amounts { display: grid; gap: 2px; text-align: right; }
+.admin-voucher-redeemed-amounts b { color: #3f7a4f; font-size: 12px; }
+.admin-voucher-redemptions time { color: #9aa099; font-size: 10px; white-space: nowrap; }
 .admin-webinar-registrations span { margin-left: auto; color: #a0a59e; font-size: 9px; }
 
 /* Admin — course catalog & pricing cards */
@@ -684,16 +722,47 @@ a.task-row:hover { background: #f7f8f5; }
 .admin-agreement-applicant-list small { display: block; color: #8b9389; }
 
 /* Admin — email automation templates */
-.admin-email-template-list { display: grid; gap: 16px; margin-top: 22px; max-width: 1200px; }
-.admin-email-template { display: grid; gap: 12px; padding: 20px; background: #fff; border: 1px solid #e1e5df; }
-.admin-email-template-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; justify-content: space-between; }
-.admin-email-template-head h3 { margin: 0; color: var(--forest); font-size: 15px; }
-.admin-email-template-head small { display: block; margin-top: 4px; color: #8a9088; font-size: 11px; }
-.admin-email-template input, .admin-email-template textarea { width: 100%; padding: 9px 11px; color: var(--forest); background: #fff; border: 1px solid #cdd7cc; border-radius: 4px; outline-color: var(--gold); font: inherit; font-size: 12px; }
+.admin-email-template-list { display: grid; gap: 10px; margin-top: 22px; max-width: 1200px; }
+.admin-email-template { background: #fff; border: 1px solid #e1e5df; border-radius: 6px; overflow: hidden; }
+.admin-email-template.is-open { border-color: #c6d2c6; box-shadow: 0 1px 3px rgba(27,67,46,.07); }
+/* The entire header is the accordion control, so it stays an easy target on a phone. */
+.admin-email-template-toggle { width: 100%; display: flex; gap: 12px; align-items: center; padding: 15px 18px; background: none; border: 0; font: inherit; text-align: left; cursor: pointer; }
+.admin-email-template-toggle:hover { background: #f8faf7; }
+.admin-email-template-toggle:focus-visible { outline: 2px solid var(--gold); outline-offset: -2px; }
+.admin-email-chevron { flex: 0 0 auto; color: #8a9088; transition: transform .15s ease; }
+.admin-email-template.is-open .admin-email-chevron { transform: rotate(90deg); }
+.admin-email-template-title { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.admin-email-template-title strong { color: var(--forest); font-size: 14px; }
+.admin-email-template-title small { color: #8a9088; font-size: 11px; }
+.admin-email-template-flags { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.admin-email-template-panel { display: grid; gap: 12px; padding: 4px 18px 18px; border-top: 1px solid #eef1ed; }
+.admin-email-trigger { margin: 12px 0 0; color: #56604f; font-size: 12px; line-height: 1.6; }
+/* :not([type=checkbox]) matters — a bare `input` selector stretched the "Automatic sending" tick
+   box to the full row width and threw its label to the far right. */
+.admin-email-template input:not([type="checkbox"]), .admin-email-template textarea { width: 100%; padding: 9px 11px; color: var(--forest); background: #fff; border: 1px solid #cdd7cc; border-radius: 4px; outline-color: var(--gold); font: inherit; font-size: 12px; }
+.admin-email-template .builder-publish-check { justify-self: start; }
 .admin-email-template textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; height: min(60vh, 620px); }
-.admin-email-from-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+/* auto-fit rather than a fixed pair, so the two fields stack by themselves on a narrow screen. */
+.admin-email-from-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
 .admin-email-placeholders { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; color: #8a9088; font-size: 10px; }
 .admin-email-placeholders code { padding: 2px 6px; color: #8a6b30; background: #f4ecd7; border-radius: 4px; font-size: 10px; }
+.admin-email-section-note { padding: 9px 11px; background: #f5f8f4; border-left: 2px solid var(--gold); border-radius: 0 4px 4px 0; line-height: 1.6; }
+.admin-email-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; justify-content: space-between; }
+.admin-email-actions > .button { flex: 0 0 auto; }
+.admin-email-test { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.admin-email-test .builder-field { min-width: 200px; }
+.admin-email-test-note { margin: 0; color: #8a9088; font-size: 11px; line-height: 1.6; }
+.admin-email-test-note code { padding: 1px 5px; background: #f0f2ee; border-radius: 3px; font-size: 10px; }
+@media (max-width: 640px) {
+  .admin-email-template-toggle { flex-wrap: wrap; padding: 13px 14px; }
+  /* Pills drop below the title instead of squeezing it to a couple of characters. */
+  .admin-email-template-flags { flex-basis: 100%; justify-content: flex-start; padding-left: 28px; }
+  .admin-email-template-panel { padding: 4px 14px 16px; }
+  .admin-email-template textarea { height: 45vh; }
+  .admin-email-actions { flex-direction: column; align-items: stretch; }
+  .admin-email-test { flex-direction: column; align-items: stretch; }
+  .admin-email-actions .button, .admin-email-test .button { justify-content: center; }
+}
 .admin-table-audit .admin-table-head, .admin-table-audit .admin-table-row { grid-template-columns: 1.7fr 1fr 1fr .9fr; }
 .admin-table-enrollments .admin-table-head, .admin-table-enrollments .admin-table-row { grid-template-columns: 34px 1.3fr .8fr .95fr 1fr .8fr 1.35fr; }
 .admin-table-documents .admin-table-head, .admin-table-documents .admin-table-row { grid-template-columns: 1.5fr .85fr 1fr .95fr 1.6fr; }

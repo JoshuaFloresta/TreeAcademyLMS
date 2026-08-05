@@ -232,6 +232,28 @@ const quizSchema = new Schema({
   isPublished: { type: Boolean, default: false },
 }, { timestamps: true })
 
+// What an applied voucher looked like at the moment it was applied — a snapshot, not a live join.
+// The Voucher row can later be edited, deactivated, or deleted, and none of that may retroactively
+// change what an applicant was quoted or what a receipt says they were charged. `listAmount` is the
+// undiscounted price the discount was computed from, so re-applying or removing a code always
+// recomputes from the original price instead of compounding discounts on top of each other.
+const enrollmentVoucherSchema = new Schema({
+  voucherId: { type: Schema.Types.ObjectId, ref: 'Voucher' },
+  code: { type: String, required: true },
+  discountType: { type: String, enum: ['percent', 'fixed'], required: true },
+  discountValue: { type: Number, required: true },
+  appliesTo: { type: String, enum: ['total', 'upfront'], default: 'total' },
+  discountAmount: { type: Number, required: true, min: 0 },
+  // What the discount was computed against — the enrollment total for a 'total' voucher, the
+  // pathway's reservation fee for an 'upfront' one. Stored rather than re-derived so the figure the
+  // applicant was shown survives an admin editing the pathway's upfront fee afterwards.
+  baseAmount: { type: Number, required: true, min: 0 },
+  // Always the undiscounted enrollment total, whatever the scope. An 'upfront' voucher leaves this
+  // equal to `amount` — it lowers what's due today, not what is owed overall.
+  listAmount: { type: Number, required: true, min: 0 },
+  appliedAt: Date,
+}, { _id: false })
+
 const enrollmentSchema = new Schema({
   applicant: {
     name: { type: String, required: true },
@@ -245,6 +267,11 @@ const enrollmentSchema = new Schema({
   // means one implicit line for the full amount, so an ordinary enrollment needs nothing filled in.
   // A line may be negative — that's how a discount or written-off amount is itemised and explained.
   feeBreakdown: [{ label: { type: String, required: true, trim: true, maxlength: 120 }, amount: { type: Number, required: true } }],
+  // Set when a discount code is applied at checkout; null once removed. `amount` above is already
+  // net of it, and feeBreakdown itemises the two lines — so every existing consumer of `amount`
+  // (statement of account, receipts, the admin balance column) picks the discount up without
+  // knowing vouchers exist.
+  voucher: { type: enrollmentVoucherSchema, default: null },
   // 'manual' marks a billing record staff created for a learner who never went through the public
   // enrollment flow — no intake, no signed agreement. Most of the current roster was onboarded that
   // way and had no billing record at all until this existed.
@@ -344,6 +371,69 @@ const pricingSettingsSchema = new Schema({
   upfrontConsultant: { type: Number, required: true, default: 5000 },
   upfrontAppraiser: { type: Number, required: true, default: 1000 },
 }, { timestamps: true })
+
+// Admin-issued discount codes for the public enrollment checkout. `code` is stored uppercase and
+// unique, and the redeem route uppercases whatever the applicant types, so "earlybird" and
+// "EARLYBIRD" are the same voucher rather than a silent miss.
+const voucherSchema = new Schema({
+  code: { type: String, required: true, unique: true, uppercase: true, trim: true, minlength: 3, maxlength: 40 },
+  discountType: { type: String, enum: ['percent', 'fixed'], required: true },
+  // Percent of the amount in scope (1–100) for 'percent'; a peso amount for 'fixed'.
+  discountValue: { type: Number, required: true, min: 0 },
+  // WHAT the discount comes off, which is a different question from how big it is:
+  //   'total'   — a real giveaway. Reduces what the applicant owes overall, on either payment plan.
+  //   'upfront' — lowers only the reservation fee due today; the enrollment total is untouched, so
+  //               the saving is added back to the balance. A "reserve your slot for less" promo
+  //               that costs the academy nothing, and does nothing for a pay-in-full applicant.
+  appliesTo: { type: String, enum: ['total', 'upfront'], default: 'total' },
+  // Null means it never expires. Compared as an instant, so a date-only value from the admin form
+  // expires at midnight local time on that date.
+  expiresAt: { type: Date, default: null },
+  // 0 means unlimited. `usedCount` counts CONFIRMED payments only — it is incremented from
+  // markEnrollmentPaid, never when a code is merely applied, so an abandoned checkout cannot burn
+  // a use of a limited-run code.
+  maxUses: { type: Number, default: 0, min: 0 },
+  // How many times ONE applicant may redeem this code, counted by email across all their
+  // enrollments (0 = no per-person cap). Separate from maxUses: a 100-use code with no per-person
+  // cap can legitimately be drained by a single person, which is rarely what a promo intends.
+  maxUsesPerApplicant: { type: Number, default: 0, min: 0 },
+  usedCount: { type: Number, default: 0, min: 0 },
+  isActive: { type: Boolean, default: true },
+  createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+}, { timestamps: true })
+
+// One row per CONFIRMED redemption — who actually used a code, on which enrollment, and what it was
+// worth. `Voucher.usedCount` is only a counter; this is the record behind it, and the thing that
+// answers "who used this?" and "has this person already used it?".
+//
+// Everything identifying is snapshotted rather than joined, for the same reason the enrollment's
+// voucher block is: the Voucher can be renamed, the applicant can later change their profile name,
+// and neither may rewrite the history of a redemption that already happened.
+const voucherRedemptionSchema = new Schema({
+  voucherId: { type: Schema.Types.ObjectId, ref: 'Voucher', required: true, index: true },
+  code: { type: String, required: true },
+  enrollmentId: { type: Schema.Types.ObjectId, ref: 'Enrollment', required: true },
+  // The provisioned learner account. Null only if account creation failed after payment — the
+  // redemption still happened and still has to be on the record.
+  userId: { type: Schema.Types.ObjectId, ref: 'User' },
+  // Email is the identity the per-applicant limit counts on: it exists at redemption time even
+  // when the User account is being created in the same breath, and it's what the applicant
+  // enrolled under.
+  applicantEmail: { type: String, required: true, lowercase: true, index: true },
+  applicantName: String,
+  pathway: String,
+  appliesTo: { type: String, enum: ['total', 'upfront'] },
+  discountAmount: { type: Number, min: 0 },
+  // What was actually charged at checkout after the discount — so the log reconciles against the
+  // Payment ledger without recomputing anything.
+  amountCharged: { type: Number, min: 0 },
+  redeemedAt: { type: Date, required: true },
+}, { timestamps: true })
+// THE idempotency guarantee for redemption counting: a replayed webhook for the same enrollment
+// cannot insert a second row, and the counter is only incremented when a row is genuinely new.
+voucherRedemptionSchema.index({ voucherId: 1, enrollmentId: 1 }, { unique: true })
+// Backs the per-applicant limit check and the "has this person used it" lookup.
+voucherRedemptionSchema.index({ voucherId: 1, applicantEmail: 1 })
 
 const calendarEventSchema = new Schema({
   courseId: { type: Schema.Types.ObjectId, ref: 'Course' },
@@ -598,6 +688,8 @@ export const Enrollment = models.Enrollment || model('Enrollment', enrollmentSch
 export const Payment = models.Payment || model('Payment', paymentSchema)
 export const CourseEnrollment = models.CourseEnrollment || model('CourseEnrollment', courseEnrollmentSchema)
 export const PricingSettings = models.PricingSettings || model('PricingSettings', pricingSettingsSchema)
+export const Voucher = models.Voucher || model('Voucher', voucherSchema)
+export const VoucherRedemption = models.VoucherRedemption || model('VoucherRedemption', voucherRedemptionSchema)
 export const CalendarEvent = models.CalendarEvent || model('CalendarEvent', calendarEventSchema)
 export const Attendance = models.Attendance || model('Attendance', attendanceSchema)
 export const Notification = models.Notification || model('Notification', notificationSchema)

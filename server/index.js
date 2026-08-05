@@ -13,9 +13,9 @@ import { Server } from 'socket.io'
 import { z } from 'zod'
 import { config, integrations, isAllowedOrigin, isProduction } from './config.js'
 import { catalog } from './catalog.js'
-import { Announcement, Assignment, Attendance, Badge, BadgeRule, CalendarEvent, Category, CategoryHeader, Certificate, CertificateTemplate, ContentAsset, Course, CourseEnrollment, EmailTemplate, Enrollment, ForumPost, Payment, ForumReaction, ForumThread, LearningModule, LearningProgress, Lesson, Module, NewsletterSubscriber, Notification, Presence, PricingSettings, Quiz, QuizAttempt, Report, RolePermission, StudentBadge, Submission, SubmissionComment, SupportTicket, Webinar, WebinarRegistration, WebhookEvent, AuditLog, RefreshToken, User } from './models.js'
+import { Announcement, Assignment, Attendance, Badge, BadgeRule, CalendarEvent, Category, CategoryHeader, Certificate, CertificateTemplate, ContentAsset, Course, CourseEnrollment, EmailTemplate, Enrollment, ForumPost, Payment, ForumReaction, ForumThread, LearningModule, LearningProgress, Lesson, Module, NewsletterSubscriber, Notification, Presence, PricingSettings, Quiz, QuizAttempt, Report, RolePermission, StudentBadge, Submission, SubmissionComment, SupportTicket, Voucher, VoucherRedemption, Webinar, WebinarRegistration, WebhookEvent, AuditLog, RefreshToken, User } from './models.js'
 import { createToken, hashToken, requireAdmin, requireAuth, requireStaff, signAccessToken, verifyHmac, verifyPaymongoSignature } from './security.js'
-import { emailTemplateDefaults, ensureDefaultEmailTemplates, sendEnrollmentDocumentsEmail, sendTemplatedEmail } from './email.js'
+import { emailTemplateDefaults, ensureDefaultEmailTemplates, sampleVarsFor, sendEnrollmentDocumentsEmail, sendTemplatedEmail } from './email.js'
 import { renderCertificate, saveCertificateTemplate, saveSubmissionAttachment, submissionExtensionByMime } from './certificates.js'
 import { createApplicationPdf, createFilledAgreement, createFilledDocument, createFilledDocumentBytes, extractAgreementFields, saveAgreementTemplate } from './enrollment-documents.js'
 import { PUBLIC_PREFIX, getFile, isObjectStorage, publicUrl, putFile, randomKey } from './storage.js'
@@ -125,6 +125,31 @@ const pricingSettingsInput = z.object({
   upfrontAppraiser: z.coerce.number().min(1).max(1_000_000),
 })
 const paymentSessionInput = z.object({ plan: z.enum(['full', 'upfront']).optional() })
+// Voucher codes are typed by hand, so they're trimmed and uppercased on the way in and stored
+// uppercase — the lookup is then an exact indexed match rather than a case-insensitive scan.
+const voucherCodeField = z.string().trim().toUpperCase()
+  .min(3, 'Enter a voucher code.')
+  .max(40, 'That voucher code is too long.')
+  .regex(/^[A-Z0-9][A-Z0-9-]*$/, 'Voucher codes use letters, numbers, and dashes only.')
+const voucherRedeemInput = z.object({ code: voucherCodeField })
+const voucherShape = z.object({
+  code: voucherCodeField,
+  discountType: z.enum(['percent', 'fixed']),
+  discountValue: z.coerce.number().positive('Enter a discount greater than zero.').max(1_000_000),
+  // Defaults to 'total' so a voucher created before this existed (or by a caller that omits it)
+  // keeps behaving as a straightforward discount on the enrollment price.
+  appliesTo: z.enum(['total', 'upfront']).optional(),
+  // Null is "never expires"; 0 max uses is "unlimited".
+  expiresAt: z.coerce.date().nullable().optional(),
+  maxUses: z.coerce.number().int().min(0).max(100_000).optional(),
+  maxUsesPerApplicant: z.coerce.number().int().min(0).max(1_000).optional(),
+  isActive: z.boolean().optional(),
+})
+const voucherInput = voucherShape
+// Every field optional so an admin can flip `isActive` or push an expiry date without re-sending
+// the whole voucher. The percent ceiling is checked at the route instead of here, because a patch
+// that changes only one of the two fields still has to be judged against the stored other one.
+const voucherPatchInput = voucherShape.partial()
 // Staff-set reminder for a "pay upfront only" enrollment's remaining balance — purely
 // informational (shown on the learner's Statement of Account), not an in-app payment collector.
 const balanceDueInput = z.object({
@@ -535,6 +560,11 @@ const emailTemplateUpdateInput = z.object({
   fromEmail: z.string().trim().max(254).refine((value) => value === '' || z.string().email().safeParse(value).success, 'Invalid email address').optional(),
   enabled: z.boolean().optional(),
 })
+// Blank is allowed and means "send it to me" — the route resolves it to the requesting admin's own
+// address rather than requiring them to retype it every time.
+const testEmailInput = z.object({
+  to: z.string().trim().max(254).refine((value) => value === '' || z.string().email().safeParse(value).success, 'Enter a valid email address.').optional(),
+})
 const permissionsInput = z.object({
   learner: z.array(z.string().trim().max(60)).max(60),
   instructor: z.array(z.string().trim().max(60)).max(60),
@@ -621,7 +651,27 @@ const RESERVED_COURSE_SLUGS = ['broker-review', 'consultant-review', 'appraiser-
 // this and the application route reports it as the next step, so the two can't drift apart.
 const pathwayDocumentType = (pathway) => (pathway === 'consultant' ? 'reclex' : 'realex-reblex')
 const id = () => crypto.randomUUID()
-const publicEnrollment = (enrollment) => ({ id: enrollment._id?.toString() ?? enrollment.id, status: enrollment.status, amount: enrollment.amount, currency: enrollment.currency })
+// `amount` is always the NET payable — see applyVoucherToEnrollment. `discount` is what the
+// applicant is told about their own voucher: the code and the computed figures only, never the
+// voucher's remaining uses or expiry, which are the academy's business and not the applicant's.
+const publicEnrollment = (enrollment) => ({
+  id: enrollment._id?.toString() ?? enrollment.id,
+  status: enrollment.status,
+  amount: enrollment.amount,
+  currency: enrollment.currency,
+  discount: enrollment.voucher?.code
+    ? {
+      code: enrollment.voucher.code,
+      discountType: enrollment.voucher.discountType,
+      discountValue: enrollment.voucher.discountValue,
+      // 'total' | 'upfront' — which figure the payment step should show the saving against.
+      appliesTo: enrollment.voucher.appliesTo ?? 'total',
+      discountAmount: enrollment.voucher.discountAmount,
+      baseAmount: enrollment.voucher.baseAmount ?? enrollment.voucher.listAmount,
+      listAmount: enrollment.voucher.listAmount,
+    }
+    : null,
+})
 
 // What a staff member is allowed to know about an enrollment's paperwork: which documents exist and
 // when they were signed — never the storage keys. Keys are how the file is fetched, so handing them
@@ -639,6 +689,166 @@ const enrollmentDocuments = (row) => Object.entries(ENROLLMENT_DOCUMENT_TYPES)
 async function findEnrollment(enrollmentId) {
   if (databaseReady) return Enrollment.findById(enrollmentId)
   return memory.enrollments.get(enrollmentId)
+}
+
+// --- Vouchers -----------------------------------------------------------------------------------
+// PayMongo rejects a checkout session below its own floor, so a discount that takes the payable
+// total under this has to be refused with an explanation rather than sent to the provider to fail.
+const MINIMUM_CHARGE_AMOUNT = 20
+// A voucher can only be applied while the enrollment is still pre-payment. Once it's paid the
+// amount is what was actually charged, and a discount applied after the fact would silently
+// contradict the receipt and the ledger.
+const VOUCHER_EDIT_STATUSES = ['application_pending', 'documents_pending', 'documents_complete', 'payment_pending', 'contract_pending', 'contract_signed']
+
+// Every reason a voucher can be refused, in one place — the redeem route and the re-check at
+// checkout have to agree, or a code accepted on the payment step could still be honoured minutes
+// after it expired. An unknown code and a deactivated one deliberately return the SAME message:
+// this is a public, unauthenticated endpoint, and distinct errors would turn it into an oracle for
+// which codes exist.
+function voucherRejection(voucher, now = new Date()) {
+  if (!voucher || !voucher.isActive) return 'That voucher code is not valid.'
+  if (voucher.expiresAt && new Date(voucher.expiresAt).getTime() <= now.getTime()) return 'That voucher has expired.'
+  if (voucher.maxUses > 0 && voucher.usedCount >= voucher.maxUses) return 'That voucher has already reached its usage limit.'
+  return null
+}
+
+// Rounded to whole pesos here rather than left to PayMongo's centavo conversion, so the figure the
+// applicant is shown is exactly the figure that gets charged. Never negative, and never more than
+// the price itself — a ₱5,000 fixed voucher against a ₱3,000 enrollment discounts ₱3,000.
+function voucherDiscountFor(voucher, amount) {
+  const raw = voucher.discountType === 'percent' ? (Number(amount) * Number(voucher.discountValue)) / 100 : Number(voucher.discountValue)
+  return Math.min(Number(amount), Math.max(0, Math.round(raw)))
+}
+
+const voucherDiscountLabel = (voucher) => (voucher.discountType === 'percent' ? `${voucher.discountValue}% off` : `₱${Number(voucher.discountValue).toLocaleString('en-PH')} off`)
+// Which figure a voucher's discount comes off. 'upfront' targets the reservation fee due today;
+// anything else (including a pre-scope voucher with the field missing) targets the total.
+const voucherTargetsUpfront = (voucher) => voucher?.appliesTo === 'upfront'
+const voucherBaseAmount = (voucher, { listAmount, upfrontFee }) => (voucherTargetsUpfront(voucher) ? upfrontFee : listAmount)
+
+// Writes a TOTAL-scoped discount into the existing billing shape instead of inventing a parallel
+// one: `amount` becomes the net payable and `feeBreakdown` itemises how it got there, which is the
+// contract assertBreakdownTotals already enforces.
+//
+// An UPFRONT-scoped voucher deliberately leaves both alone. It doesn't change what is owed, only
+// what is collected today, so the total, the fee breakdown and the ledger must all stay at list
+// price — the saving shows up as a larger remaining balance, which is exactly what it is.
+//
+// `listAmount` is captured once either way, so applying a second code (or removing one) recomputes
+// from the undiscounted price rather than stacking discounts on top of each other.
+function applyVoucherToEnrollment(enrollment, voucher, { upfrontFee }) {
+  const listAmount = Number(enrollment.voucher?.listAmount ?? enrollment.amount)
+  const baseAmount = voucherBaseAmount(voucher, { listAmount, upfrontFee })
+  const discountAmount = voucherDiscountFor(voucher, baseAmount)
+  enrollment.voucher = {
+    voucherId: voucher._id ?? voucher.id,
+    code: voucher.code,
+    discountType: voucher.discountType,
+    discountValue: voucher.discountValue,
+    appliesTo: voucherTargetsUpfront(voucher) ? 'upfront' : 'total',
+    discountAmount,
+    baseAmount,
+    listAmount,
+    appliedAt: new Date(),
+  }
+  if (voucherTargetsUpfront(voucher)) {
+    enrollment.amount = listAmount
+    enrollment.feeBreakdown = []
+  } else {
+    enrollment.amount = listAmount - discountAmount
+    enrollment.feeBreakdown = [
+      { label: 'Enrollment fee', amount: listAmount },
+      { label: `Voucher ${voucher.code} (${voucherDiscountLabel(voucher)})`, amount: -discountAmount },
+    ]
+  }
+  return enrollment.voucher
+}
+
+// What the reservation-fee plan actually charges. Capped at the enrollment total, since a discounted
+// total can land below the pathway's fee — and reduced by an upfront-scoped voucher, using the
+// discount SNAPSHOT rather than recomputing, so an admin editing the fee later can't change what an
+// applicant was already quoted.
+function upfrontChargeFor(enrollment, pathwayUpfrontFee) {
+  const fee = Math.min(Number(pathwayUpfrontFee), Number(enrollment.amount))
+  if (!voucherTargetsUpfront(enrollment.voucher)) return fee
+  return Math.max(0, fee - Number(enrollment.voucher.discountAmount ?? 0))
+}
+
+function clearVoucherFromEnrollment(enrollment) {
+  if (!enrollment.voucher?.code) return false
+  enrollment.amount = Number(enrollment.voucher.listAmount ?? enrollment.amount)
+  enrollment.voucher = null
+  enrollment.feeBreakdown = []
+  return true
+}
+
+// How many times this specific person has already redeemed this code. Counted by email across all
+// their enrollments, since one applicant can hold several (a second pathway, or a restarted
+// application) and a per-person cap that only looked at one of them wouldn't be a cap at all.
+const applicantRedemptionCount = (voucherId, email) => VoucherRedemption.countDocuments({ voucherId, applicantEmail: String(email).toLowerCase() })
+
+// The per-applicant half of the limit check. Async and applicant-specific, so it can't live inside
+// voucherRejection — but the two are always called together, at apply time and again at checkout.
+// Unlike voucherRejection this message is deliberately specific: it describes the caller's OWN
+// history, so it gives away nothing about which codes exist.
+async function voucherApplicantRejection(voucher, email) {
+  const limit = Number(voucher?.maxUsesPerApplicant ?? 0)
+  if (!limit || !email) return null
+  const used = await applicantRedemptionCount(voucher._id ?? voucher.id, email)
+  if (used < limit) return null
+  return limit === 1
+    ? 'You have already used this voucher.'
+    : `You have already used this voucher the maximum of ${limit} times.`
+}
+
+// A use is counted when money is actually confirmed, not when a code is applied — otherwise an
+// abandoned checkout would burn a use of a limited-run code and nobody could get it back.
+//
+// The LOG ROW is written first, and its unique (voucherId, enrollmentId) index is what makes the
+// whole claim idempotent: a replayed webhook collides, returns early, and the counter is never
+// touched a second time. The counter is then bumped with a conditional $inc, which is what makes
+// two different applicants racing for the last use safe — only one update matches.
+//
+// Never throws: a miscounted voucher must not fail the payment that triggered it.
+async function claimVoucherUse(enrollment, learner) {
+  const voucher = enrollment.voucher
+  const voucherId = voucher?.voucherId
+  if (!databaseReady || !voucherId) return
+  const enrollmentId = enrollment._id?.toString() ?? enrollment.id
+  try {
+    await VoucherRedemption.create({
+      voucherId,
+      code: voucher.code,
+      enrollmentId,
+      userId: learner?._id ?? null,
+      applicantEmail: enrollment.applicant.email,
+      applicantName: enrollment.applicant.name,
+      pathway: enrollment.applicant.pathway,
+      appliesTo: voucher.appliesTo ?? 'total',
+      discountAmount: voucher.discountAmount,
+      amountCharged: enrollment.payment?.planAmount ?? enrollment.amount,
+      redeemedAt: enrollment.payment?.paidAt ?? new Date(),
+    })
+  } catch (error) {
+    // 11000 = this enrollment is already on the record. A duplicate delivery, not a new redemption.
+    if (error?.code === 11000) return
+    console.error('voucher redemption log failed:', error.message)
+    return
+  }
+  try {
+    const claimed = await Voucher.findOneAndUpdate(
+      { _id: voucherId, $or: [{ maxUses: 0 }, { $expr: { $lt: ['$usedCount', '$maxUses'] } }] },
+      { $inc: { usedCount: 1 } },
+      { new: true },
+    )
+    // Went over its limit between checkout and payment confirmation. The money is already
+    // collected and the redemption is already logged, so this is surfaced for staff rather than
+    // reversed — the log row is the truth, the counter is only the guard.
+    if (!claimed) await saveAudit('voucher.redeemed_over_limit', 'Enrollment', enrollmentId, { code: voucher.code, email: enrollment.applicant.email })
+    else await saveAudit('voucher.redeemed', 'Voucher', claimed.id, { code: claimed.code, usedCount: claimed.usedCount, enrollmentId })
+  } catch (error) {
+    console.error('voucher redemption count failed:', error.message)
+  }
 }
 
 // Notification/receipt emails must never fail the request that triggered them (account creation,
@@ -688,6 +898,27 @@ function sendPaymentReceiptEmail(enrollment, setupUrl) {
   const planAmount = Number(payment.planAmount ?? totalAmount)
   const balanceDue = Math.max(0, totalAmount - planAmount)
   const peso = (value) => `₱${value.toLocaleString('en-PH')}`
+  // A voucher shows up on the receipt as the figure it came off plus the saving itself. Which
+  // figure that is depends on the voucher's scope, so the LABEL is a variable rather than literal
+  // text in the template: a 'total' code discounts the enrollment price, an 'upfront' one discounts
+  // only the reservation fee (leaving the total, and therefore the balance below, untouched).
+  // hasDiscount drives the {{#hasDiscount}} sections — empty string, not false, so a template that
+  // prints it raw shows nothing rather than the word "false".
+  const voucher = enrollment.voucher
+  const cutsUpfront = voucher?.appliesTo === 'upfront'
+  const discountVars = voucher?.code
+    ? {
+      hasDiscount: '1',
+      voucherCode: voucher.code,
+      discountLabel: voucher.discountType === 'percent' ? `${voucher.discountValue}% off` : `${peso(Number(voucher.discountValue))} off`,
+      discountAmount: peso(Number(voucher.discountAmount ?? 0)),
+      discountBaseLabel: cutsUpfront ? 'Reservation fee before discount' : 'Price before discount',
+      discountBaseAmount: peso(Number(voucher.baseAmount ?? voucher.listAmount ?? totalAmount)),
+      discountScopeNote: cutsUpfront
+        ? 'on the amount due today. Your enrollment total is unchanged, so this saving is reflected in the balance below.'
+        : 'on your enrollment total.',
+    }
+    : { hasDiscount: '', voucherCode: '', discountLabel: '', discountAmount: '', discountBaseLabel: '', discountBaseAmount: '', discountScopeNote: '' }
   return sendTemplatedEmail('payment_receipt', enrollment.applicant.email, {
     name: enrollment.applicant.name,
     email: enrollment.applicant.email,
@@ -696,6 +927,7 @@ function sendPaymentReceiptEmail(enrollment, setupUrl) {
     amountPaid: peso(planAmount),
     totalAmount: peso(totalAmount),
     balanceDue: peso(balanceDue),
+    ...discountVars,
     referenceNumber: payment.referenceNumber ?? enrollment._id?.toString() ?? enrollment.id,
     transactionId: payment.transactionId ?? '—',
     paidAt: (payment.paidAt ? new Date(payment.paidAt) : new Date()).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' }),
@@ -803,6 +1035,13 @@ async function markEnrollmentPaid(enrollment, paymentPatch) {
     reference: settled.transactionId ?? settled.referenceNumber,
   })
   const invitation = await provisionLearnerAccount(enrollment)
+  // Claimed AFTER provisioning so the redemption log can name the account it created, and read
+  // back by email rather than returned from provisionLearnerAccount — that return value is echoed
+  // into an API response by the demo route, and the User document carries a password hash.
+  // Selecting only _id keeps it that way. The unique index inside claimVoucherUse, not this call
+  // site, is what stops a replayed webhook counting the voucher twice.
+  const learner = databaseReady ? await User.findOne({ email: enrollment.applicant.email }).select('_id') : null
+  await claimVoucherUse(enrollment, learner)
   await bestEffortEmail(sendPaymentReceiptEmail(enrollment, invitation?.setupUrl), 'payment_receipt email')
   return invitation
 }
@@ -1182,6 +1421,108 @@ app.patch('/api/admin/pricing', requireAuth, requireAdmin, asyncRoute(async (req
   res.json(settings)
 }))
 
+// --- Voucher administration. Admin-only: a discount code is a lever on revenue, so it sits with
+// pricing rather than with the instructor-facing staff routes.
+const publicVoucher = (voucher) => ({
+  id: voucher._id?.toString() ?? voucher.id,
+  code: voucher.code,
+  discountType: voucher.discountType,
+  discountValue: voucher.discountValue,
+  // Missing on any voucher created before the scope toggle existed — those are plain total
+  // discounts, which is what the schema default says too.
+  appliesTo: voucher.appliesTo ?? 'total',
+  expiresAt: voucher.expiresAt ?? null,
+  maxUses: voucher.maxUses ?? 0,
+  maxUsesPerApplicant: voucher.maxUsesPerApplicant ?? 0,
+  usedCount: voucher.usedCount ?? 0,
+  isActive: voucher.isActive,
+  // Precomputed so the list can show *why* a code stopped working without every row re-deriving
+  // the same three checks — and so it matches exactly what an applicant would be told.
+  rejection: voucherRejection(voucher),
+  createdAt: voucher.createdAt,
+})
+// A percentage over 100 would discount more than the price. Checked here rather than in the zod
+// schema because a PATCH may change only one of the two fields, and the pair still has to be judged
+// together against whatever is already stored.
+const assertVoucherValueInRange = (discountType, discountValue) => {
+  if (discountType === 'percent' && Number(discountValue) > 100) throw httpError(422, 'A percentage discount cannot exceed 100%.')
+}
+
+app.get('/api/admin/vouchers', requireAuth, requireAdmin, asyncRoute(async (_req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
+  const vouchers = await Voucher.find().sort({ createdAt: -1 }).lean()
+  res.json(vouchers.map(publicVoucher))
+}))
+
+// Who actually redeemed a code. Admin-only and deliberately not part of the list payload — it's
+// applicant PII (name + email), so it's fetched on demand for one voucher rather than shipped with
+// every row of the management screen.
+app.get('/api/admin/vouchers/:id/redemptions', requireAuth, requireAdmin, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
+  const rows = await VoucherRedemption.find({ voucherId: req.params.id }).sort({ redeemedAt: -1 }).limit(500).lean()
+  res.json(rows.map((row) => ({
+    id: row._id.toString(),
+    // The learner account, so the admin can open the profile of whoever used it. Null when payment
+    // succeeded but account creation didn't — the redemption is still on the record either way.
+    userId: row.userId ? String(row.userId) : null,
+    enrollmentId: String(row.enrollmentId),
+    name: row.applicantName ?? '—',
+    email: row.applicantEmail,
+    pathway: row.pathway ?? null,
+    appliesTo: row.appliesTo ?? 'total',
+    discountAmount: row.discountAmount ?? 0,
+    amountCharged: row.amountCharged ?? 0,
+    redeemedAt: row.redeemedAt,
+  })))
+}))
+
+app.post('/api/admin/vouchers', requireAuth, requireAdmin, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
+  const values = voucherInput.parse(req.body)
+  assertVoucherValueInRange(values.discountType, values.discountValue)
+  // Checked before insert so a duplicate reads as a clear conflict instead of surfacing a raw
+  // Mongo E11000 as a generic 500. The unique index is still the actual guarantee.
+  if (await Voucher.exists({ code: values.code })) return res.status(409).json({ error: 'A voucher with that code already exists.' })
+  const voucher = await Voucher.create({ ...values, createdBy: req.auth.sub })
+  await saveAudit('voucher.created', 'Voucher', voucher.id, { code: voucher.code, discountType: voucher.discountType, discountValue: voucher.discountValue }, req.auth.sub)
+  res.status(201).json(publicVoucher(voucher))
+}))
+
+app.patch('/api/admin/vouchers/:id', requireAuth, requireAdmin, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
+  const values = voucherPatchInput.parse(req.body)
+  const voucher = await Voucher.findById(req.params.id)
+  if (!voucher) return res.status(404).json({ error: 'Voucher not found.' })
+  assertVoucherValueInRange(values.discountType ?? voucher.discountType, values.discountValue ?? voucher.discountValue)
+  if (values.code && values.code !== voucher.code && await Voucher.exists({ code: values.code })) {
+    return res.status(409).json({ error: 'A voucher with that code already exists.' })
+  }
+  // An already-issued code is edited in place rather than versioned: enrollments snapshot the terms
+  // they were quoted (see enrollmentVoucherSchema), so changing a live voucher never rewrites what
+  // anyone was already charged.
+  Object.assign(voucher, values)
+  await voucher.save()
+  await saveAudit('voucher.updated', 'Voucher', voucher.id, values, req.auth.sub)
+  res.json(publicVoucher(voucher))
+}))
+
+app.delete('/api/admin/vouchers/:id', requireAuth, requireAdmin, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
+  const voucher = await Voucher.findById(req.params.id)
+  if (!voucher) return res.status(404).json({ error: 'Voucher not found.' })
+  // A redeemed voucher is the explanation for why some enrollments were charged less than list
+  // price, and it owns a redemption log naming the people who used it. Deleting it would orphan
+  // both, so a spent code is switched off instead — which stops it working just as completely.
+  // The log is checked as well as the counter: they can disagree if a redemption landed after the
+  // code was already at its limit (see claimVoucherUse), and either one means "this was used".
+  if (voucher.usedCount > 0 || await VoucherRedemption.exists({ voucherId: voucher._id })) {
+    return res.status(409).json({ error: 'This voucher has already been redeemed and is part of the payment record. Deactivate it instead — that stops it being accepted.' })
+  }
+  await voucher.deleteOne()
+  await saveAudit('voucher.deleted', 'Voucher', req.params.id, { code: voucher.code }, req.auth.sub)
+  res.status(204).end()
+}))
+
 app.post('/api/enrollments', asyncRoute(async (req, res) => {
   const applicant = enrollmentInput.parse(req.body)
   if (databaseReady && !pathwayCourseIsOpen(await courseForPathway(applicant.pathway))) {
@@ -1276,10 +1617,80 @@ app.post('/api/enrollments/:id/documents/:type/download', asyncRoute(async (req,
   res.send(Buffer.from(pdfBytes))
 }))
 
+// Public and unauthenticated like the rest of the enrollment flow — the enrollment id in the path
+// is the only thing tying a redemption to an applicant. That also makes this the one endpoint that
+// will tell an anonymous caller whether a string is a real voucher code, so it gets a much tighter
+// rate limit than the global one and a uniform rejection message (see voucherRejection).
+const voucherLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: config.voucherAttemptLimit,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Too many voucher attempts. Please wait a few minutes before trying another code.' },
+})
+
+app.post('/api/enrollments/:id/voucher', voucherLimiter, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
+  const { code } = voucherRedeemInput.parse(req.body)
+  const enrollment = await findEnrollment(req.params.id)
+  if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
+  if (!VOUCHER_EDIT_STATUSES.includes(enrollment.status)) return res.status(409).json({ error: 'This enrollment can no longer be changed.' })
+
+  const voucher = await Voucher.findOne({ code })
+  const rejection = voucherRejection(voucher) ?? await voucherApplicantRejection(voucher, enrollment.applicant.email)
+  if (rejection) return res.status(422).json({ error: rejection })
+
+  // Refused up front rather than at checkout: PayMongo cannot open a session for ~nothing, so a
+  // voucher that wipes out whatever it targets needs a human, and saying so here is the only
+  // actionable moment. Judged against the amount actually in scope — a code that zeroes the
+  // reservation fee is a dead end on that plan even though the total is untouched.
+  const pricing = await getPricingSettings()
+  const upfrontFee = upfrontAmountForPathway(pricing, enrollment.applicant.pathway)
+  const listAmount = Number(enrollment.voucher?.listAmount ?? enrollment.amount)
+  const base = voucherBaseAmount(voucher, { listAmount, upfrontFee })
+  if (base - voucherDiscountFor(voucher, base) < MINIMUM_CHARGE_AMOUNT) {
+    const covered = voucherTargetsUpfront(voucher) ? 'reservation fee' : 'enrollment fee'
+    return res.status(422).json({ error: `That voucher covers the entire ${covered}. Please contact the academy to complete your enrollment — online checkout needs a payable balance.` })
+  }
+
+  applyVoucherToEnrollment(enrollment, voucher, { upfrontFee })
+  await enrollment.save()
+  await saveAudit('enrollment.voucher_applied', 'Enrollment', req.params.id, { code: voucher.code, discountAmount: enrollment.voucher.discountAmount })
+  res.json(publicEnrollment(enrollment))
+}))
+
+app.delete('/api/enrollments/:id/voucher', voucherLimiter, asyncRoute(async (req, res) => {
+  if (!databaseReady) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
+  const enrollment = await findEnrollment(req.params.id)
+  if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
+  if (!VOUCHER_EDIT_STATUSES.includes(enrollment.status)) return res.status(409).json({ error: 'This enrollment can no longer be changed.' })
+  const removed = clearVoucherFromEnrollment(enrollment)
+  if (removed) {
+    await enrollment.save()
+    await saveAudit('enrollment.voucher_removed', 'Enrollment', req.params.id)
+  }
+  res.json(publicEnrollment(enrollment))
+}))
+
 app.post('/api/enrollments/:id/payment-session', asyncRoute(async (req, res) => {
   const enrollment = await findEnrollment(req.params.id)
   if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
   if (enrollment.status !== 'payment_pending') return res.status(409).json({ error: 'All signed documents are required before payment.' })
+
+  // The stored voucher is re-checked at the moment checkout opens, never trusted from when it was
+  // applied — a code can expire or hit its limit in between. If it no longer holds it is stripped
+  // and the request fails loudly, rather than quietly opening checkout at a price the applicant was
+  // never shown. The response carries the corrected total so the page can re-render it.
+  if (databaseReady && enrollment.voucher?.voucherId) {
+    const live = await Voucher.findById(enrollment.voucher.voucherId)
+    const stillValid = voucherRejection(live) ?? await voucherApplicantRejection(live, enrollment.applicant.email)
+    if (stillValid) {
+      clearVoucherFromEnrollment(enrollment)
+      await enrollment.save()
+      await saveAudit('enrollment.voucher_expired_at_checkout', 'Enrollment', req.params.id)
+      return res.status(409).json({ error: `${stillValid} Your total has been updated — please review it and continue.`, ...publicEnrollment(enrollment) })
+    }
+  }
 
   // "upfront" only charges the pathway's reservation fee now — the remaining balance
   // (enrollment.amount - planAmount) is followed up on manually by staff, see payment.plan/
@@ -1287,7 +1698,15 @@ app.post('/api/enrollments/:id/payment-session', asyncRoute(async (req, res) => 
   const { plan } = paymentSessionInput.parse(req.body ?? {})
   const resolvedPlan = plan ?? 'full'
   const pricing = await getPricingSettings()
-  const chargeAmount = resolvedPlan === 'upfront' ? upfrontAmountForPathway(pricing, enrollment.applicant.pathway) : enrollment.amount
+  // The full plan charges `enrollment.amount`, which applyVoucherToEnrollment already made net of
+  // any TOTAL-scoped voucher — an UPFRONT-scoped one leaves it at list price on purpose, so paying
+  // in full correctly ignores it. upfrontChargeFor applies the reverse split for the other plan.
+  const chargeAmount = resolvedPlan === 'upfront'
+    ? upfrontChargeFor(enrollment, upfrontAmountForPathway(pricing, enrollment.applicant.pathway))
+    : enrollment.amount
+  if (!(chargeAmount >= MINIMUM_CHARGE_AMOUNT)) {
+    return res.status(409).json({ error: 'This enrollment has no payable balance left for online checkout. Please contact the academy to finalise it.' })
+  }
 
   if (!config.paymongo.secretKey) {
     enrollment.payment = { provider: 'paymongo-payment-link', checkoutUrl: config.paymongo.paymentLink, referenceNumber: req.params.id, plan: resolvedPlan, planAmount: chargeAmount }
@@ -2009,6 +2428,42 @@ app.patch('/api/admin/email-templates/:key', ...adminOnly, asyncRoute(async (req
   const template = await EmailTemplate.findOneAndUpdate({ key: req.params.key }, { ...updates, updatedBy: req.auth.sub }, { new: true, upsert: true, setDefaultsOnInsert: true })
   await saveAudit('email_template.updated', 'EmailTemplate', req.params.key, {}, req.auth.sub)
   res.json(template)
+}))
+
+// Fires one template at a real inbox with stand-in data, so an admin can see what they've written
+// before a learner does. Rate-limited independently of the global limiter: this is the only route
+// in the app that sends academy-branded mail to an address of the caller's choosing, and it is
+// audited with both the sender and the recipient for the same reason.
+const testEmailLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 15,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Too many test emails. Please wait a few minutes before sending another.' },
+})
+
+app.post('/api/admin/email-templates/:key/test', ...adminOnly, testEmailLimiter, asyncRoute(async (req, res) => {
+  if (!databaseReady) return requireDb(res, 'Email automation')
+  if (!Object.hasOwn(emailTemplateDefaults, req.params.key)) return res.status(404).json({ error: 'Unknown email template.' })
+  const { to } = testEmailInput.parse(req.body ?? {})
+  // Defaults to the admin's own address: the common case is "show me what this looks like", and it
+  // means a mistyped body can't reach anyone else by accident.
+  const sender = await User.findById(req.auth.sub).select('email').lean()
+  const recipient = to || sender?.email
+  if (!recipient) return res.status(422).json({ error: 'Enter an address to send the test to.' })
+
+  // Sends what is SAVED, not what is in the editor — the admin console has no way to render an
+  // unsaved draft, and a test that silently used different content than the stored template would
+  // prove nothing about what learners actually receive. The UI warns when there are unsaved edits.
+  const result = await sendTemplatedEmail(req.params.key, recipient, sampleVarsFor(req.params.key), {
+    ignoreDisabled: true,
+    subjectPrefix: '[Test] ',
+  })
+  if (result.delivery === 'configuration_required') {
+    return res.status(503).json({ error: 'Email sending is not configured on this server (RESEND_API_KEY / EMAIL_FROM). The template was not sent.' })
+  }
+  await saveAudit('email_template.test_sent', 'EmailTemplate', req.params.key, { to: recipient }, req.auth.sub)
+  res.json({ delivery: result.delivery, to: recipient })
 }))
 
 app.get('/api/admin/permissions', ...adminOnly, asyncRoute(async (_req, res) => {

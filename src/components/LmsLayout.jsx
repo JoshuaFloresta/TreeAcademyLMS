@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Navigate, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useIsFetching, useIsMutating, useQuery } from '@tanstack/react-query'
 import { io } from 'socket.io-client'
-import { BarChart3, Bell, BookOpen, CalendarClock, CalendarDays, ChevronDown, ChevronRight, ClipboardCheck, FileText, Flag, GraduationCap, LayoutDashboard, Library, LifeBuoy, LogOut, Mail, Megaphone, Menu, MessagesSquare, MoreHorizontal, Receipt, ScrollText, Search, Settings, ShieldCheck, Sparkles, UserCheck, UserRound, Users, UsersRound, X } from 'lucide-react'
+import { BarChart3, Bell, BookOpen, CalendarClock, CalendarDays, ChevronDown, ChevronRight, ClipboardCheck, FileText, Flag, GraduationCap, LayoutDashboard, Library, LifeBuoy, LogOut, Mail, Megaphone, Menu, MessagesSquare, MoreHorizontal, Receipt, ScrollText, Search, Settings, ShieldCheck, Sparkles, Ticket, UserCheck, UserRound, Users, UsersRound, X } from 'lucide-react'
 import { API_URL, avatarSrc } from '../lib/api.js'
 import { authedFetch, stopImpersonation } from '../lib/auth.js'
 import { fetchCourses, fetchNotifications, fetchPresence, fetchStaffOverview, searchAcademy } from '../lib/lms.js'
@@ -48,6 +48,7 @@ const adminNavItems = [
   { label: 'Enrollment Management', icon: GraduationCap, to: '/admin/enrollments', badgeKey: 'operations', primary: true },
   { label: 'Global Analytics', icon: BarChart3, to: '/admin/analytics', primary: true },
   { label: 'Enrollment Documents', icon: FileText, to: '/enrollment-documents' },
+  { label: 'Vouchers & Discounts', icon: Ticket, to: '/admin/vouchers' },
   { label: 'Discussions', icon: MessagesSquare, to: '/forums' },
   { label: 'Roles & Permissions', icon: ShieldCheck, to: '/admin/roles' },
   { label: 'Audit Logs', icon: ScrollText, to: '/admin/audit' },

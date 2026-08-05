@@ -3,7 +3,23 @@
     "allow": [
       "Bash(node -e ' *)",
       "Bash(node -e \"const p=require\\('./package.json'\\);console.log\\('framer-motion:',p.dependencies['framer-motion']||p.devDependencies['framer-motion']\\)\")",
-      "Bash(node -e \"const m=require\\('./node_modules/framer-motion/package.json'\\);console.log\\('installed:',m.version\\);console.log\\('has AnimatePresence export:', Object.keys\\(require\\('./node_modules/framer-motion/package.json'\\).exports||{}\\).length>0\\)\")"
+      "Bash(node -e \"const m=require\\('./node_modules/framer-motion/package.json'\\);console.log\\('installed:',m.version\\);console.log\\('has AnimatePresence export:', Object.keys\\(require\\('./node_modules/framer-motion/package.json'\\).exports||{}\\).length>0\\)\")",
+      "Bash(node receipt-check.tmp.mjs)",
+      "Bash(rm -f receipt-check.tmp.mjs receipt-e2e.tmp.mjs migration-check.tmp.mjs capture-email.tmp.mjs .scratchuri.tmp)",
+      "Bash(rm -f \"C:/Users/justi/AppData/Local/Temp/claude/d--Tree-Academy-LMS-treeacademyLMS/ebf82c76-e31d-4bda-a78e-101c030e3cfc/scratchpad/sent-mail.jsonl\")",
+      "Bash(sed -n '/^async function saveAudit/,/^}/p' server/index.js)",
+      "Bash(sed -n '/^const auditSchema = new Schema/,/timestamps/p' server/models.js)",
+      "Bash(node -e \"try{require.resolve\\('playwright'\\);console.log\\('playwright: local'\\)}catch{console.log\\('playwright: not local'\\)}\")",
+      "Bash(npm ls *)",
+      "Read(//c/Users/justi/AppData/Local/ms-playwright/**)",
+      "Read(//c/Users/justi/AppData/Local/ms-playwright/chromium-1234/**)",
+      "Read(//c/Users/justi/AppData/Local/ms-playwright/chromium_headless_shell-1234/**)",
+      "Bash(node --input-type=module -e ' *)",
+      "Bash(VITE_API_URL=http://localhost:4123 npx vite --port 5173 --strictPort)",
+      "Bash(timeout 90 bash -c 'until curl -sf http://localhost:5173 >/dev/null; do sleep 1; done')",
+      "Bash(mkdir -p C:/Users/justi/AppData/Local/Temp/claude/d--Tree-Academy-LMS-treeacademyLMS/ebf82c76-e31d-4bda-a78e-101c030e3cfc/scratchpad/shots)",
+      "Bash(node drive.mjs)",
+      "Bash(node send-test.mjs)"
     ]
   }
 }

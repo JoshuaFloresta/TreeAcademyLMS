@@ -280,6 +280,12 @@ export const emailTemplateDefaults = {
   // sendPaymentReceiptEmail in index.js) — {{amountPaid}} is what was actually charged this time
   // (the full price, or just the upfront fee), {{totalAmount}}/{{balanceDue}} cover the "pay
   // upfront only" plan where a balance remains (balanceDue is "₱0" when nothing is owed).
+  //
+  // The {{#hasDiscount}} sections render only when a voucher was actually applied, so an ordinary
+  // enrollment sees no empty discount row. Inside them, {{discountBaseLabel}}/{{discountBaseAmount}}
+  // describe the figure the discount came off — the enrollment price for a 'total' voucher, the
+  // reservation fee for an 'upfront' one — which is why the label is a variable and not literal
+  // text. Deleting a section's contents is safe; deleting only one of its two markers is not.
   payment_receipt: {
     subject: 'Your Tree Academy payment receipt — {{referenceNumber}}',
     body: emailShell({
@@ -328,6 +334,9 @@ export const emailTemplateDefaults = {
         .receipt-total td {
             color: #1B432E;
             font-weight: 800;
+        }
+        .receipt-discount td {
+            color: #2F7A4B;
         }`,
       bodyHtml: `            <p class="welcome-text">Thank you for your payment, {{name}}!</p>
 
@@ -342,11 +351,18 @@ export const emailTemplateDefaults = {
                     <tr><td class="receipt-label-cell">Transaction ID</td><td class="receipt-value-cell">{{transactionId}}</td></tr>
                     <tr><td class="receipt-label-cell">Date paid</td><td class="receipt-value-cell">{{paidAt}}</td></tr>
                     <tr><td class="receipt-label-cell">Payment type</td><td class="receipt-value-cell">{{planLabel}}</td></tr>
-                    <tr class="receipt-total"><td class="receipt-label-cell">Amount paid</td><td class="receipt-value-cell">{{amountPaid}}</td></tr>
+{{#hasDiscount}}                    <tr><td class="receipt-label-cell">{{discountBaseLabel}}</td><td class="receipt-value-cell">{{discountBaseAmount}}</td></tr>
+                    <tr class="receipt-discount"><td class="receipt-label-cell">Voucher {{voucherCode}} ({{discountLabel}})</td><td class="receipt-value-cell">&minus;{{discountAmount}}</td></tr>
+{{/hasDiscount}}                    <tr class="receipt-total"><td class="receipt-label-cell">Amount paid</td><td class="receipt-value-cell">{{amountPaid}}</td></tr>
                     <tr><td class="receipt-label-cell">Full enrollment price</td><td class="receipt-value-cell">{{totalAmount}}</td></tr>
                     <tr><td class="receipt-label-cell">Balance remaining</td><td class="receipt-value-cell">{{balanceDue}}</td></tr>
                 </table>
             </div>
+{{#hasDiscount}}
+            <p class="body-text" style="font-size: 13px; color: #718096;">
+                Voucher <strong>{{voucherCode}}</strong> saved you {{discountAmount}} {{discountScopeNote}}
+            </p>
+{{/hasDiscount}}
 
             <p class="body-text">
                 Check your balance and payment details anytime by logging into your account.
@@ -390,8 +406,20 @@ export const emailTemplateDefaults = {
   },
 }
 
+// Optional sections: `{{#key}}…{{/key}}` keeps its contents only when `key` is truthy, `{{^key}}…`
+// only when it is falsy. Needed because every substituted value is HTML-escaped (below), so a
+// conditional row cannot be injected as ready-made markup — and a receipt must not print an empty
+// "Discount" line for the majority of enrollments that used no voucher.
+//
+// Resolved before value substitution so placeholders inside a dropped section are never rendered.
+// One level deep, non-nesting for the same key, which is all the templates need.
+const renderSections = (text, vars) => text.replace(/\{\{([#^])(\w+)\}\}([\s\S]*?)\{\{\/\2\}\}/g, (_match, sigil, key, inner) => {
+  const truthy = Boolean(vars[key])
+  return (sigil === '#') === truthy ? inner : ''
+})
+
 function renderTemplate(text, vars) {
-  return text.replace(/\{\{(\w+)\}\}/g, (match, key) => (key in vars ? escapeHtml(vars[key]) : match))
+  return renderSections(text, vars).replace(/\{\{(\w+)\}\}/g, (match, key) => (key in vars ? escapeHtml(vars[key]) : match))
 }
 
 // Resend's own rejection reason (e.g. "domain not verified", "restricted API key", "you can only
@@ -411,9 +439,13 @@ export async function ensureDefaultEmailTemplates() {
 
 // Fires an admin-customizable template email for an enrollment/registration event. Best-effort —
 // callers should not fail the triggering request if this rejects.
-export async function sendTemplatedEmail(key, to, vars) {
+export async function sendTemplatedEmail(key, to, vars, { ignoreDisabled = false, subjectPrefix = '' } = {}) {
   const template = await EmailTemplate.findOne({ key }).lean()
-  if (!template || !template.enabled) return { delivery: 'disabled' }
+  if (!template) return { delivery: 'disabled' }
+  // `ignoreDisabled` exists for the admin console's test send: previewing a template you haven't
+  // switched on yet is exactly when you most want to see it, so a test is not gated on the flag
+  // that governs automatic sending.
+  if (!template.enabled && !ignoreDisabled) return { delivery: 'disabled' }
   if (!config.email.resendApiKey || !config.email.from) {
     console.warn(`Templated email "${key}" for ${to} is queued but email is not configured.`)
     return { delivery: 'configuration_required' }
@@ -422,10 +454,41 @@ export async function sendTemplatedEmail(key, to, vars) {
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${config.email.resendApiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from, to: [to], subject: renderTemplate(template.subject, vars), html: renderTemplate(template.body, vars) }),
+    body: JSON.stringify({ from, to: [to], subject: `${subjectPrefix}${renderTemplate(template.subject, vars)}`, html: renderTemplate(template.body, vars) }),
   })
   if (!response.ok) throw await emailProviderError(`templated email "${key}"`, response)
   return { delivery: 'sent' }
+}
+
+// Stand-in values for the admin console's "send test" button, which has no real enrollment to pull
+// from. Kept beside the defaults above so a template gaining a placeholder gains a sample here too —
+// a test that renders a raw {{placeholder}} is worse than useless, because it looks like a bug in
+// the template rather than a gap in the preview data.
+//
+// A function, not a constant, so dates read as "today" rather than whenever the server booted.
+export function sampleVarsFor(key) {
+  const now = new Date().toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' })
+  const person = { name: 'Maria Santos', email: 'maria.santos@example.com', pathway: 'Broker Review' }
+  const loginUrl = `${config.clientUrl}/auth`
+  const samples = {
+    enrollment_received: { name: person.name, pathway: person.pathway, enrollUrl: `${config.clientUrl}/enroll` },
+    webinar_registration: { name: person.name, webinarTitle: 'Appraisal Masterclass', webinarDate: now },
+    enrollment_credentials: { ...person, setupUrl: `${loginUrl}?mode=activate&token=sample-preview-token`, loginUrl },
+    // Deliberately carries a voucher, so a test send shows the discount rows rather than the
+    // no-discount version an admin would otherwise assume is all the template can produce.
+    payment_receipt: {
+      ...person,
+      planLabel: 'Full payment',
+      amountPaid: '₱11,175', totalAmount: '₱11,175', balanceDue: '₱0',
+      referenceNumber: 'SAMPLE-REFERENCE', transactionId: 'pay_sample_preview', paidAt: now, loginUrl,
+      hasDiscount: '1', voucherCode: 'SAVE25', discountLabel: '25% off', discountAmount: '₱3,725',
+      discountBaseLabel: 'Price before discount', discountBaseAmount: '₱14,900',
+      discountScopeNote: 'on your enrollment total.',
+    },
+    newsletter_confirmation: { email: person.email },
+    password_reset: { ...person, resetUrl: `${loginUrl}?mode=reset&token=sample-preview-token`, loginUrl },
+  }
+  return samples[key] ?? {}
 }
 
 export async function sendAccountSetupEmail({ name, email, token }) {

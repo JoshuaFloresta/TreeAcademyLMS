@@ -8,7 +8,7 @@ import PaymentStep from '../components/enrollment/PaymentStep.jsx'
 import EnrollmentAside from '../components/enrollment/EnrollmentAside.jsx'
 import EnrollmentSentModal from '../components/enrollment/EnrollmentSentModal.jsx'
 import HelpLauncher from '../components/enrollment/HelpLauncher.jsx'
-import { API_URL, fetchPricing } from '../lib/api.js'
+import { API_URL, applyEnrollmentVoucher, fetchPricing, removeEnrollmentVoucher } from '../lib/api.js'
 import { fetchPathwayStats } from '../lib/publicCatalog.js'
 import { blockedPathwayMessage, pathways, upfrontKeyByPathway } from '../lib/academyData.js'
 
@@ -99,10 +99,32 @@ export default function EnrollmentPage() {
     } catch (error) { setFormError(error.message) } finally { setBusy(false) }
   }
 
+  // Both voucher calls return the updated enrollment, so the displayed amount always comes from the
+  // server rather than being recomputed here — the browser never decides what anything costs.
+  // Errors are thrown on to VoucherField, which owns the "invalid/expired code" message.
+  const applyVoucher = async (code) => {
+    const updated = await applyEnrollmentVoucher(application.id, code)
+    setApplication((current) => ({ ...current, amount: updated.amount, discount: updated.discount }))
+    setPaymentMessage('')
+  }
+  const removeVoucher = async () => {
+    const updated = await removeEnrollmentVoucher(application.id)
+    setApplication((current) => ({ ...current, amount: updated.amount, discount: updated.discount }))
+  }
+
   const launchPayment = async (plan) => {
     setBusy(true); setPaymentMessage('')
     try {
-      const result = await responseData(await fetch(`${API_URL}/api/enrollments/${application.id}/payment-session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plan }) }))
+      const response = await fetch(`${API_URL}/api/enrollments/${application.id}/payment-session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plan }) })
+      // A voucher that expired between being applied and checkout opening is stripped server-side,
+      // and the corrected total comes back with the 409 — take it, so the applicant sees the real
+      // price alongside the explanation instead of a stale discounted one.
+      if (response.status === 409) {
+        const conflict = await response.json().catch(() => ({}))
+        if (conflict.amount !== undefined) setApplication((current) => ({ ...current, amount: conflict.amount, discount: conflict.discount ?? null }))
+        throw new Error(conflict.error ?? 'This enrollment is not ready for payment.')
+      }
+      const result = await responseData(response)
       if (result.mode === 'payment_link_fallback') setPaymentMessage(result.message)
       window.location.assign(result.checkoutUrl)
     } catch (error) { setPaymentMessage(error.message); setBusy(false) }
@@ -115,7 +137,7 @@ export default function EnrollmentPage() {
     ? <div className="enrollment-fallback"><h2>This program isn’t open right now.</h2><p>{pathwayBlockedMessage} Please check back once enrollment opens, or explore our other pathways.</p><Link className="button button-primary" to="/">Return home</Link></div>
     : step === 1 ? <ApplicationStep pathway={pathway} applicant={application} saved={intake} onSubmit={submitApplication} onBack={() => navigate('/')} submitting={busy} error={formError} pathwayOptions={pathwayOptions} onPathwayChange={canChangePathway ? changePathway : undefined} />
     : step === 2 ? <DocumentStep enrollmentId={application?.id} type={documentType} applicant={application} application={intake} onSubmit={(payload) => submitDocument(documentType, payload)} onBack={() => setStep(1)} submitting={busy} error={formError} />
-      : step === 3 ? <PaymentStep amount={application?.amount} currency={application?.currency} upfrontAmount={upfrontAmount} onPay={launchPayment} message={paymentMessage} onBack={() => setStep(2)} loading={busy} />
+      : step === 3 ? <PaymentStep amount={application?.amount} currency={application?.currency} upfrontAmount={upfrontAmount} discount={application?.discount} onApplyVoucher={applyVoucher} onRemoveVoucher={removeVoucher} onPay={launchPayment} message={paymentMessage} onBack={() => setStep(2)} loading={busy} />
         : <div className="enrollment-fallback"><h2>Something went wrong.</h2><p>Your enrollment session is not available right now. Please refresh or return home to try again.</p><button type="button" className="button button-ghost" onClick={() => navigate('/enroll')}>Restart enrollment</button></div>
 
   return <div className="enrollment-page"><header className="enrollment-header"><Brand /><div className="secure-note"><ShieldCheck size={16} /> Secure enrollment</div><Link to="/" className="close-enrollment"><X size={19} /> Exit</Link></header><main className="enrollment-main"><div className="enrollment-progress enrollment-progress-four"><span className={activeProgress >= 1 ? 'active' : ''}>1 <small>Admission</small></span><i /><span className={activeProgress >= 2 ? 'active' : ''}>2 <small>Agreement</small></span><i /><span className={activeProgress >= 3 ? 'active' : ''}>3 <small>Payment</small></span><i /><span className={activeProgress >= 4 ? 'active' : ''}>4 <small>Complete</small></span></div><div className={step <= 2 ? 'enrollment-layout full-width' : 'enrollment-layout'}><section className="enrollment-content">{content}</section>{step > 2 && <EnrollmentAside pathway={pathway} />}</div></main><HelpLauncher step={step} error={formError || paymentMessage || pathwayBlockedMessage} /><EnrollmentSentModal open={sentOpen} email={application?.email} onClose={() => setSentOpen(false)} /></div>

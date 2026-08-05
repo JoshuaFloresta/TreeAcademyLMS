@@ -1,15 +1,24 @@
 import { useState } from 'react'
 import { Clock3, ShieldCheck } from 'lucide-react'
 import PrimaryButton from '../PrimaryButton.jsx'
+import VoucherField from './VoucherField.jsx'
 
 const peso = (amount) => `₱${Number(amount ?? 14900).toLocaleString('en-PH')}`
 
-export default function PaymentStep({ amount, currency = 'PHP', upfrontAmount, onPay, message, onBack, loading }) {
+export default function PaymentStep({ amount, currency = 'PHP', upfrontAmount, discount, onApplyVoucher, onRemoveVoucher, onPay, message, onBack, loading }) {
   const [plan, setPlan] = useState('full')
+  // A voucher either discounts the enrollment total or only the reservation fee due today — the
+  // admin decides which per code. `amount` already arrives net of a total-scoped one; an
+  // upfront-scoped one leaves it at list price and is subtracted from the fee below instead.
+  const cutsUpfront = discount?.appliesTo === 'upfront'
+  const cutsTotal = Boolean(discount) && !cutsUpfront
   // Only offer the upfront choice once the fee has loaded and is actually less than the full
-  // price — otherwise there's nothing meaningful to choose between.
-  const canPayUpfront = Number.isFinite(upfrontAmount) && upfrontAmount > 0 && upfrontAmount < Number(amount)
-  const chargeNow = plan === 'upfront' && canPayUpfront ? upfrontAmount : amount
+  // price — otherwise there's nothing meaningful to choose between. A total discount that drops
+  // below the reservation fee correctly leaves "pay in full" as the only option.
+  const listUpfront = cutsUpfront ? Number(discount.baseAmount) : Number(upfrontAmount)
+  const payableUpfront = cutsUpfront ? Math.max(0, listUpfront - discount.discountAmount) : listUpfront
+  const canPayUpfront = Number.isFinite(payableUpfront) && payableUpfront > 0 && payableUpfront < Number(amount)
+  const chargeNow = plan === 'upfront' && canPayUpfront ? payableUpfront : amount
   const submitPlan = () => onPay(canPayUpfront && plan === 'upfront' ? 'upfront' : 'full')
 
   return <>
@@ -21,14 +30,36 @@ export default function PaymentStep({ amount, currency = 'PHP', upfrontAmount, o
       <label className={`payment-plan-option ${plan === 'full' ? 'active' : ''}`}>
         <input type="radio" name="payment-plan" value="full" checked={plan === 'full'} onChange={() => setPlan('full')} />
         <span><strong>Pay in full</strong><small>Settle the entire enrollment fee now.</small></span>
-        <b>{peso(amount)}</b>
+        {/* The struck-through price appears on whichever option the voucher actually reduces, so
+            the saving is never shown against a figure it doesn't change. */}
+        <b>{cutsTotal && <s>{peso(discount.listAmount)}</s>}{peso(amount)}</b>
       </label>
       {canPayUpfront && <label className={`payment-plan-option ${plan === 'upfront' ? 'active' : ''}`}>
         <input type="radio" name="payment-plan" value="upfront" checked={plan === 'upfront'} onChange={() => setPlan('upfront')} />
-        <span><strong>Pay upfront fee only</strong><small>Reserve your slot now; the academy will follow up for the remaining {peso(amount - upfrontAmount)}.</small></span>
-        <b>{peso(upfrontAmount)}</b>
+        <span><strong>Pay upfront fee only</strong><small>Reserve your slot now; the academy will follow up for the remaining {peso(amount - payableUpfront)}.</small></span>
+        <b>{cutsUpfront && <s>{peso(listUpfront)}</s>}{peso(payableUpfront)}</b>
       </label>}
     </div>
+
+    <VoucherField discount={discount} onApply={onApplyVoucher} onRemove={onRemoveVoucher} disabled={loading} />
+
+    {/* Each scope has a consequence the applicant would otherwise only discover later — a total
+        discount doesn't shrink today's reservation fee, and an upfront discount doesn't shrink what
+        they owe overall. Both are stated here rather than left to the balance invoice. */}
+    {cutsTotal && <div className="voucher-summary">
+      <span>Enrollment fee<b>{peso(discount.listAmount)}</b></span>
+      <span className="voucher-summary-off">Voucher {discount.code}<b>−{peso(discount.discountAmount)}</b></span>
+      <span className="voucher-summary-total">Total after discount<b>{peso(amount)}</b></span>
+      {plan === 'upfront' && canPayUpfront && <small>Your discount applies to the enrollment total — it comes off the remaining balance, not the reservation fee.</small>}
+    </div>}
+    {cutsUpfront && <div className="voucher-summary">
+      <span>Reservation fee due today<b>{peso(listUpfront)}</b></span>
+      <span className="voucher-summary-off">Voucher {discount.code}<b>−{peso(discount.discountAmount)}</b></span>
+      <span className="voucher-summary-total">Pay today<b>{peso(payableUpfront)}</b></span>
+      <small>{plan === 'upfront'
+        ? `This voucher lowers only the amount due today. Your enrollment total stays ${peso(discount.listAmount)}, so the remaining balance is ${peso(amount - payableUpfront)}.`
+        : `This voucher only applies to the reservation fee — choose “Pay upfront fee only” above to use it. Paying in full is ${peso(amount)}.`}</small>
+    </div>}
 
     <div className="payment-card"><div><span className="payment-lock"><ShieldCheck size={17} /></span><div><strong>Tree Academy All-Access</strong><small>{plan === 'upfront' && canPayUpfront ? 'Upfront reservation fee' : 'One-time enrollment'} · {currency}</small></div></div><strong className="payment-amount">{peso(chargeNow)}</strong></div>
     <div className="payment-methods"><span>Secure checkout by</span><strong>PayMongo</strong><i>GCash</i><i>Maya</i><i>VISA</i></div>

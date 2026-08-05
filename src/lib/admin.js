@@ -58,6 +58,16 @@ export const savePermissions = (matrix) => put('/api/admin/permissions', matrix)
 export const fetchAdminPricing = () => get('/api/pricing')
 export const updateAdminPricing = (body) => patch('/api/admin/pricing', body)
 
+// Discount vouchers — admin-only, since a code is a lever on revenue. Redemption counts are written
+// by the payment webhook, never from here, so nothing in this file can mark a voucher as used.
+export const fetchVouchers = () => get('/api/admin/vouchers')
+// Who redeemed a given code. Fetched per-voucher on demand rather than bundled into the list —
+// these rows are applicant PII.
+export const fetchVoucherRedemptions = (id) => get(`/api/admin/vouchers/${id}/redemptions`)
+export const createVoucher = (body) => post('/api/admin/vouchers', body)
+export const updateVoucher = (id, body) => patch(`/api/admin/vouchers/${id}`, body)
+export const deleteVoucher = (id) => del(`/api/admin/vouchers/${id}`)
+
 // Enrollment management
 export const fetchAdminEnrollments = (params) => get(`/api/staff/enrollments${qs(params)}`)
 export const decideEnrollment = (id, decision, reason) => post(`/api/staff/enrollments/${id}/decision`, { decision, reason: reason || undefined })
@@ -144,6 +154,9 @@ export const fetchWebinarRegistrations = (id) => get(`/api/admin/webinars/${id}/
 
 // Email automation
 export const fetchEmailTemplates = () => get('/api/admin/email-templates')
+// Sends one template to a real inbox with stand-in data. Blank `to` means the signed-in admin's own
+// address. Sends the SAVED template, not unsaved editor content.
+export const sendTestEmail = (key, to) => post(`/api/admin/email-templates/${key}/test`, { to: to || undefined })
 export const updateEmailTemplate = (key, body) => patch(`/api/admin/email-templates/${key}`, body)
 
 // Permission catalogue shown in the Roles & Permissions matrix.

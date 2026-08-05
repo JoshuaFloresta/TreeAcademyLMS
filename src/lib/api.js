@@ -16,6 +16,28 @@ export async function fetchPricing() {
   return response.json()
 }
 
+// Voucher codes, applied on the payment step. Public — no auth — like the rest of the enrollment
+// flow, and keyed by enrollment id: the server persists the discount on the enrollment, so the
+// price checkout charges is read from there rather than sent up from the browser. Both return the
+// updated enrollment ({ amount, discount, … }), which is what the payment step re-renders from.
+export async function applyEnrollmentVoucher(enrollmentId, code) {
+  const response = await fetch(`${API_URL}/api/enrollments/${enrollmentId}/voucher`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.error ?? 'That voucher could not be applied. Please try again.')
+  return data
+}
+
+export async function removeEnrollmentVoucher(enrollmentId) {
+  const response = await fetch(`${API_URL}/api/enrollments/${enrollmentId}/voucher`, { method: 'DELETE' })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.error ?? 'That voucher could not be removed. Please try again.')
+  return data
+}
+
 // The generic, no-payment application flow for a course outside the 3 fixed enrollment pathways
 // (see Course.agreementTemplate / CourseEnrollment). Public — no auth — same as the pathway
 // enrollment routes above.

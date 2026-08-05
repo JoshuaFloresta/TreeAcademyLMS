@@ -62,6 +62,11 @@ export const config = {
       publicBaseUrl: process.env.S3_PUBLIC_BASE_URL,
     },
   },
+  // Voucher-code attempts allowed per IP per 10 minutes on the public redeem endpoint. Deliberately
+  // low by default — that route is the one place an anonymous caller can learn whether a code
+  // exists. Raise it if your applicants share an office/school connection or a carrier NAT, where
+  // one IP legitimately covers many people.
+  voucherAttemptLimit: Number(process.env.VOUCHER_ATTEMPT_LIMIT ?? 20),
   demoMode: bool(process.env.DEMO_MODE ?? 'true'),
 }
 

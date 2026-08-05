@@ -19,6 +19,7 @@ const builtInPageOptions = {
   'admin-dashboard': { label: 'Dashboard', roles: ['admin'], to: '/admin/dashboard' },
   'admin-users': { label: 'User Management', roles: ['admin'], to: '/admin/users' },
   'admin-courses': { label: 'Course Catalog & Pricing', roles: ['admin'], to: '/admin/courses' },
+  'admin-vouchers': { label: 'Vouchers & Discounts', roles: ['admin'], to: '/admin/vouchers' },
   'admin-roles': { label: 'Roles & Permissions', roles: ['admin'], to: '/admin/roles' },
   'admin-enrollments': { label: 'Enrollment Management', roles: ['admin'], to: '/admin/enrollments' },
   'admin-billing': { label: 'Billing & Payments', roles: ['admin'], to: '/admin/billing' },

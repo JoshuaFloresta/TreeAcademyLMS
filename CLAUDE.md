@@ -111,7 +111,8 @@ document-generation detail (`enrollment-documents.js`), not a pricing one. `tota
 `upfrontAmountForPathway` in `server/index.js` resolve the right field for a given pathway.
 `GET /api/pricing` is public (the enrollment flow isn't authenticated); falls back to `catalog.js`'s
 static values if no settings row exists yet or Mongo is unavailable. An "upfront" plan only charges
-the fee — `enrollment.amount` still holds the full price, and `enrollment.payment.plan`/
+the fee — `enrollment.amount` holds the full price (net of any voucher, see below), and
+`enrollment.payment.plan`/
 `payment.planAmount` record what was actually charged, so staff can see the outstanding balance
 (surfaced in `AdminEnrollmentsPage`). Balance collection for upfront-plan enrollments is
 manual/offline — there's no in-app "pay the rest" flow.
@@ -121,6 +122,72 @@ Only the 3 pathway courses (`broker-review`/`consultant-review`/`agent-review`, 
 course created outside those 3 pathways has no price, since checkout is keyed off the enrollment
 pathway, not an arbitrary course. `POST /api/staff/courses` (used by both admins and instructors)
 creates a new course; the merged admin page exposes a "New course" card for this.
+
+## Vouchers / discount codes
+
+`Voucher` (admin-managed at `/admin/vouchers`) is a code an applicant types **on the payment step
+only** — `VoucherField` renders solely inside `PaymentStep`, never on the admission form or the
+agreement step. Fields: `code` (stored uppercase, unique), `discountType` (`percent` | `fixed`),
+`discountValue`, `appliesTo` (`total` | `upfront`), `expiresAt` (null = never), `maxUses`
+(0 = unlimited), `maxUsesPerApplicant` (0 = no per-person cap), plus `usedCount` and `isActive`. Run
+`npm run migrate:vouchers` once — the unique indexes it builds are what the redeem lookup and the
+redemption dedupe depend on.
+
+**Two independent limits.** `maxUses` caps redemptions across everyone; `maxUsesPerApplicant` caps
+one person, counted by **email** across all their enrollments (an applicant can hold several — a
+second pathway, or a restarted application — so a cap scoped to one enrollment wouldn't be a cap).
+The per-person check is `voucherApplicantRejection`: async and applicant-specific, so it can't live
+inside `voucherRejection`, but the two are always called together — at apply time and again at
+checkout. Its message is deliberately specific ("You have already used this voucher") because it
+describes the caller's own history and so gives away nothing about which codes exist.
+
+**`appliesTo` decides what the discount comes off, which is a separate question from how big it
+is** — and the two settings have opposite revenue consequences:
+
+- `'total'` (default) — a real giveaway. `applyVoucherToEnrollment` sets `enrollment.amount` to the
+  *net* payable and writes two `feeBreakdown` lines that reconcile to it (the contract
+  `assertBreakdownTotals` already enforces), so everything downstream — statement of account,
+  receipts, the admin balance column — picks the discount up unchanged. On the `upfront` plan the
+  reservation fee is still charged in full and the saving comes off the balance.
+- `'upfront'` — lowers only the fee due at checkout. `enrollment.amount` and `feeBreakdown` are
+  deliberately left at list price, so the saving reappears as a larger balance and the academy
+  collects the same total. `upfrontChargeFor` applies it, from the **snapshot** rather than
+  recomputing, so an admin editing the pathway fee later can't change what an applicant was quoted.
+  It does nothing for a pay-in-full applicant — the payment step says so explicitly.
+
+`enrollment.voucher` is a **snapshot** (`enrollmentVoucherSchema`), not a live join: editing or
+deleting a `Voucher` never rewrites what someone was already quoted or charged. It carries
+`listAmount` (always the undiscounted total) and `baseAmount` (whatever the discount was computed
+against), so re-applying or removing a code recomputes from the original price instead of stacking.
+
+- `POST`/`DELETE /api/enrollments/:id/voucher` are **public** (the enrollment flow isn't
+  authenticated) and rate-limited well below the global limiter, since this is the one endpoint that
+  reveals whether a code exists. An unknown code and a deactivated one return the *same* message on
+  purpose — do not make these distinguishable.
+- `voucherRejection` is the single definition of "why this code is refused". `/payment-session`
+  re-runs it at the moment checkout opens and strips a code that lapsed in between, returning 409
+  with the corrected total — the price is never taken from the browser.
+- `VoucherRedemption` is the log of **who actually used a code** — one row per confirmed redemption,
+  carrying the applicant's name/email, the learner account created, the enrollment, and what the
+  discount was worth. Everything identifying is snapshotted, for the same reason
+  `enrollment.voucher` is. Read via `GET /api/admin/vouchers/:id/redemptions` (admin-only, fetched
+  on demand rather than bundled into the list — it's applicant PII) and shown in an expandable
+  panel per voucher.
+- Redemption is recorded **only** from `markEnrollmentPaid` (`claimVoucherUse`), so an abandoned
+  checkout can't burn a use. **The log row is written first**, and its unique
+  `(voucherId, enrollmentId)` index is what makes the whole claim idempotent — a replayed webhook
+  collides and returns before touching the counter. The `$inc` is then conditional on
+  `usedCount < maxUses`, which is what makes two *different* applicants racing for the last use
+  safe. `claimVoucherUse` runs after `provisionLearnerAccount` so it can name the account, and reads
+  the learner back by email selecting `_id` only — `provisionLearnerAccount`'s return value is
+  echoed into an API response by the demo route, and a `User` document carries a password hash.
+  It never throws: a miscounted voucher must not fail the payment that triggered it.
+- Admin CRUD is `requireAuth` + `requireAdmin` under `/api/admin/vouchers`. A voucher with
+  `usedCount > 0` cannot be deleted (it explains why those enrollments paid less than list price) —
+  deactivate it instead.
+- A code that zeroes out whatever it targets is refused at apply time: PayMongo can't open a session
+  with no payable balance, so it needs a human. `MINIMUM_CHARGE_AMOUNT` is the floor, and it's
+  checked against the amount **in scope** (the fee for an `upfront` code, the total otherwise).
 
 ## Learner profiles and enrollment documents
 
