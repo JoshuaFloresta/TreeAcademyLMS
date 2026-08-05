@@ -1,10 +1,8 @@
 import http from 'node:http'
-import crypto from 'node:crypto'
 import path from 'node:path'
 import express from 'express'
 import mongoose from 'mongoose'
 import bcrypt from 'bcryptjs'
-import multer from 'multer'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import helmet from 'helmet'
@@ -16,73 +14,21 @@ import { catalog } from './catalog.js'
 import { Announcement, Assignment, Attendance, Badge, BadgeRule, CalendarEvent, Category, CategoryHeader, Certificate, CertificateTemplate, ContentAsset, Course, CourseEnrollment, EmailTemplate, Enrollment, ForumPost, Payment, ForumReaction, ForumThread, LearningModule, LearningProgress, Lesson, Module, NewsletterSubscriber, Notification, Presence, PricingSettings, Quiz, QuizAttempt, Report, RolePermission, StudentBadge, Submission, SubmissionComment, SupportTicket, Voucher, VoucherRedemption, Webinar, WebinarRegistration, WebhookEvent, AuditLog, RefreshToken, User } from './models.js'
 import { createToken, hashToken, requireAdmin, requireAuth, requireStaff, signAccessToken, verifyHmac, verifyPaymongoSignature } from './security.js'
 import { emailTemplateDefaults, ensureDefaultEmailTemplates, sampleVarsFor, sendEnrollmentDocumentsEmail, sendTemplatedEmail } from './email.js'
-import { renderCertificate, saveCertificateTemplate, saveSubmissionAttachment, submissionExtensionByMime } from './certificates.js'
+import { renderCertificate, saveCertificateTemplate, saveSubmissionAttachment } from './certificates.js'
 import { createApplicationPdf, createFilledAgreement, createFilledDocument, createFilledDocumentBytes, extractAgreementFields, saveAgreementTemplate } from './enrollment-documents.js'
-import { PUBLIC_PREFIX, getFile, isObjectStorage, publicUrl, putFile, randomKey } from './storage.js'
+import { PUBLIC_PREFIX, getFile, isObjectStorage } from './storage.js'
 import { applyIntakeToProfile } from './profile.js'
+import { dbState, memory } from './state.js'
+import { asyncRoute, httpError, id, requireDb, sendPrivateDownload } from './lib/http.js'
+import { agreementTemplateUpload, avatarUpload, bannerUpload, certificateUpload, forumImageUpload, saveAvatarUpload, saveBannerUpload, saveForumImageUpload, submissionUpload } from './lib/uploads.js'
+import { saveAudit } from './lib/audit.js'
+import { notifyUsers } from './lib/notify.js'
 
 const app = express()
 const server = http.createServer(app)
 // Socket.IO shares the HTTP CORS allow-list so the presence socket works from the same origins
 // the REST API does — including per-deploy preview URLs.
 const io = new Server(server, { cors: { origin: (origin, callback) => callback(null, isAllowedOrigin(origin)), credentials: true } })
-let databaseReady = false
-const memory = { enrollments: new Map(), newsletter: new Map(), presence: new Map(), users: new Map() }
-const certificateUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
-  fileFilter: (_req, file, callback) => callback(null, ['application/pdf', 'image/png', 'image/jpeg'].includes(file.mimetype)),
-})
-
-// A course's optional fillable/signable agreement PDF (see Course.agreementTemplate) — PDF only,
-// since its AcroForm fields are read directly off the file at upload time.
-const agreementTemplateUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024, files: 1 },
-  fileFilter: (_req, file, callback) => callback(null, file.mimetype === 'application/pdf'),
-})
-
-// Avatars are public-facing images (unlike signed PDFs, which stay in private storage), so they're
-// written to a dedicated static-served directory and referenced by URL, not by object key.
-const avatarMimeExtension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }
-const avatarUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 3 * 1024 * 1024, files: 1 },
-  fileFilter: (_req, file, callback) => callback(null, Boolean(avatarMimeExtension[file.mimetype])),
-})
-const saveAvatarUpload = (file) => savePublicImage('avatars', file)
-
-// Course banners follow the same public-image pattern as avatars.
-const bannerUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 4 * 1024 * 1024, files: 1 },
-  fileFilter: (_req, file, callback) => callback(null, Boolean(avatarMimeExtension[file.mimetype])),
-})
-const saveBannerUpload = (file) => savePublicImage('banners', file)
-
-// Images attached to a discussion thread or reply — same public-image pattern as avatars/banners.
-const forumImageUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 6 * 1024 * 1024, files: 1 },
-  fileFilter: (_req, file, callback) => callback(null, Boolean(avatarMimeExtension[file.mimetype])),
-})
-const saveForumImageUpload = (file) => savePublicImage('forum', file)
-
-// Avatars and banners are the only web-servable uploads (signed PDFs and certificates stay
-// private). They live under the storage layer's `public/` prefix and are referenced by URL —
-// absolute when a public bucket hostname is configured, otherwise relative to this API's
-// /uploads route, which `avatarSrc()` on the client resolves against the API origin.
-async function savePublicImage(folder, file) {
-  const key = await putFile(randomKey(`${PUBLIC_PREFIX}${folder}`, avatarMimeExtension[file.mimetype]), file.buffer, file.mimetype)
-  return publicUrl(key)
-}
-
-// Assignment submission attachments (the "drop box") — private storage, same as certificates.
-const submissionUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024, files: 1 },
-  fileFilter: (_req, file, callback) => callback(null, Boolean(submissionExtensionByMime[file.mimetype])),
-})
 
 app.set('trust proxy', 1)
 app.use(helmet({ crossOriginResourcePolicy: false }))
@@ -156,8 +102,6 @@ const balanceDueInput = z.object({
   balanceDueDate: z.coerce.date().nullable().optional(),
   balanceNote: z.string().trim().max(500).nullable().optional(),
 })
-// Marks an error as safe to show the caller — see the error handler at the bottom of this file.
-const httpError = (status, message) => Object.assign(new Error(message), { status, expose: true })
 const paymentInput = z.object({
   amount: z.coerce.number().min(1, 'Enter the amount received.').max(1_000_000),
   method: z.enum(['paymongo', 'cash', 'bank_transfer', 'gcash', 'maya', 'check', 'other']),
@@ -216,7 +160,7 @@ async function paidByEnrollment(enrollmentIds) {
 // running without MongoDB), so the enrollment/payment flow always has a price to show.
 async function getPricingSettings() {
   const defaults = { totalBroker: catalog.product.amount, totalConsultant: catalog.product.amount, totalAppraiser: catalog.product.amount, currency: catalog.product.currency, upfrontBroker: 1000, upfrontConsultant: 5000, upfrontAppraiser: 1000 }
-  if (!databaseReady) return defaults
+  if (!dbState.ready) return defaults
   const saved = await PricingSettings.findOne().lean()
   return saved ? { totalBroker: saved.totalBroker, totalConsultant: saved.totalConsultant, totalAppraiser: saved.totalAppraiser, currency: saved.currency, upfrontBroker: saved.upfrontBroker, upfrontConsultant: saved.upfrontConsultant, upfrontAppraiser: saved.upfrontAppraiser } : defaults
 }
@@ -602,18 +546,6 @@ const bulkDecisionInput = z.object({
   reason: z.string().trim().max(500).optional(),
 })
 
-const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)
-
-// Private files (signed agreements, certificates, submission attachments) are never public URLs —
-// they're fetched from storage and streamed through the route that just authorized the caller.
-// The quoted filename keeps browsers from interpreting a name containing spaces or commas.
-function sendPrivateDownload(res, bytes, filename, contentType = 'application/octet-stream') {
-  res.type(contentType)
-  res.set('Content-Disposition', `attachment; filename="${filename.replace(/"/g, '')}"`)
-  res.set('Cache-Control', 'private, no-store')
-  res.send(bytes)
-}
-
 // Seasonal availability — published courses are only visible to learners/public inside their window.
 const learnerCourseFilter = () => {
   const now = new Date()
@@ -650,7 +582,6 @@ const RESERVED_COURSE_SLUGS = ['broker-review', 'consultant-review', 'appraiser-
 // Which agreement a pathway signs. Single source of truth — the document route validates against
 // this and the application route reports it as the next step, so the two can't drift apart.
 const pathwayDocumentType = (pathway) => (pathway === 'consultant' ? 'reclex' : 'realex-reblex')
-const id = () => crypto.randomUUID()
 // `amount` is always the NET payable — see applyVoucherToEnrollment. `discount` is what the
 // applicant is told about their own voucher: the code and the computed figures only, never the
 // voucher's remaining uses or expiry, which are the academy's business and not the applicant's.
@@ -687,7 +618,7 @@ const enrollmentDocuments = (row) => Object.entries(ENROLLMENT_DOCUMENT_TYPES)
   .map(([type, spec]) => ({ type, label: spec.label, signedAt: spec.signedAt(row) ?? null }))
 
 async function findEnrollment(enrollmentId) {
-  if (databaseReady) return Enrollment.findById(enrollmentId)
+  if (dbState.ready) return Enrollment.findById(enrollmentId)
   return memory.enrollments.get(enrollmentId)
 }
 
@@ -813,7 +744,7 @@ async function voucherApplicantRejection(voucher, email) {
 async function claimVoucherUse(enrollment, learner) {
   const voucher = enrollment.voucher
   const voucherId = voucher?.voucherId
-  if (!databaseReady || !voucherId) return
+  if (!dbState.ready || !voucherId) return
   const enrollmentId = enrollment._id?.toString() ?? enrollment.id
   try {
     await VoucherRedemption.create({
@@ -938,7 +869,7 @@ function sendPaymentReceiptEmail(enrollment, setupUrl) {
 
 async function provisionLearnerAccount(enrollment) {
   const applicant = enrollment.applicant
-  if (!databaseReady) {
+  if (!dbState.ready) {
     memory.users.set(applicant.email, { name: applicant.name, email: applicant.email, status: 'active', role: 'learner' })
     return { delivery: 'demo_preview', setupUrl: null }
   }
@@ -989,7 +920,7 @@ async function provisionCourseEnrollmentAccess(course, applicant) {
 // enrollment being marked paid and the learner getting access matter more than the statement line,
 // and migrate-payments.js can backfill anything missed. Never throws.
 async function recordPayment({ enrollment, amount, method, kind, receivedAt, reference, note, recordedBy }) {
-  if (!databaseReady) return null
+  if (!dbState.ready) return null
   try {
     return await Payment.create({
       enrollmentId: enrollment._id ?? enrollment.id,
@@ -1016,7 +947,7 @@ async function markEnrollmentPaid(enrollment, paymentPatch) {
     enrollment.reviewedAt = new Date()
   }
   enrollment.payment = { ...(enrollment.payment?.toObject?.() ?? enrollment.payment ?? {}), ...paymentPatch }
-  if (databaseReady) await enrollment.save()
+  if (dbState.ready) await enrollment.save()
   if (!wasAwaitingPayment) return null
   // Guarded on wasAwaitingPayment so a repeated webhook delivery for an already-approved enrollment
   // cannot add a second ledger row on top of WebhookEvent's own dedupe.
@@ -1040,7 +971,7 @@ async function markEnrollmentPaid(enrollment, paymentPatch) {
   // into an API response by the demo route, and the User document carries a password hash.
   // Selecting only _id keeps it that way. The unique index inside claimVoucherUse, not this call
   // site, is what stops a replayed webhook counting the voucher twice.
-  const learner = databaseReady ? await User.findOne({ email: enrollment.applicant.email }).select('_id') : null
+  const learner = dbState.ready ? await User.findOne({ email: enrollment.applicant.email }).select('_id') : null
   await claimVoucherUse(enrollment, learner)
   await bestEffortEmail(sendPaymentReceiptEmail(enrollment, invitation?.setupUrl), 'payment_receipt email')
   return invitation
@@ -1072,16 +1003,6 @@ async function issueSession(res, user, impersonatorId = null) {
 
 const sessionUser = (user, extra = {}) => ({ id: user.id, name: user.name, email: user.email, role: user.role, avatarUrl: user.avatarUrl, ...extra })
 
-async function saveAudit(action, entityType, entityId, metadata = {}, actorId) {
-  if (databaseReady) await AuditLog.create({ action, entityType, entityId, metadata, actorId })
-}
-
-async function notifyUsers(recipientIds, { title, body, link }) {
-  const ids = recipientIds.filter(Boolean)
-  if (!databaseReady || !ids.length) return
-  await Notification.insertMany(ids.map((recipientId) => ({ recipientId, title, body, link })))
-}
-
 async function issueCertificate({ template, learner, issuedBy }) {
   const existing = await Certificate.findOne({ templateId: template._id, learnerId: learner._id })
   if (existing) return existing
@@ -1091,7 +1012,7 @@ async function issueCertificate({ template, learner, issuedBy }) {
   return certificate
 }
 
-app.get('/api/health', (_req, res) => res.json({ status: 'ok', database: databaseReady ? 'connected' : 'demo-memory', integrations }))
+app.get('/api/health', (_req, res) => res.json({ status: 'ok', database: dbState.ready ? 'connected' : 'demo-memory', integrations }))
 app.get('/api/catalog', (_req, res) => res.json(catalog))
 
 // Live pathway stats for the existing "Three pathways" landing section — seed data maps one
@@ -1099,7 +1020,7 @@ app.get('/api/catalog', (_req, res) => res.json(catalog))
 // Folds enrollment counts + seasonal availability into the pathway cards already on the page,
 // rather than a separate catalog section.
 app.get('/api/public/pathway-stats', asyncRoute(async (_req, res) => {
-  if (!databaseReady) return res.json({})
+  if (!dbState.ready) return res.json({})
   const now = new Date()
   const courses = await Course.find({ slug: { $in: RESERVED_COURSE_SLUGS } })
     .select('slug isPublished archivedAt availableFrom availableUntil showEnrollmentCount').lean()
@@ -1131,7 +1052,7 @@ function visibleWebinarFilter() {
 }
 
 app.get('/api/public/webinars', asyncRoute(async (_req, res) => {
-  if (!databaseReady) return res.json([])
+  if (!dbState.ready) return res.json([])
   const webinars = await Webinar.find(visibleWebinarFilter()).sort({ startsAt: 1 }).lean()
   const counts = await WebinarRegistration.aggregate([
     { $match: { webinarId: { $in: webinars.map((webinar) => webinar._id) } } },
@@ -1148,7 +1069,7 @@ app.get('/api/public/webinars', asyncRoute(async (_req, res) => {
 }))
 
 app.post('/api/public/webinars/:id/register', asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Registration requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Registration requires MongoDB.' })
   const webinar = await Webinar.findOne({ _id: req.params.id, ...visibleWebinarFilter() })
   if (!webinar) return res.status(404).json({ error: 'This webinar is no longer accepting registrations.' })
   if (webinar.capacity != null) {
@@ -1172,7 +1093,7 @@ app.post('/api/public/webinars/:id/register', asyncRoute(async (req, res) => {
 // the plain sign-in page after this and signs in with the password they just chose, as a genuine
 // end-to-end check that it works, rather than being carried straight into the dashboard.
 app.post('/api/auth/activate', asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Account activation requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Account activation requires MongoDB.' })
   const { token, password } = activationInput.parse(req.body)
   const user = await User.findOne({ inviteTokenHash: hashToken(token), inviteExpiresAt: { $gt: new Date() } })
   if (!user) return res.status(400).json({ error: 'This account-setup link is invalid or expired.' })
@@ -1191,7 +1112,7 @@ app.post('/api/auth/activate', asyncRoute(async (req, res) => {
 app.post('/api/auth/forgot-password', asyncRoute(async (req, res) => {
   const { email } = forgotPasswordInput.parse(req.body)
   const sent = { sent: true }
-  if (!databaseReady) return res.json(sent)
+  if (!dbState.ready) return res.json(sent)
   const user = await User.findOne({ email: email.toLowerCase() })
   // Suspended/inactive accounts are deliberately excluded — a reset would otherwise let a
   // deactivated account be reactivated, since /api/auth/activate sets status back to active.
@@ -1203,7 +1124,7 @@ app.post('/api/auth/forgot-password', asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/auth/login', asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Sign-in requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Sign-in requires MongoDB.' })
   const { email, password } = loginInput.parse(req.body)
   const user = await User.findOne({ email: email.toLowerCase() })
   if (!user || user.status !== 'active' || !user.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) return res.status(401).json({ error: 'Email or password is incorrect.' })
@@ -1214,7 +1135,7 @@ app.post('/api/auth/login', asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/auth/refresh', asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Session refresh requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Session refresh requires MongoDB.' })
   const token = req.cookies.treeacademy_refresh
   if (!token) return res.status(401).json({ error: 'Refresh token required.' })
   const record = await RefreshToken.findOne({ tokenHash: hashToken(token), expiresAt: { $gt: new Date() } })
@@ -1229,13 +1150,13 @@ app.post('/api/auth/refresh', asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/auth/logout', asyncRoute(async (req, res) => {
-  if (databaseReady && req.cookies.treeacademy_refresh) await RefreshToken.deleteOne({ tokenHash: hashToken(req.cookies.treeacademy_refresh) })
+  if (dbState.ready && req.cookies.treeacademy_refresh) await RefreshToken.deleteOne({ tokenHash: hashToken(req.cookies.treeacademy_refresh) })
   res.clearCookie('treeacademy_refresh', cookieOptions({ path: '/api/auth' }))
   res.status(204).end()
 }))
 
 app.post('/api/auth/stop-impersonation', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Impersonation requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Impersonation requires MongoDB.' })
   const token = req.cookies.treeacademy_refresh
   const record = token ? await RefreshToken.findOne({ tokenHash: hashToken(token) }) : null
   if (!record?.impersonatorId) return res.status(400).json({ error: 'This session is not an impersonation.' })
@@ -1248,7 +1169,7 @@ app.post('/api/auth/stop-impersonation', requireAuth, asyncRoute(async (req, res
 }))
 
 app.post('/api/auth/change-password', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Password changes require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Password changes require MongoDB.' })
   const { currentPassword, newPassword } = passwordChangeInput.parse(req.body)
   const user = await User.findById(req.auth.sub)
   if (!user?.passwordHash || !(await bcrypt.compare(currentPassword, user.passwordHash))) return res.status(401).json({ error: 'Your current password is incorrect.' })
@@ -1268,7 +1189,7 @@ const PROFILE_FIELDS = 'name email username role avatarUrl bio headline location
 const publicProfile = (user, { privileged }) => (privileged ? user : { ...user, birthDate: undefined })
 
 app.get('/api/users/:id', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Profiles require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Profiles require MongoDB.' })
   const user = await User.findById(req.params.id).select(PROFILE_FIELDS).lean()
   if (!user) return res.status(404).json({ error: 'User not found.' })
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
@@ -1290,7 +1211,7 @@ app.get('/api/users/:id', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.patch('/api/users/me', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Profile updates require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Profile updates require MongoDB.' })
   const updates = profileInput.parse(req.body)
   // `username` is uniquely indexed, so check before writing to return a readable message instead of
   // a raw duplicate-key error. Excluding self keeps re-saving an unchanged profile from 409-ing.
@@ -1305,7 +1226,7 @@ app.patch('/api/users/me', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/users/me/avatar', requireAuth, avatarUpload.single('avatar'), asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Avatar uploads require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Avatar uploads require MongoDB.' })
   if (!req.file) return res.status(400).json({ error: 'Choose a JPG, PNG, or WEBP image under 3MB.' })
   const avatarUrl = await saveAvatarUpload(req.file)
   const user = await User.findByIdAndUpdate(req.auth.sub, { avatarUrl }, { new: true })
@@ -1329,7 +1250,7 @@ app.get('/api/auth/google', (_req, res) => {
 
 app.get('/api/auth/google/callback', asyncRoute(async (req, res) => {
   const failure = (reason) => res.redirect(`${config.clientUrl}/auth?oauth=${encodeURIComponent(reason)}`)
-  if (!databaseReady || !config.google.clientId || !config.google.clientSecret || !req.query.code || req.query.state !== req.cookies.treeacademy_google_state) return failure('unavailable')
+  if (!dbState.ready || !config.google.clientId || !config.google.clientSecret || !req.query.code || req.query.state !== req.cookies.treeacademy_google_state) return failure('unavailable')
   res.clearCookie('treeacademy_google_state', cookieOptions({ path: '/api/auth/google' }))
   const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
@@ -1364,7 +1285,7 @@ app.post('/api/newsletter', asyncRoute(async (req, res) => {
   let createdSubscriber = false
   let reactivatedSubscriber = false
 
-  if (databaseReady) {
+  if (dbState.ready) {
     const existingSubscriber = await NewsletterSubscriber.findOne({ email: normalized })
     if (existingSubscriber && existingSubscriber.status !== 'unsubscribed') shouldSendConfirmation = false
     else if (existingSubscriber) {
@@ -1395,8 +1316,8 @@ app.post('/api/newsletter', asyncRoute(async (req, res) => {
       await sendTemplatedEmail('newsletter_confirmation', normalized, { email: normalized })
       await saveAudit('newsletter.confirmation_requested', 'NewsletterSubscriber', normalized)
     } catch (error) {
-      if (databaseReady && createdSubscriber) await NewsletterSubscriber.deleteOne({ email: normalized })
-      else if (databaseReady && reactivatedSubscriber) await NewsletterSubscriber.updateOne({ email: normalized }, { status: 'unsubscribed' })
+      if (dbState.ready && createdSubscriber) await NewsletterSubscriber.deleteOne({ email: normalized })
+      else if (dbState.ready && reactivatedSubscriber) await NewsletterSubscriber.updateOne({ email: normalized }, { status: 'unsubscribed' })
       else if (createdSubscriber) memory.newsletter.delete(normalized)
       else if (reactivatedSubscriber) memory.newsletter.set(normalized, { email: normalized, status: 'unsubscribed' })
       throw error
@@ -1414,7 +1335,7 @@ app.get('/api/pricing', asyncRoute(async (_req, res) => {
 }))
 
 app.patch('/api/admin/pricing', requireAuth, requireAdmin, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Pricing settings require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Pricing settings require MongoDB.' })
   const values = pricingSettingsInput.parse(req.body)
   const settings = await PricingSettings.findOneAndUpdate({}, values, { new: true, upsert: true, setDefaultsOnInsert: true })
   await saveAudit('pricing.updated', 'PricingSettings', settings.id, values, req.auth.sub)
@@ -1449,7 +1370,7 @@ const assertVoucherValueInRange = (discountType, discountValue) => {
 }
 
 app.get('/api/admin/vouchers', requireAuth, requireAdmin, asyncRoute(async (_req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
   const vouchers = await Voucher.find().sort({ createdAt: -1 }).lean()
   res.json(vouchers.map(publicVoucher))
 }))
@@ -1458,7 +1379,7 @@ app.get('/api/admin/vouchers', requireAuth, requireAdmin, asyncRoute(async (_req
 // applicant PII (name + email), so it's fetched on demand for one voucher rather than shipped with
 // every row of the management screen.
 app.get('/api/admin/vouchers/:id/redemptions', requireAuth, requireAdmin, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
   const rows = await VoucherRedemption.find({ voucherId: req.params.id }).sort({ redeemedAt: -1 }).limit(500).lean()
   res.json(rows.map((row) => ({
     id: row._id.toString(),
@@ -1477,7 +1398,7 @@ app.get('/api/admin/vouchers/:id/redemptions', requireAuth, requireAdmin, asyncR
 }))
 
 app.post('/api/admin/vouchers', requireAuth, requireAdmin, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
   const values = voucherInput.parse(req.body)
   assertVoucherValueInRange(values.discountType, values.discountValue)
   // Checked before insert so a duplicate reads as a clear conflict instead of surfacing a raw
@@ -1489,7 +1410,7 @@ app.post('/api/admin/vouchers', requireAuth, requireAdmin, asyncRoute(async (req
 }))
 
 app.patch('/api/admin/vouchers/:id', requireAuth, requireAdmin, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
   const values = voucherPatchInput.parse(req.body)
   const voucher = await Voucher.findById(req.params.id)
   if (!voucher) return res.status(404).json({ error: 'Voucher not found.' })
@@ -1507,7 +1428,7 @@ app.patch('/api/admin/vouchers/:id', requireAuth, requireAdmin, asyncRoute(async
 }))
 
 app.delete('/api/admin/vouchers/:id', requireAuth, requireAdmin, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
   const voucher = await Voucher.findById(req.params.id)
   if (!voucher) return res.status(404).json({ error: 'Voucher not found.' })
   // A redeemed voucher is the explanation for why some enrollments were charged less than list
@@ -1525,15 +1446,15 @@ app.delete('/api/admin/vouchers/:id', requireAuth, requireAdmin, asyncRoute(asyn
 
 app.post('/api/enrollments', asyncRoute(async (req, res) => {
   const applicant = enrollmentInput.parse(req.body)
-  if (databaseReady && !pathwayCourseIsOpen(await courseForPathway(applicant.pathway))) {
+  if (dbState.ready && !pathwayCourseIsOpen(await courseForPathway(applicant.pathway))) {
     return res.status(409).json({ error: 'Enrollment for this program is not currently open.' })
   }
   const pricing = await getPricingSettings()
   const enrollmentData = { applicant: { ...applicant, email: applicant.email.toLowerCase() }, amount: totalAmountForPathway(pricing, applicant.pathway), currency: pricing.currency, status: 'application_pending' }
-  const enrollment = databaseReady ? await Enrollment.create(enrollmentData) : { ...enrollmentData, id: id() }
-  if (!databaseReady) memory.enrollments.set(enrollment.id, enrollment)
+  const enrollment = dbState.ready ? await Enrollment.create(enrollmentData) : { ...enrollmentData, id: id() }
+  if (!dbState.ready) memory.enrollments.set(enrollment.id, enrollment)
   await saveAudit('enrollment.created', 'Enrollment', enrollment._id?.toString() ?? enrollment.id, { pathway: applicant.pathway })
-  if (databaseReady) {
+  if (dbState.ready) {
     sendTemplatedEmail('enrollment_received', applicant.email, { name: applicant.name, pathway: applicant.pathway, enrollUrl: `${config.clientUrl}/enroll` })
       .catch((emailError) => console.error('enrollment_received email failed:', emailError.message))
   }
@@ -1557,7 +1478,7 @@ app.post('/api/enrollments/:id/application', asyncRoute(async (req, res) => {
   enrollment.applicant.email = values.email.toLowerCase()
   enrollment.intake = { data: values, submittedAt: new Date(), pdfKey }
   enrollment.status = 'documents_pending'
-  if (databaseReady) await enrollment.save()
+  if (dbState.ready) await enrollment.save()
   await saveAudit('enrollment.application_submitted', 'Enrollment', req.params.id)
   // Must match the document route's own requiredType check — hardcoding 'realex-reblex' told a
   // consultant applicant to sign the broker agreement, which that route would then reject.
@@ -1585,7 +1506,7 @@ app.post('/api/enrollments/:id/documents/:type', asyncRoute(async (req, res) => 
   enrollment.documents ??= {}
   enrollment.documents[documentName] = { pdfKey, signedAt: new Date(), signatureName }
   enrollment.status = 'payment_pending'
-  if (databaseReady) await enrollment.save()
+  if (dbState.ready) await enrollment.save()
 
   await bestEffortEmail(sendEnrollmentDocumentsEmail({
     enrollmentId: req.params.id,
@@ -1630,7 +1551,7 @@ const voucherLimiter = rateLimit({
 })
 
 app.post('/api/enrollments/:id/voucher', voucherLimiter, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
   const { code } = voucherRedeemInput.parse(req.body)
   const enrollment = await findEnrollment(req.params.id)
   if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
@@ -1660,7 +1581,7 @@ app.post('/api/enrollments/:id/voucher', voucherLimiter, asyncRoute(async (req, 
 }))
 
 app.delete('/api/enrollments/:id/voucher', voucherLimiter, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Vouchers require MongoDB.' })
   const enrollment = await findEnrollment(req.params.id)
   if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
   if (!VOUCHER_EDIT_STATUSES.includes(enrollment.status)) return res.status(409).json({ error: 'This enrollment can no longer be changed.' })
@@ -1681,7 +1602,7 @@ app.post('/api/enrollments/:id/payment-session', asyncRoute(async (req, res) => 
   // applied — a code can expire or hit its limit in between. If it no longer holds it is stripped
   // and the request fails loudly, rather than quietly opening checkout at a price the applicant was
   // never shown. The response carries the corrected total so the page can re-render it.
-  if (databaseReady && enrollment.voucher?.voucherId) {
+  if (dbState.ready && enrollment.voucher?.voucherId) {
     const live = await Voucher.findById(enrollment.voucher.voucherId)
     const stillValid = voucherRejection(live) ?? await voucherApplicantRejection(live, enrollment.applicant.email)
     if (stillValid) {
@@ -1710,7 +1631,7 @@ app.post('/api/enrollments/:id/payment-session', asyncRoute(async (req, res) => 
 
   if (!config.paymongo.secretKey) {
     enrollment.payment = { provider: 'paymongo-payment-link', checkoutUrl: config.paymongo.paymentLink, referenceNumber: req.params.id, plan: resolvedPlan, planAmount: chargeAmount }
-    if (databaseReady) await enrollment.save()
+    if (dbState.ready) await enrollment.save()
     return res.json({ checkoutUrl: config.paymongo.paymentLink, mode: 'payment_link_fallback', message: 'The PayMongo payment page is open. Add a PayMongo secret key and webhook to enable automatic payment matching and account email.' })
   }
 
@@ -1752,7 +1673,7 @@ app.post('/api/enrollments/:id/payment-session', asyncRoute(async (req, res) => 
     plan: resolvedPlan,
     planAmount: chargeAmount,
   }
-  if (databaseReady) await enrollment.save()
+  if (dbState.ready) await enrollment.save()
   await saveAudit('payment.checkout_created', 'Enrollment', req.params.id, { checkoutId: result.data.id, plan: resolvedPlan, planAmount: chargeAmount })
   res.json({ checkoutUrl: result.data.attributes.checkout_url, mode: 'checkout_session' })
 }))
@@ -1788,7 +1709,7 @@ const agreementCourse = async (slug) => {
 }
 
 app.get('/api/course-agreements/:slug', asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Course agreements require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Course agreements require MongoDB.' })
   const course = await agreementCourse(req.params.slug)
   if (!course) return res.status(404).json({ error: 'This course is not accepting applications right now.' })
   res.json({ courseId: course.id, title: course.title, fields: course.agreementTemplate.fields })
@@ -1798,7 +1719,7 @@ app.get('/api/course-agreements/:slug', asyncRoute(async (req, res) => {
 // to serve unauthenticated and cross-origin, the same trust level as the two static pathway
 // templates already served from public/enrollment-documents/.
 app.get('/api/course-agreements/:slug/template.pdf', asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(404).end()
+  if (!dbState.ready) return res.status(404).end()
   const course = await agreementCourse(req.params.slug)
   if (!course) return res.status(404).end()
   res.type('application/pdf')
@@ -1806,7 +1727,7 @@ app.get('/api/course-agreements/:slug/template.pdf', asyncRoute(async (req, res)
 }))
 
 app.post('/api/course-agreements/:slug/apply', asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Course agreements require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Course agreements require MongoDB.' })
   const course = await agreementCourse(req.params.slug)
   if (!course) return res.status(404).json({ error: 'This course is not accepting applications right now.' })
   const applicant = courseApplicantInput.parse(req.body)
@@ -1846,7 +1767,7 @@ app.get('/api/staff/enrollments', requireAuth, requireStaff, asyncRoute(async (r
     payment: row.payment ? { plan: row.payment.plan, planAmount: row.payment.planAmount, paidAt: row.payment.paidAt, referenceNumber: row.payment.referenceNumber, balanceDueDate: row.payment.balanceDueDate ?? null, balanceNote: row.payment.balanceNote ?? '' } : undefined,
     createdAt: row.createdAt, archivedAt: row.archivedAt ?? null, documents: enrollmentDocuments(row),
   })
-  if (databaseReady) {
+  if (dbState.ready) {
     const filter = scope === 'all' ? {} : scope === 'only' ? { archivedAt: { $ne: null } } : { archivedAt: null }
     const rows = await Enrollment.find(filter).sort({ createdAt: -1 }).lean()
     const paid = await paidByEnrollment(rows.map((row) => row._id))
@@ -1878,7 +1799,7 @@ app.get('/api/staff/enrollments/:id/documents/:type', requireAuth, requireStaff,
 // owe on a "pay upfront only" plan. Doesn't require any particular enrollment status — staff may
 // want to set this ahead of or after the balance actually being collected offline.
 app.patch('/api/staff/enrollments/:id/balance-due', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Enrollments require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Enrollments require MongoDB.' })
   const values = balanceDueInput.parse(req.body)
   const enrollment = await Enrollment.findById(req.params.id)
   if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
@@ -1911,7 +1832,7 @@ const publicPayment = (row) => ({
 
 // One row per enrollment with its ledger total — the collections overview.
 app.get('/api/staff/billing', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Billing requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Billing requires MongoDB.' })
   const enrollments = await Enrollment.find({ archivedAt: null }).sort({ createdAt: -1 }).lean()
   const paid = await paidByEnrollment(enrollments.map((row) => row._id))
   const counts = new Map()
@@ -1945,7 +1866,7 @@ app.get('/api/staff/billing', requireAuth, requireStaff, asyncRoute(async (req, 
 // A billing record for a learner onboarded outside the public enrollment flow — no intake, no
 // signed agreement, which is why it is marked origin: 'manual' rather than faking an enrollment.
 app.post('/api/staff/billing/enrollments', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Billing requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Billing requires MongoDB.' })
   const values = manualBillingInput.parse(req.body)
   const learner = await User.findById(values.learnerId).select('name email phone').lean()
   if (!learner) return res.status(404).json({ error: 'Learner not found.' })
@@ -1971,7 +1892,7 @@ app.post('/api/staff/billing/enrollments', requireAuth, requireStaff, asyncRoute
 
 // Total, itemisation, and the balance reminder. Not the payments — those have their own routes.
 app.patch('/api/staff/enrollments/:id/billing', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Billing requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Billing requires MongoDB.' })
   const values = billingPatchInput.parse(req.body)
   const enrollment = await Enrollment.findById(req.params.id)
   if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
@@ -1988,7 +1909,7 @@ app.patch('/api/staff/enrollments/:id/billing', requireAuth, requireStaff, async
 }))
 
 app.get('/api/staff/enrollments/:id/payments', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Billing requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Billing requires MongoDB.' })
   const enrollment = await Enrollment.findById(req.params.id).lean()
   if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
   // Voided rows are included here on purpose: staff need to see that a payment was reversed and why.
@@ -2016,7 +1937,7 @@ app.get('/api/staff/enrollments/:id/payments', requireAuth, requireStaff, asyncR
 }))
 
 app.post('/api/staff/enrollments/:id/payments', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Billing requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Billing requires MongoDB.' })
   const values = paymentInput.parse(req.body)
   const enrollment = await Enrollment.findById(req.params.id)
   if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
@@ -2036,7 +1957,7 @@ app.post('/api/staff/enrollments/:id/payments', requireAuth, requireStaff, async
 }))
 
 app.patch('/api/staff/payments/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Billing requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Billing requires MongoDB.' })
   const values = paymentPatchInput.parse(req.body)
   const payment = await Payment.findById(req.params.id)
   if (!payment) return res.status(404).json({ error: 'Payment not found.' })
@@ -2052,7 +1973,7 @@ app.patch('/api/staff/payments/:id', requireAuth, requireStaff, asyncRoute(async
 // The "delete" of this CRUD. The row survives with its figures intact and drops out of every total,
 // so a reversed payment stays auditable instead of vanishing from the learner's history.
 app.post('/api/staff/payments/:id/void', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Billing requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Billing requires MongoDB.' })
   const { reason } = paymentVoidInput.parse(req.body)
   const payment = await Payment.findById(req.params.id)
   if (!payment) return res.status(404).json({ error: 'Payment not found.' })
@@ -2067,7 +1988,7 @@ app.post('/api/staff/payments/:id/void', requireAuth, requireStaff, asyncRoute(a
 
 app.post('/api/staff/enrollments/:id/decision', requireAuth, requireStaff, asyncRoute(async (req, res) => {
   const body = z.object({ decision: z.enum(['approved', 'rejected', 'refunded']), reason: z.string().trim().max(500).optional() }).parse(req.body)
-  const enrollment = databaseReady ? await Enrollment.findById(req.params.id) : memory.enrollments.get(req.params.id)
+  const enrollment = dbState.ready ? await Enrollment.findById(req.params.id) : memory.enrollments.get(req.params.id)
   if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
   if (!['paid_approval_pending', 'rejected'].includes(enrollment.status)) return res.status(409).json({ error: 'Enrollment cannot be decided in its current state.' })
   enrollment.status = body.decision
@@ -2075,7 +1996,7 @@ app.post('/api/staff/enrollments/:id/decision', requireAuth, requireStaff, async
   enrollment.reviewedAt = new Date()
   let invitation = null
   if (body.decision === 'approved') { invitation = await provisionLearnerAccount(enrollment); await bestEffortEmail(sendPaymentReceiptEmail(enrollment, invitation?.setupUrl), 'payment_receipt email') }
-  if (databaseReady) await enrollment.save()
+  if (dbState.ready) await enrollment.save()
   await saveAudit(`enrollment.${body.decision}`, 'Enrollment', req.params.id, { reason: body.reason }, req.auth.sub)
   res.json({ ...publicEnrollment(enrollment), invitation })
 }))
@@ -2083,7 +2004,6 @@ app.post('/api/staff/enrollments/:id/decision', requireAuth, requireStaff, async
 // --- Admin console: user management, catalog, roles, audit, content, support, analytics, reports ---
 
 const adminOnly = [requireAuth, requireAdmin]
-const requireDb = (res, feature) => { res.status(503).json({ error: `${feature} requires MongoDB.` }); return false }
 
 const DEFAULT_PERMISSIONS = {
   learner: ['courses.view', 'assignments.submit', 'quizzes.attempt', 'certificates.view', 'support.submit', 'reports.submit'],
@@ -2108,7 +2028,7 @@ const adminUserView = (user) => ({
 })
 
 app.get('/api/admin/users', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'User management')
+  if (!dbState.ready) return requireDb(res, 'User management')
   const query = {}
   if (['learner', 'instructor', 'admin'].includes(req.query.role)) query.role = req.query.role
   if (['invited', 'active', 'inactive', 'suspended'].includes(req.query.status)) query.status = req.query.status
@@ -2122,7 +2042,7 @@ app.get('/api/admin/users', ...adminOnly, asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/admin/users', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'User management')
+  if (!dbState.ready) return requireDb(res, 'User management')
   const values = adminUserCreateInput.parse(req.body)
   if (await User.findOne({ email: values.email })) return res.status(409).json({ error: 'A user with that email already exists.' })
   if (values.username && await User.findOne({ username: values.username })) return res.status(409).json({ error: 'That username is already taken.' })
@@ -2139,7 +2059,7 @@ app.post('/api/admin/users', ...adminOnly, asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/admin/users/import', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'User management')
+  if (!dbState.ready) return requireDb(res, 'User management')
   const { rows } = userImportInput.parse(req.body)
   const created = []
   const skipped = []
@@ -2156,7 +2076,7 @@ app.post('/api/admin/users/import', ...adminOnly, asyncRoute(async (req, res) =>
 }))
 
 app.patch('/api/admin/users/:id', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'User management')
+  if (!dbState.ready) return requireDb(res, 'User management')
   if (req.params.id === req.auth.sub) return res.status(409).json({ error: 'You cannot change your own account here.' })
   const updates = adminUserUpdateInput.parse(req.body)
   if (updates.email && await User.findOne({ email: updates.email.toLowerCase(), _id: { $ne: req.params.id } })) return res.status(409).json({ error: 'Another user already uses that email.' })
@@ -2169,7 +2089,7 @@ app.patch('/api/admin/users/:id', ...adminOnly, asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/admin/users/:id/avatar', ...adminOnly, avatarUpload.single('avatar'), asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'User management')
+  if (!dbState.ready) return requireDb(res, 'User management')
   if (!req.file) return res.status(400).json({ error: 'Choose a JPG, PNG, or WEBP image under 3MB.' })
   const avatarUrl = await saveAvatarUpload(req.file)
   const user = await User.findByIdAndUpdate(req.params.id, { avatarUrl }, { new: true })
@@ -2179,7 +2099,7 @@ app.post('/api/admin/users/:id/avatar', ...adminOnly, avatarUpload.single('avata
 }))
 
 app.delete('/api/admin/users/:id', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'User management')
+  if (!dbState.ready) return requireDb(res, 'User management')
   if (req.params.id === req.auth.sub) return res.status(409).json({ error: 'You cannot delete your own account.' })
   const user = await User.findById(req.params.id)
   if (!user) return res.status(404).json({ error: 'User not found.' })
@@ -2196,7 +2116,7 @@ app.delete('/api/admin/users/:id', ...adminOnly, asyncRoute(async (req, res) => 
 }))
 
 app.post('/api/admin/users/bulk-action', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'User management')
+  if (!dbState.ready) return requireDb(res, 'User management')
   const { ids, action } = bulkUserActionInput.parse(req.body)
   const targetIds = ids.filter((value) => value !== req.auth.sub)
   if (action === 'delete') {
@@ -2220,7 +2140,7 @@ app.post('/api/admin/users/bulk-action', ...adminOnly, asyncRoute(async (req, re
 }))
 
 app.post('/api/admin/users/bulk-enroll', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'User management')
+  if (!dbState.ready) return requireDb(res, 'User management')
   const { ids, courseId } = bulkEnrollInput.parse(req.body)
   if (!mongoose.isValidObjectId(courseId) || !(await Course.findById(courseId))) return res.status(404).json({ error: 'Course not found.' })
   const learners = await User.find({ _id: { $in: ids }, role: 'learner' }).select('_id').lean()
@@ -2231,7 +2151,7 @@ app.post('/api/admin/users/bulk-enroll', ...adminOnly, asyncRoute(async (req, re
 }))
 
 app.post('/api/admin/users/:id/password', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'User management')
+  if (!dbState.ready) return requireDb(res, 'User management')
   const { password } = adminPasswordInput.parse(req.body)
   const user = await User.findById(req.params.id)
   if (!user) return res.status(404).json({ error: 'User not found.' })
@@ -2244,7 +2164,7 @@ app.post('/api/admin/users/:id/password', ...adminOnly, asyncRoute(async (req, r
 }))
 
 app.get('/api/admin/users/:id/courses', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'User management')
+  if (!dbState.ready) return requireDb(res, 'User management')
   const [courses, progress] = await Promise.all([
     Course.find().select('title slug isPublished').sort({ createdAt: -1 }).lean(),
     LearningProgress.find({ learnerId: req.params.id }).select('courseId completedModuleIds completedAt').lean(),
@@ -2259,7 +2179,7 @@ app.get('/api/admin/users/:id/courses', ...adminOnly, asyncRoute(async (req, res
 }))
 
 app.post('/api/admin/users/:id/courses', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'User management')
+  if (!dbState.ready) return requireDb(res, 'User management')
   const { courseId } = z.object({ courseId: z.string().trim().min(1) }).parse(req.body)
   if (!mongoose.isValidObjectId(courseId) || !(await Course.findById(courseId))) return res.status(404).json({ error: 'Course not found.' })
   await LearningProgress.findOneAndUpdate({ learnerId: req.params.id, courseId }, { $setOnInsert: { completedModuleIds: [] } }, { upsert: true, setDefaultsOnInsert: true })
@@ -2268,14 +2188,14 @@ app.post('/api/admin/users/:id/courses', ...adminOnly, asyncRoute(async (req, re
 }))
 
 app.delete('/api/admin/users/:id/courses/:courseId', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'User management')
+  if (!dbState.ready) return requireDb(res, 'User management')
   await LearningProgress.deleteOne({ learnerId: req.params.id, courseId: req.params.courseId })
   await saveAudit('user.unenrolled', 'Course', req.params.courseId, { learnerId: req.params.id }, req.auth.sub)
   res.status(204).end()
 }))
 
 app.get('/api/admin/users/:id/teaching-courses', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'User management')
+  if (!dbState.ready) return requireDb(res, 'User management')
   const instructor = await User.findById(req.params.id).select('role')
   if (!instructor) return res.status(404).json({ error: 'User not found.' })
   if (instructor.role !== 'instructor') return res.status(409).json({ error: 'Only instructors can be assigned teaching courses.' })
@@ -2284,7 +2204,7 @@ app.get('/api/admin/users/:id/teaching-courses', ...adminOnly, asyncRoute(async 
 }))
 
 app.put('/api/admin/users/:id/teaching-courses', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'User management')
+  if (!dbState.ready) return requireDb(res, 'User management')
   const { courseIds } = z.object({ courseIds: z.array(z.string().trim().min(1)).max(100) }).parse(req.body)
   const instructor = await User.findById(req.params.id).select('role')
   if (!instructor) return res.status(404).json({ error: 'User not found.' })
@@ -2296,7 +2216,7 @@ app.put('/api/admin/users/:id/teaching-courses', ...adminOnly, asyncRoute(async 
 }))
 
 app.post('/api/admin/users/:id/impersonate', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'User management')
+  if (!dbState.ready) return requireDb(res, 'User management')
   if (req.params.id === req.auth.sub) return res.status(409).json({ error: 'You are already signed in as yourself.' })
   const target = await User.findById(req.params.id)
   if (!target) return res.status(404).json({ error: 'User not found.' })
@@ -2308,7 +2228,7 @@ app.post('/api/admin/users/:id/impersonate', ...adminOnly, asyncRoute(async (req
 }))
 
 app.get('/api/admin/courses', ...adminOnly, asyncRoute(async (_req, res) => {
-  if (!databaseReady) return requireDb(res, 'Catalog management')
+  if (!dbState.ready) return requireDb(res, 'Catalog management')
   const courses = await Course.find().sort({ createdAt: -1 }).lean()
   const [counts, enrollCounts] = await Promise.all([
     Module.aggregate([{ $group: { _id: '$courseId', count: { $sum: 1 } } }]),
@@ -2331,7 +2251,7 @@ app.get('/api/admin/courses', ...adminOnly, asyncRoute(async (_req, res) => {
 }))
 
 app.patch('/api/admin/courses/:id', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Catalog management')
+  if (!dbState.ready) return requireDb(res, 'Catalog management')
   const { isPublished, archived, availableFrom, availableUntil, showEnrollmentCount } = adminCourseInput.parse(req.body)
   const updates = {}
   if (isPublished !== undefined) updates.isPublished = isPublished
@@ -2350,7 +2270,7 @@ app.patch('/api/admin/courses/:id', ...adminOnly, asyncRoute(async (req, res) =>
 }))
 
 app.delete('/api/admin/courses/:id', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Catalog management')
+  if (!dbState.ready) return requireDb(res, 'Catalog management')
   const course = await Course.findById(req.params.id)
   if (!course) return res.status(404).json({ error: 'Course not found.' })
   const modules = await Module.find({ courseId: course._id }).select('_id').lean()
@@ -2367,7 +2287,7 @@ app.delete('/api/admin/courses/:id', ...adminOnly, asyncRoute(async (req, res) =
 }))
 
 app.get('/api/admin/webinars', ...adminOnly, asyncRoute(async (_req, res) => {
-  if (!databaseReady) return requireDb(res, 'Webinar management')
+  if (!dbState.ready) return requireDb(res, 'Webinar management')
   const webinars = await Webinar.find().sort({ startsAt: 1 }).lean()
   const counts = await WebinarRegistration.aggregate([{ $group: { _id: '$webinarId', count: { $sum: 1 } } }])
   const countById = new Map(counts.map((row) => [String(row._id), row.count]))
@@ -2380,14 +2300,14 @@ app.get('/api/admin/webinars', ...adminOnly, asyncRoute(async (_req, res) => {
 }))
 
 app.post('/api/admin/webinars', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Webinar management')
+  if (!dbState.ready) return requireDb(res, 'Webinar management')
   const webinar = await Webinar.create({ ...webinarInput.parse(req.body), createdBy: req.auth.sub })
   await saveAudit('webinar.created', 'Webinar', webinar.id, {}, req.auth.sub)
   res.status(201).json(webinar)
 }))
 
 app.patch('/api/admin/webinars/:id', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Webinar management')
+  if (!dbState.ready) return requireDb(res, 'Webinar management')
   const webinar = await Webinar.findByIdAndUpdate(req.params.id, webinarUpdateInput.parse(req.body), { new: true })
   if (!webinar) return res.status(404).json({ error: 'Webinar not found.' })
   await saveAudit('webinar.updated', 'Webinar', webinar.id, {}, req.auth.sub)
@@ -2395,7 +2315,7 @@ app.patch('/api/admin/webinars/:id', ...adminOnly, asyncRoute(async (req, res) =
 }))
 
 app.delete('/api/admin/webinars/:id', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Webinar management')
+  if (!dbState.ready) return requireDb(res, 'Webinar management')
   const webinar = await Webinar.findByIdAndDelete(req.params.id)
   if (!webinar) return res.status(404).json({ error: 'Webinar not found.' })
   await WebinarRegistration.deleteMany({ webinarId: webinar._id })
@@ -2404,13 +2324,13 @@ app.delete('/api/admin/webinars/:id', ...adminOnly, asyncRoute(async (req, res) 
 }))
 
 app.get('/api/admin/webinars/:id/registrations', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Webinar management')
+  if (!dbState.ready) return requireDb(res, 'Webinar management')
   const registrations = await WebinarRegistration.find({ webinarId: req.params.id }).sort({ createdAt: -1 }).lean()
   res.json(registrations)
 }))
 
 app.get('/api/admin/email-templates', ...adminOnly, asyncRoute(async (_req, res) => {
-  if (!databaseReady) return requireDb(res, 'Email automation')
+  if (!dbState.ready) return requireDb(res, 'Email automation')
   const templates = await EmailTemplate.find().lean()
   const byKey = new Map(templates.map((template) => [template.key, template]))
   res.json(Object.keys(emailTemplateDefaults).map((key) => {
@@ -2422,7 +2342,7 @@ app.get('/api/admin/email-templates', ...adminOnly, asyncRoute(async (_req, res)
 }))
 
 app.patch('/api/admin/email-templates/:key', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Email automation')
+  if (!dbState.ready) return requireDb(res, 'Email automation')
   if (!Object.hasOwn(emailTemplateDefaults, req.params.key)) return res.status(404).json({ error: 'Unknown email template.' })
   const updates = emailTemplateUpdateInput.parse(req.body)
   const template = await EmailTemplate.findOneAndUpdate({ key: req.params.key }, { ...updates, updatedBy: req.auth.sub }, { new: true, upsert: true, setDefaultsOnInsert: true })
@@ -2443,7 +2363,7 @@ const testEmailLimiter = rateLimit({
 })
 
 app.post('/api/admin/email-templates/:key/test', ...adminOnly, testEmailLimiter, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Email automation')
+  if (!dbState.ready) return requireDb(res, 'Email automation')
   if (!Object.hasOwn(emailTemplateDefaults, req.params.key)) return res.status(404).json({ error: 'Unknown email template.' })
   const { to } = testEmailInput.parse(req.body ?? {})
   // Defaults to the admin's own address: the common case is "show me what this looks like", and it
@@ -2467,12 +2387,12 @@ app.post('/api/admin/email-templates/:key/test', ...adminOnly, testEmailLimiter,
 }))
 
 app.get('/api/admin/permissions', ...adminOnly, asyncRoute(async (_req, res) => {
-  if (!databaseReady) return res.json(DEFAULT_PERMISSIONS)
+  if (!dbState.ready) return res.json(DEFAULT_PERMISSIONS)
   res.json(await loadPermissions())
 }))
 
 app.put('/api/admin/permissions', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Role permissions')
+  if (!dbState.ready) return requireDb(res, 'Role permissions')
   const matrix = permissionsInput.parse(req.body)
   await Promise.all(Object.entries(matrix).map(([role, permissions]) =>
     RolePermission.findOneAndUpdate({ role }, { permissions, updatedBy: req.auth.sub }, { upsert: true, setDefaultsOnInsert: true })))
@@ -2481,7 +2401,7 @@ app.put('/api/admin/permissions', ...adminOnly, asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/admin/enrollments/bulk-decision', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Enrollment management')
+  if (!dbState.ready) return requireDb(res, 'Enrollment management')
   const { ids, decision, reason } = bulkDecisionInput.parse(req.body)
   const results = []
   for (const enrollmentId of ids) {
@@ -2500,7 +2420,7 @@ app.post('/api/admin/enrollments/bulk-decision', ...adminOnly, asyncRoute(async 
 }))
 
 app.post('/api/admin/enrollments/:id/archive', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Enrollment management')
+  if (!dbState.ready) return requireDb(res, 'Enrollment management')
   const { archived } = z.object({ archived: z.boolean() }).parse(req.body)
   const enrollment = await Enrollment.findByIdAndUpdate(req.params.id, { archivedAt: archived ? new Date() : null }, { new: true })
   if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
@@ -2509,7 +2429,7 @@ app.post('/api/admin/enrollments/:id/archive', ...adminOnly, asyncRoute(async (r
 }))
 
 app.get('/api/admin/audit-logs', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Audit logs')
+  if (!dbState.ready) return requireDb(res, 'Audit logs')
   const query = {}
   if (req.query.entityType) query.entityType = String(req.query.entityType).slice(0, 60)
   if (req.query.action) query.action = new RegExp(String(req.query.action).slice(0, 60), 'i')
@@ -2522,7 +2442,7 @@ app.get('/api/admin/audit-logs', ...adminOnly, asyncRoute(async (req, res) => {
 }))
 
 app.get('/api/admin/content-assets', ...adminOnly, asyncRoute(async (_req, res) => {
-  if (!databaseReady) return requireDb(res, 'Content library')
+  if (!dbState.ready) return requireDb(res, 'Content library')
   const assets = await ContentAsset.find().sort({ createdAt: -1 }).populate('createdBy', 'name').lean()
   res.json(assets.map((asset) => ({
     id: asset._id.toString(), title: asset.title, description: asset.description, category: asset.category,
@@ -2531,7 +2451,7 @@ app.get('/api/admin/content-assets', ...adminOnly, asyncRoute(async (_req, res) 
 }))
 
 app.post('/api/admin/content-assets', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Content library')
+  if (!dbState.ready) return requireDb(res, 'Content library')
   const values = contentAssetInput.parse(req.body)
   const asset = await ContentAsset.create({ ...values, createdBy: req.auth.sub })
   await saveAudit('content_asset.created', 'ContentAsset', asset.id, { category: asset.category }, req.auth.sub)
@@ -2539,7 +2459,7 @@ app.post('/api/admin/content-assets', ...adminOnly, asyncRoute(async (req, res) 
 }))
 
 app.delete('/api/admin/content-assets/:id', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Content library')
+  if (!dbState.ready) return requireDb(res, 'Content library')
   const asset = await ContentAsset.findByIdAndDelete(req.params.id)
   if (!asset) return res.status(404).json({ error: 'Asset not found.' })
   await saveAudit('content_asset.deleted', 'ContentAsset', req.params.id, {}, req.auth.sub)
@@ -2547,7 +2467,7 @@ app.delete('/api/admin/content-assets/:id', ...adminOnly, asyncRoute(async (req,
 }))
 
 app.post('/api/support/tickets', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Support tickets')
+  if (!dbState.ready) return requireDb(res, 'Support tickets')
   const values = supportTicketInput.parse(req.body)
   const ticket = await SupportTicket.create({ ...values, requesterId: req.auth.sub })
   await saveAudit('support_ticket.created', 'SupportTicket', ticket.id, { category: ticket.category }, req.auth.sub)
@@ -2555,7 +2475,7 @@ app.post('/api/support/tickets', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.get('/api/admin/support/tickets', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Support tickets')
+  if (!dbState.ready) return requireDb(res, 'Support tickets')
   const query = {}
   if (['open', 'in_progress', 'resolved', 'closed'].includes(req.query.status)) query.status = req.query.status
   const tickets = await SupportTicket.find(query).sort({ createdAt: -1 }).limit(300).populate('requesterId', 'name email role').lean()
@@ -2568,7 +2488,7 @@ app.get('/api/admin/support/tickets', ...adminOnly, asyncRoute(async (req, res) 
 }))
 
 app.patch('/api/admin/support/tickets/:id', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Support tickets')
+  if (!dbState.ready) return requireDb(res, 'Support tickets')
   const updates = supportUpdateInput.parse(req.body)
   const ticket = await SupportTicket.findByIdAndUpdate(req.params.id, { ...updates, handledBy: req.auth.sub }, { new: true })
   if (!ticket) return res.status(404).json({ error: 'Ticket not found.' })
@@ -2577,7 +2497,7 @@ app.patch('/api/admin/support/tickets/:id', ...adminOnly, asyncRoute(async (req,
 }))
 
 app.post('/api/reports', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Reports')
+  if (!dbState.ready) return requireDb(res, 'Reports')
   const values = reportInput.parse(req.body)
   const report = await Report.create({ ...values, reporterId: req.auth.sub, reporterRole: req.auth.role })
   await saveAudit('report.created', 'Report', report.id, { type: report.type }, req.auth.sub)
@@ -2585,7 +2505,7 @@ app.post('/api/reports', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.get('/api/admin/reports', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Reports')
+  if (!dbState.ready) return requireDb(res, 'Reports')
   const query = {}
   if (['submitted', 'reviewing', 'actioned', 'dismissed'].includes(req.query.status)) query.status = req.query.status
   if (['learner', 'instructor', 'admin'].includes(req.query.role)) query.reporterRole = req.query.role
@@ -2599,7 +2519,7 @@ app.get('/api/admin/reports', ...adminOnly, asyncRoute(async (req, res) => {
 }))
 
 app.patch('/api/admin/reports/:id', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Reports')
+  if (!dbState.ready) return requireDb(res, 'Reports')
   const updates = reportUpdateInput.parse(req.body)
   const report = await Report.findByIdAndUpdate(req.params.id, { ...updates, reviewedBy: req.auth.sub }, { new: true })
   if (!report) return res.status(404).json({ error: 'Report not found.' })
@@ -2608,7 +2528,7 @@ app.patch('/api/admin/reports/:id', ...adminOnly, asyncRoute(async (req, res) =>
 }))
 
 app.get('/api/admin/analytics', ...adminOnly, asyncRoute(async (_req, res) => {
-  if (!databaseReady) return requireDb(res, 'Analytics')
+  if (!dbState.ready) return requireDb(res, 'Analytics')
   const [usersByRole, usersByStatus, enrollmentsByStatus, courseTotal, coursePublished, revenueAgg, submissionTotal, ticketOpen, reportOpen] = await Promise.all([
     User.aggregate([{ $group: { _id: '$role', count: { $sum: 1 } } }]),
     User.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
@@ -2634,7 +2554,7 @@ app.get('/api/admin/analytics', ...adminOnly, asyncRoute(async (_req, res) => {
 }))
 
 app.get('/api/admin/dashboard', ...adminOnly, asyncRoute(async (_req, res) => {
-  if (!databaseReady) return requireDb(res, 'Dashboard')
+  if (!dbState.ready) return requireDb(res, 'Dashboard')
   const since = new Date()
   since.setMonth(since.getMonth() - 5, 1)
   since.setHours(0, 0, 0, 0)
@@ -2725,7 +2645,7 @@ async function badgeRuleSatisfied(rule, learnerId) {
 // cheap. Never throws — a badge miscalculation must not fail the grade/attendance/completion write
 // that triggered it.
 async function runBadgeRules(courseId, learnerIds, triggerTypes) {
-  if (!databaseReady || !courseId || !learnerIds.length) return
+  if (!dbState.ready || !courseId || !learnerIds.length) return
   try {
     const rules = await BadgeRule.find({ courseId, isActive: true, 'trigger.type': { $in: triggerTypes } }).lean()
     for (const rule of rules) {
@@ -2747,13 +2667,13 @@ async function runBadgeRules(courseId, learnerIds, triggerTypes) {
 }
 
 app.get('/api/badges/me', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Badges require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Badges require MongoDB.' })
   const badges = await StudentBadge.find({ learnerId: req.auth.sub }).populate('badgeId', 'title description color icon').sort({ createdAt: -1 }).lean()
   res.json(badges)
 }))
 
 app.post('/api/staff/badges', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Badge management requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Badge management requires MongoDB.' })
   const values = badgeInput.parse(req.body)
   const badge = await Badge.create({ ...values, createdBy: req.auth.sub })
   await saveAudit('badge.created', 'Badge', badge.id, { title: badge.title }, req.auth.sub)
@@ -2761,7 +2681,7 @@ app.post('/api/staff/badges', requireAuth, requireStaff, asyncRoute(async (req, 
 }))
 
 app.post('/api/staff/badges/:badgeId/award', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Badge awards require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Badge awards require MongoDB.' })
   const { learnerId, note } = awardInput.parse(req.body)
   const [badge, learner] = await Promise.all([Badge.findById(req.params.badgeId), User.findOne({ _id: learnerId, role: 'learner' })])
   if (!badge || !learner) return res.status(404).json({ error: 'Badge or learner not found.' })
@@ -2771,7 +2691,7 @@ app.post('/api/staff/badges/:badgeId/award', requireAuth, requireStaff, asyncRou
 }))
 
 app.get('/api/staff/badges', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Badge management requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Badge management requires MongoDB.' })
   res.json(await Badge.find().sort({ createdAt: -1 }).lean())
 }))
 
@@ -2792,7 +2712,7 @@ async function publicBadgeRule(rule) {
 }
 
 app.get('/api/staff/badge-rules', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Badge rules require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Badge rules require MongoDB.' })
   const filter = {}
   if (req.query.courseId) filter.courseId = req.query.courseId
   const rules = await BadgeRule.find(filter).sort({ createdAt: -1 }).lean()
@@ -2800,7 +2720,7 @@ app.get('/api/staff/badge-rules', requireAuth, requireStaff, asyncRoute(async (r
 }))
 
 app.post('/api/staff/badge-rules', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Badge rules require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Badge rules require MongoDB.' })
   const values = badgeRuleInput.parse(req.body)
   const [badge, course] = await Promise.all([Badge.findById(values.badgeId), Course.findById(values.courseId)])
   if (!badge || !course) return res.status(404).json({ error: 'Badge or course not found.' })
@@ -2812,7 +2732,7 @@ app.post('/api/staff/badge-rules', requireAuth, requireStaff, asyncRoute(async (
 // Covers both "edit the condition" and "turn this rule on/off" — the same route so the client
 // doesn't need two mutations for what's conceptually one action (change how this rule behaves).
 app.patch('/api/staff/badge-rules/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Badge rules require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Badge rules require MongoDB.' })
   const values = badgeRuleUpdateInput.parse(req.body)
   const rule = await BadgeRule.findById(req.params.id)
   if (!rule) return res.status(404).json({ error: 'Rule not found.' })
@@ -2824,7 +2744,7 @@ app.patch('/api/staff/badge-rules/:id', requireAuth, requireStaff, asyncRoute(as
 }))
 
 app.delete('/api/staff/badge-rules/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Badge rules require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Badge rules require MongoDB.' })
   const rule = await BadgeRule.findByIdAndDelete(req.params.id)
   if (!rule) return res.status(404).json({ error: 'Rule not found.' })
   await saveAudit('badge_rule.deleted', 'BadgeRule', req.params.id, {}, req.auth.sub)
@@ -2832,7 +2752,7 @@ app.delete('/api/staff/badge-rules/:id', requireAuth, requireStaff, asyncRoute(a
 }))
 
 app.post('/api/staff/certificate-templates', requireAuth, requireStaff, certificateUpload.single('layout'), asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Certificate templates require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Certificate templates require MongoDB.' })
   if (!req.file) return res.status(422).json({ error: 'Upload a PDF, PNG, or JPEG certificate layout.' })
   const values = certificateTemplateInput.parse(req.body)
   if (!mongoose.isValidObjectId(values.targetId)) return res.status(422).json({ error: 'Certificate target is invalid.' })
@@ -2851,7 +2771,7 @@ app.post('/api/staff/certificate-templates', requireAuth, requireStaff, certific
 }))
 
 app.post('/api/staff/certificates/issue', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Certificate issuing requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Certificate issuing requires MongoDB.' })
   const { templateId, learnerId } = certificateIssueInput.parse(req.body)
   const [template, learner] = await Promise.all([CertificateTemplate.findById(templateId), User.findOne({ _id: learnerId, role: 'learner' })])
   if (!template || !learner) return res.status(404).json({ error: 'Certificate template or learner not found.' })
@@ -2860,7 +2780,7 @@ app.post('/api/staff/certificates/issue', requireAuth, requireStaff, asyncRoute(
 }))
 
 app.post('/api/learning/modules/:moduleId/complete', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Module completion requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Module completion requires MongoDB.' })
   if (req.auth.role !== 'learner') return res.status(403).json({ error: 'Only learners can complete their own modules.' })
   const module = await Module.findById(req.params.moduleId)
   if (!module) return res.status(404).json({ error: 'Module not found.' })
@@ -2885,7 +2805,7 @@ app.post('/api/learning/modules/:moduleId/complete', requireAuth, asyncRoute(asy
 }))
 
 app.get('/api/certificates/:id/download', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Certificate downloads require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Certificate downloads require MongoDB.' })
   const certificate = await Certificate.findById(req.params.id)
   if (!certificate) return res.status(404).json({ error: 'Certificate not found.' })
   if (String(certificate.learnerId) !== req.auth.sub && !['instructor', 'admin'].includes(req.auth.role)) return res.status(403).json({ error: 'You cannot download this certificate.' })
@@ -2901,7 +2821,7 @@ async function courseProgressMap(learnerId, courseIds) {
 }
 
 app.get('/api/courses', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Courses require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Courses require MongoDB.' })
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
   const courses = await Course.find(isStaff ? {} : await learnerVisibleCourseFilter(req.auth.sub)).sort({ createdAt: 1 }).lean()
   const courseIds = courses.map((course) => course._id)
@@ -2919,7 +2839,7 @@ app.get('/api/courses', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.get('/api/courses/:id', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Courses require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Courses require MongoDB.' })
   const course = await Course.findById(req.params.id).lean()
   if (!course) return res.status(404).json({ error: 'Course not found.' })
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
@@ -2996,7 +2916,7 @@ app.get('/api/courses/:id', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.get('/api/courses/:id/categories', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Courses require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Courses require MongoDB.' })
   const course = await Course.findById(req.params.id).lean()
   if (!course) return res.status(404).json({ error: 'Course not found.' })
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
@@ -3008,7 +2928,7 @@ app.get('/api/courses/:id/categories', requireAuth, asyncRoute(async (req, res) 
 }))
 
 app.get('/api/courses/:id/categories/:categoryId', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Courses require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Courses require MongoDB.' })
   const course = await Course.findById(req.params.id).lean()
   if (!course) return res.status(404).json({ error: 'Course not found.' })
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
@@ -3027,7 +2947,7 @@ app.get('/api/courses/:id/categories/:categoryId', requireAuth, asyncRoute(async
 }))
 
 app.post('/api/staff/courses', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Courses require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Courses require MongoDB.' })
   const values = courseInput.parse(req.body)
   const course = await Course.create(values)
   await saveAudit('course.created', 'Course', course.id, { title: course.title }, req.auth.sub)
@@ -3035,7 +2955,7 @@ app.post('/api/staff/courses', requireAuth, requireStaff, asyncRoute(async (req,
 }))
 
 app.patch('/api/staff/courses/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Courses require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Courses require MongoDB.' })
   const values = courseUpdateInput.parse(req.body)
   const course = await Course.findById(req.params.id)
   if (!course) return res.status(404).json({ error: 'Course not found.' })
@@ -3055,7 +2975,7 @@ app.patch('/api/staff/courses/:id', requireAuth, requireStaff, asyncRoute(async 
 }))
 
 app.post('/api/staff/courses/:id/banner', requireAuth, requireStaff, bannerUpload.single('banner'), asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Banner uploads require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Banner uploads require MongoDB.' })
   if (!req.file) return res.status(400).json({ error: 'Choose a JPG, PNG, or WEBP image under 4MB.' })
   const bannerUrl = await saveBannerUpload(req.file)
   const course = await Course.findByIdAndUpdate(req.params.id, { bannerUrl, bannerPreset: null }, { new: true })
@@ -3065,7 +2985,7 @@ app.post('/api/staff/courses/:id/banner', requireAuth, requireStaff, bannerUploa
 }))
 
 app.post('/api/staff/courses/:id/agreement-template', requireAuth, requireStaff, agreementTemplateUpload.single('template'), asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Agreement templates require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Agreement templates require MongoDB.' })
   if (!req.file) return res.status(400).json({ error: 'Choose a PDF under 8MB.' })
   const course = await Course.findById(req.params.id)
   if (!course) return res.status(404).json({ error: 'Course not found.' })
@@ -3079,7 +2999,7 @@ app.post('/api/staff/courses/:id/agreement-template', requireAuth, requireStaff,
 }))
 
 app.delete('/api/staff/courses/:id/agreement-template', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Agreement templates require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Agreement templates require MongoDB.' })
   const course = await Course.findById(req.params.id)
   if (!course) return res.status(404).json({ error: 'Course not found.' })
   course.agreementTemplate = undefined
@@ -3091,13 +3011,13 @@ app.delete('/api/staff/courses/:id/agreement-template', requireAuth, requireStaf
 // Summary only — applicant name/email/signedAt, never the signed PDF's storage key (same rule as
 // GET /api/staff/enrollments). Staff read the file itself via the /document route below.
 app.get('/api/staff/courses/:id/agreement-enrollments', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Course applicants require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Course applicants require MongoDB.' })
   const rows = await CourseEnrollment.find({ courseId: req.params.id }).sort({ createdAt: -1 }).lean()
   res.json(rows.map((row) => ({ _id: String(row._id), applicant: row.applicant, signedAt: row.document?.signedAt ?? null, createdAt: row.createdAt })))
 }))
 
 app.get('/api/staff/course-enrollments/:id/document', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Course applicants require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Course applicants require MongoDB.' })
   const row = await CourseEnrollment.findById(req.params.id)
   if (!row || !row.document?.pdfKey) return res.status(404).json({ error: 'Signed document not found.' })
   await saveAudit('course_enrollment.document_viewed', 'CourseEnrollment', req.params.id, {}, req.auth.sub)
@@ -3116,13 +3036,13 @@ async function editableCourse(req, res, courseId) {
 }
 
 app.get('/api/staff/builder/courses', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Course builder requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Course builder requires MongoDB.' })
   const filter = req.auth.role === 'admin' ? {} : { assignedInstructorIds: req.auth.sub }
   res.json(await Course.find(filter).select('title slug description bannerPreset bannerUrl isPublished').sort({ title: 1 }).lean())
 }))
 
 app.get('/api/staff/builder/courses/:courseId/categories', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Course builder requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Course builder requires MongoDB.' })
   if (!(await editableCourse(req, res, req.params.courseId))) return
   const categories = await Category.find({ courseId: req.params.courseId }).sort({ position: 1 }).lean()
   const ids = categories.map((item) => item._id)
@@ -3137,7 +3057,7 @@ app.get('/api/staff/builder/courses/:courseId/categories', requireAuth, requireS
 }))
 
 app.post('/api/staff/builder/courses/:courseId/categories', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Course builder requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Course builder requires MongoDB.' })
   if (!(await editableCourse(req, res, req.params.courseId))) return
   res.status(201).json(await Category.create({ ...categoryInput.parse(req.body), courseId: req.params.courseId }))
 }))
@@ -3169,7 +3089,7 @@ app.patch('/api/staff/builder/modules/:id', requireAuth, requireStaff, asyncRout
 }))
 
 app.post('/api/staff/courses/:id/submit-review', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Courses require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Courses require MongoDB.' })
   const course = await Course.findById(req.params.id)
   if (!course) return res.status(404).json({ error: 'Course not found.' })
   if (course.approvalStatus === 'approved') return res.status(409).json({ error: 'This course is already approved.' })
@@ -3182,7 +3102,7 @@ app.post('/api/staff/courses/:id/submit-review', requireAuth, requireStaff, asyn
 }))
 
 app.post('/api/admin/courses/:id/review', ...adminOnly, asyncRoute(async (req, res) => {
-  if (!databaseReady) return requireDb(res, 'Catalog management')
+  if (!dbState.ready) return requireDb(res, 'Catalog management')
   const { decision, note } = courseReviewInput.parse(req.body)
   const course = await Course.findById(req.params.id)
   if (!course) return res.status(404).json({ error: 'Course not found.' })
@@ -3195,7 +3115,7 @@ app.post('/api/admin/courses/:id/review', ...adminOnly, asyncRoute(async (req, r
 }))
 
 app.post('/api/staff/courses/:id/modules', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Modules require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Modules require MongoDB.' })
   const course = await Course.findById(req.params.id)
   if (!course) return res.status(404).json({ error: 'Course not found.' })
   const module = await Module.create({ ...moduleInput.parse(req.body), courseId: course._id })
@@ -3204,7 +3124,7 @@ app.post('/api/staff/courses/:id/modules', requireAuth, requireStaff, asyncRoute
 }))
 
 app.patch('/api/staff/modules/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Modules require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Modules require MongoDB.' })
   const module = await Module.findByIdAndUpdate(req.params.id, moduleUpdateInput.parse(req.body), { new: true })
   if (!module) return res.status(404).json({ error: 'Module not found.' })
   await saveAudit('module.updated', 'Module', module.id, {}, req.auth.sub)
@@ -3212,7 +3132,7 @@ app.patch('/api/staff/modules/:id', requireAuth, requireStaff, asyncRoute(async 
 }))
 
 app.delete('/api/staff/modules/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Modules require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Modules require MongoDB.' })
   const module = await Module.findByIdAndDelete(req.params.id)
   if (!module) return res.status(404).json({ error: 'Module not found.' })
   await Lesson.deleteMany({ moduleId: module._id })
@@ -3225,7 +3145,7 @@ app.delete('/api/staff/modules/:id', requireAuth, requireStaff, asyncRoute(async
 }))
 
 app.post('/api/staff/modules/:id/lessons', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Lessons require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Lessons require MongoDB.' })
   const module = await Module.findById(req.params.id)
   if (!module) return res.status(404).json({ error: 'Module not found.' })
   const lesson = await Lesson.create({ ...lessonInput.parse(req.body), moduleId: module._id })
@@ -3234,7 +3154,7 @@ app.post('/api/staff/modules/:id/lessons', requireAuth, requireStaff, asyncRoute
 }))
 
 app.patch('/api/staff/lessons/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Lessons require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Lessons require MongoDB.' })
   const lesson = await Lesson.findByIdAndUpdate(req.params.id, lessonUpdateInput.parse(req.body), { new: true })
   if (!lesson) return res.status(404).json({ error: 'Lesson not found.' })
   await saveAudit('lesson.updated', 'Lesson', lesson.id, {}, req.auth.sub)
@@ -3242,7 +3162,7 @@ app.patch('/api/staff/lessons/:id', requireAuth, requireStaff, asyncRoute(async 
 }))
 
 app.delete('/api/staff/lessons/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Lessons require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Lessons require MongoDB.' })
   const lesson = await Lesson.findByIdAndDelete(req.params.id)
   if (!lesson) return res.status(404).json({ error: 'Lesson not found.' })
   await Assignment.updateMany({ lessonId: lesson._id }, { $set: { lessonId: null } })
@@ -3251,7 +3171,7 @@ app.delete('/api/staff/lessons/:id', requireAuth, requireStaff, asyncRoute(async
 }))
 
 app.get('/api/assignments', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Assignments require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Assignments require MongoDB.' })
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
   const courses = await Course.find(isStaff ? {} : await learnerVisibleCourseFilter(req.auth.sub)).select('_id title').lean()
   const courseTitleById = new Map(courses.map((course) => [String(course._id), course.title]))
@@ -3265,7 +3185,7 @@ app.get('/api/assignments', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.get('/api/assignments/:id', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Assignments require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Assignments require MongoDB.' })
   const assignment = await Assignment.findById(req.params.id).lean()
   if (!assignment) return res.status(404).json({ error: 'Assignment not found.' })
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
@@ -3287,7 +3207,7 @@ app.get('/api/assignments/:id', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/staff/courses/:id/assignments', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Assignments require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Assignments require MongoDB.' })
   const course = await Course.findById(req.params.id)
   if (!course) return res.status(404).json({ error: 'Course not found.' })
   const values = assignmentInput.parse(req.body)
@@ -3300,7 +3220,7 @@ app.post('/api/staff/courses/:id/assignments', requireAuth, requireStaff, asyncR
 }))
 
 app.patch('/api/staff/assignments/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Assignments require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Assignments require MongoDB.' })
   const assignment = await Assignment.findByIdAndUpdate(req.params.id, assignmentUpdateInput.parse(req.body), { new: true })
   if (!assignment) return res.status(404).json({ error: 'Assignment not found.' })
   await saveAudit('assignment.updated', 'Assignment', assignment.id, {}, req.auth.sub)
@@ -3308,7 +3228,7 @@ app.patch('/api/staff/assignments/:id', requireAuth, requireStaff, asyncRoute(as
 }))
 
 app.delete('/api/staff/assignments/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Assignments require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Assignments require MongoDB.' })
   const assignment = await Assignment.findByIdAndDelete(req.params.id)
   if (!assignment) return res.status(404).json({ error: 'Assignment not found.' })
   await Submission.deleteMany({ assignmentId: assignment._id })
@@ -3317,7 +3237,7 @@ app.delete('/api/staff/assignments/:id', requireAuth, requireStaff, asyncRoute(a
 }))
 
 app.post('/api/assignments/:id/submissions', requireAuth, submissionUpload.single('attachment'), asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Submissions require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Submissions require MongoDB.' })
   if (req.auth.role !== 'learner') return res.status(403).json({ error: 'Only learners can submit assignments.' })
   const assignment = await Assignment.findById(req.params.id)
   if (!assignment) return res.status(404).json({ error: 'Assignment not found.' })
@@ -3351,7 +3271,7 @@ app.post('/api/assignments/:id/submissions', requireAuth, submissionUpload.singl
 }))
 
 app.get('/api/submissions/:id/attachment', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Submissions require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Submissions require MongoDB.' })
   const submission = await Submission.findById(req.params.id)
   if (!submission || !submission.attachmentKey) return res.status(404).json({ error: 'No attachment found.' })
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
@@ -3360,7 +3280,7 @@ app.get('/api/submissions/:id/attachment', requireAuth, asyncRoute(async (req, r
 }))
 
 app.get('/api/staff/assignments/:id/submissions', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Submissions require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Submissions require MongoDB.' })
   const submissions = await Submission.find({ assignmentId: req.params.id }).populate('learnerId', 'name email').sort({ submittedAt: -1 }).lean()
   res.json(submissions)
 }))
@@ -3368,7 +3288,7 @@ app.get('/api/staff/assignments/:id/submissions', requireAuth, requireStaff, asy
 // Everything the standalone review page needs for one assignment submission. Without this the page
 // could only be reached by first loading the whole course gradebook, which made it undeep-linkable.
 app.get('/api/staff/submissions/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Submissions require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Submissions require MongoDB.' })
   const submission = await Submission.findById(req.params.id).populate('learnerId', 'name email avatarUrl').lean()
   if (!submission) return res.status(404).json({ error: 'Submission not found.' })
   const assignment = await Assignment.findById(submission.assignmentId).select('title maxPoints dueAt instructions courseId').lean()
@@ -3387,7 +3307,7 @@ app.get('/api/staff/submissions/:id', requireAuth, requireStaff, asyncRoute(asyn
 }))
 
 app.post('/api/staff/submissions/:id/grade', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Grading requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Grading requires MongoDB.' })
   const submission = await Submission.findByIdAndUpdate(req.params.id, gradeInput.parse(req.body), { new: true })
   if (!submission) return res.status(404).json({ error: 'Submission not found.' })
   await saveAudit('submission.graded', 'Submission', submission.id, {}, req.auth.sub)
@@ -3425,7 +3345,7 @@ async function loadCommentTarget(kind, id, auth) {
 }
 
 const listComments = (kind) => asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Comments require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Comments require MongoDB.' })
   const target = await loadCommentTarget(kind, req.params.id, req.auth)
   if (target.error) return res.status(target.error.status).json({ error: target.error.message })
   const comments = await SubmissionComment.find(target.filter).sort({ createdAt: 1 }).populate('authorId', 'name avatarUrl').lean()
@@ -3433,7 +3353,7 @@ const listComments = (kind) => asyncRoute(async (req, res) => {
 })
 
 const createComment = (kind) => asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Comments require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Comments require MongoDB.' })
   const target = await loadCommentTarget(kind, req.params.id, req.auth)
   if (target.error) return res.status(target.error.status).json({ error: target.error.message })
   const values = submissionCommentInput.parse(req.body)
@@ -3481,7 +3401,7 @@ async function pendingGradingCount() {
 }
 
 app.get('/api/staff/overview', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'The teaching dashboard requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'The teaching dashboard requires MongoDB.' })
   const [courses, learnerCount, pendingGrading, upcoming, pendingApprovals] = await Promise.all([
     Course.find().select('_id title isPublished').lean(),
     User.countDocuments({ role: 'learner', status: 'active' }),
@@ -3501,7 +3421,7 @@ app.get('/api/staff/overview', requireAuth, requireStaff, asyncRoute(async (req,
 }))
 
 app.get('/api/staff/grading-queue', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Grading requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Grading requires MongoDB.' })
   const courses = await Course.find().select('_id title').lean()
   const titleById = new Map(courses.map((course) => [String(course._id), course.title]))
   const submissions = await Submission.find(ungradedFilter)
@@ -3528,7 +3448,7 @@ app.get('/api/staff/grading-queue', requireAuth, requireStaff, asyncRoute(async 
 }))
 
 app.get('/api/staff/learners', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'The roster requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'The roster requires MongoDB.' })
   // Status and course are filtered in Mongo rather than in the browser, so the roster stays honest
   // once there are more learners than one page can hold.
   const filter = { role: 'learner' }
@@ -3551,7 +3471,7 @@ app.get('/api/staff/learners', requireAuth, requireStaff, asyncRoute(async (req,
 }))
 
 app.get('/api/staff/courses/:id/gradebook', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'The gradebook requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'The gradebook requires MongoDB.' })
   const course = await Course.findById(req.params.id).select('title slug').lean()
   if (!course) return res.status(404).json({ error: 'Course not found.' })
   const assignments = await Assignment.find({ courseId: course._id }).select('title maxPoints dueAt').sort({ createdAt: 1 }).lean()
@@ -3577,7 +3497,7 @@ app.get('/api/staff/courses/:id/gradebook', requireAuth, requireStaff, asyncRout
 // attempts together, newest first. The two are stored in different collections but an instructor
 // reviewing work doesn't care which; they care what still needs marking.
 app.get('/api/staff/courses/:id/submissions', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Submissions require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Submissions require MongoDB.' })
   const course = await Course.findById(req.params.id).select('title').lean()
   if (!course) return res.status(404).json({ error: 'Course not found.' })
   const [assignments, quizzes] = await Promise.all([
@@ -3627,7 +3547,7 @@ app.get('/api/staff/courses/:id/submissions', requireAuth, requireStaff, asyncRo
 // Full detail for one quiz attempt: every question, what the learner answered, and whether it was
 // right. This is the "view what the student sent" half of reviewing a quiz.
 app.get('/api/staff/quiz-attempts/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Quiz attempts require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Quiz attempts require MongoDB.' })
   const attempt = await QuizAttempt.findById(req.params.id).populate('learnerId', 'name email avatarUrl').populate('quizId', 'title').lean()
   if (!attempt) return res.status(404).json({ error: 'Quiz attempt not found.' })
   res.json({
@@ -3641,7 +3561,7 @@ app.get('/api/staff/quiz-attempts/:id', requireAuth, requireStaff, asyncRoute(as
 }))
 
 app.post('/api/staff/quiz-attempts/:id/review', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Quiz attempts require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Quiz attempts require MongoDB.' })
   const attempt = await QuizAttempt.findById(req.params.id)
   if (!attempt) return res.status(404).json({ error: 'Quiz attempt not found.' })
   const values = quizReviewInput.parse(req.body)
@@ -3660,7 +3580,7 @@ app.post('/api/staff/quiz-attempts/:id/review', requireAuth, requireStaff, async
 }))
 
 app.get('/api/staff/courses/:id/analytics', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Course analytics require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Course analytics require MongoDB.' })
   const course = await Course.findById(req.params.id).select('title slug').lean()
   if (!course) return res.status(404).json({ error: 'Course not found.' })
   const [modules, assignments] = await Promise.all([
@@ -3726,7 +3646,7 @@ app.get('/api/staff/courses/:id/analytics', requireAuth, requireStaff, asyncRout
 }))
 
 app.get('/api/quizzes', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Quizzes require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Quizzes require MongoDB.' })
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
   const courses = await Course.find(isStaff ? {} : await learnerVisibleCourseFilter(req.auth.sub)).select('_id title').lean()
   const courseTitleById = new Map(courses.map((course) => [String(course._id), course.title]))
@@ -3754,7 +3674,7 @@ function sanitizeQuestionForLearner(question) {
 }
 
 app.get('/api/quizzes/:id', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Quizzes require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Quizzes require MongoDB.' })
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
   const quiz = await Quiz.findById(req.params.id).lean()
   if (!quiz || (!quiz.isPublished && !isStaff)) return res.status(404).json({ error: 'Quiz not found.' })
@@ -3763,7 +3683,7 @@ app.get('/api/quizzes/:id', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/staff/courses/:id/quizzes', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Quizzes require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Quizzes require MongoDB.' })
   const course = await Course.findById(req.params.id)
   if (!course) return res.status(404).json({ error: 'Course not found.' })
   const values = quizInput.parse(req.body)
@@ -3774,7 +3694,7 @@ app.post('/api/staff/courses/:id/quizzes', requireAuth, requireStaff, asyncRoute
 }))
 
 app.patch('/api/staff/quizzes/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Quizzes require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Quizzes require MongoDB.' })
   const values = quizUpdateInput.parse(req.body)
   if (values.moduleId) {
     const existing = await Quiz.findById(req.params.id).select('courseId').lean()
@@ -3788,7 +3708,7 @@ app.patch('/api/staff/quizzes/:id', requireAuth, requireStaff, asyncRoute(async 
 }))
 
 app.delete('/api/staff/quizzes/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Quizzes require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Quizzes require MongoDB.' })
   const quiz = await Quiz.findByIdAndDelete(req.params.id)
   if (!quiz) return res.status(404).json({ error: 'Quiz not found.' })
   await saveAudit('quiz.deleted', 'Quiz', quiz.id, {}, req.auth.sub)
@@ -3821,7 +3741,7 @@ function gradeQuizQuestion(question, answer) {
 }
 
 app.post('/api/quizzes/:id/attempt', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Quiz attempts require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Quiz attempts require MongoDB.' })
   if (req.auth.role !== 'learner') return res.status(403).json({ error: 'Only learners can attempt quizzes.' })
   const quiz = await Quiz.findById(req.params.id).lean()
   if (!quiz || !quiz.isPublished) return res.status(404).json({ error: 'Quiz not found.' })
@@ -3858,7 +3778,7 @@ async function visibleCourses(role, learnerId) {
 }
 
 app.get('/api/announcements', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Announcements require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Announcements require MongoDB.' })
   const courses = await visibleCourses(req.auth.role, req.auth.sub)
   const titleById = new Map(courses.map((course) => [String(course._id), course.title]))
   const announcements = await Announcement.find({ courseId: { $in: courses.map((course) => course._id) } })
@@ -3873,7 +3793,7 @@ app.get('/api/announcements', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/staff/courses/:id/announcements', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Announcements require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Announcements require MongoDB.' })
   const course = await Course.findById(req.params.id)
   if (!course) return res.status(404).json({ error: 'Course not found.' })
   const values = announcementInput.parse(req.body)
@@ -3887,7 +3807,7 @@ app.post('/api/staff/courses/:id/announcements', requireAuth, requireStaff, asyn
 }))
 
 app.delete('/api/staff/announcements/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Announcements require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Announcements require MongoDB.' })
   const announcement = await Announcement.findById(req.params.id)
   if (!announcement) return res.status(404).json({ error: 'Announcement not found.' })
   // Admins can moderate any announcement; instructors may only remove their own.
@@ -3906,7 +3826,7 @@ app.post('/api/forums/images', requireAuth, forumImageUpload.single('image'), as
 }))
 
 app.get('/api/forums/threads', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Forums require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Forums require MongoDB.' })
   const courses = await visibleCourses(req.auth.role, req.auth.sub)
   const titleById = new Map(courses.map((course) => [String(course._id), course.title]))
   const filter = { courseId: { $in: courses.map((course) => course._id) } }
@@ -3943,7 +3863,7 @@ app.get('/api/forums/threads', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/forums/threads', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Forums require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Forums require MongoDB.' })
   const values = forumThreadInput.parse(req.body)
   const course = await Course.findById(values.courseId)
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
@@ -3955,7 +3875,7 @@ app.post('/api/forums/threads', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.get('/api/forums/threads/:id', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Forums require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Forums require MongoDB.' })
   const thread = await ForumThread.findById(req.params.id).populate('authorId', 'name role avatarUrl')
   if (!thread) return res.status(404).json({ error: 'Thread not found.' })
   const course = await Course.findById(thread.courseId).select('title isPublished').lean()
@@ -3980,7 +3900,7 @@ app.get('/api/forums/threads/:id', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/forums/threads/:id/reactions', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Forums require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Forums require MongoDB.' })
   const thread = await ForumThread.findById(req.params.id).select('_id')
   if (!thread) return res.status(404).json({ error: 'Thread not found.' })
   const { type } = forumReactionInput.parse(req.body)
@@ -4001,7 +3921,7 @@ app.post('/api/forums/threads/:id/reactions', requireAuth, asyncRoute(async (req
 }))
 
 app.post('/api/forums/threads/:id/posts', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Forums require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Forums require MongoDB.' })
   const thread = await ForumThread.findById(req.params.id)
   if (!thread) return res.status(404).json({ error: 'Thread not found.' })
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
@@ -4014,7 +3934,7 @@ app.post('/api/forums/threads/:id/posts', requireAuth, asyncRoute(async (req, re
 }))
 
 app.patch('/api/staff/forums/threads/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Forums require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Forums require MongoDB.' })
   const thread = await ForumThread.findByIdAndUpdate(req.params.id, forumModerateInput.parse(req.body), { new: true })
   if (!thread) return res.status(404).json({ error: 'Thread not found.' })
   await saveAudit('forum_thread.moderated', 'ForumThread', thread.id, { isPinned: thread.isPinned, isLocked: thread.isLocked }, req.auth.sub)
@@ -4022,7 +3942,7 @@ app.patch('/api/staff/forums/threads/:id', requireAuth, requireStaff, asyncRoute
 }))
 
 app.delete('/api/staff/forums/threads/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Forums require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Forums require MongoDB.' })
   const thread = await ForumThread.findByIdAndDelete(req.params.id)
   if (!thread) return res.status(404).json({ error: 'Thread not found.' })
   await Promise.all([ForumPost.deleteMany({ threadId: thread._id }), ForumReaction.deleteMany({ threadId: thread._id })])
@@ -4031,7 +3951,7 @@ app.delete('/api/staff/forums/threads/:id', requireAuth, requireStaff, asyncRout
 }))
 
 app.patch('/api/forums/posts/:id', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Forums require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Forums require MongoDB.' })
   const post = await ForumPost.findById(req.params.id)
   if (!post) return res.status(404).json({ error: 'Reply not found.' })
   // Editing is author-only — staff moderate by removing a reply, never by rewriting someone else's words.
@@ -4045,7 +3965,7 @@ app.patch('/api/forums/posts/:id', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.delete('/api/forums/posts/:id', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Forums require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Forums require MongoDB.' })
   const post = await ForumPost.findById(req.params.id)
   if (!post) return res.status(404).json({ error: 'Reply not found.' })
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
@@ -4056,7 +3976,7 @@ app.delete('/api/forums/posts/:id', requireAuth, asyncRoute(async (req, res) => 
 }))
 
 app.get('/api/calendar', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Calendar requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Calendar requires MongoDB.' })
   const filter = {}
   if (req.query.type) filter.eventType = req.query.type
   const events = await CalendarEvent.find(filter).sort({ startsAt: 1 }).lean()
@@ -4066,7 +3986,7 @@ app.get('/api/calendar', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/staff/calendar-events', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Calendar requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Calendar requires MongoDB.' })
   const event = await CalendarEvent.create(calendarEventInput.parse(req.body))
   await saveAudit('calendar_event.created', 'CalendarEvent', event.id, {}, req.auth.sub)
   res.status(201).json(event)
@@ -4075,7 +3995,7 @@ app.post('/api/staff/calendar-events', requireAuth, requireStaff, asyncRoute(asy
 // A recurring session's details drift — the Zoom link is regenerated, the topic changes, it moves
 // an hour. Without these an instructor could only ever add events, never correct one.
 app.patch('/api/staff/calendar-events/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Calendar requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Calendar requires MongoDB.' })
   const updates = calendarEventUpdateInput.parse(req.body)
   const event = await CalendarEvent.findByIdAndUpdate(req.params.id, updates, { new: true, runValidators: true })
   if (!event) return res.status(404).json({ error: 'Event not found.' })
@@ -4084,7 +4004,7 @@ app.patch('/api/staff/calendar-events/:id', requireAuth, requireStaff, asyncRout
 }))
 
 app.delete('/api/staff/calendar-events/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Calendar requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Calendar requires MongoDB.' })
   const event = await CalendarEvent.findById(req.params.id)
   if (!event) return res.status(404).json({ error: 'Event not found.' })
   // Attendance rows are meaningless once their session is gone — leaving them orphans the roll-call.
@@ -4096,7 +4016,7 @@ app.delete('/api/staff/calendar-events/:id', requireAuth, requireStaff, asyncRou
 // Built-in attendance — a roll-call roster per calendar session, restricted to events tied to a
 // course (attendance needs a learner list to check off, which only a course enrollment gives us).
 app.get('/api/staff/calendar-events/:id/attendance', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Attendance requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Attendance requires MongoDB.' })
   const event = await CalendarEvent.findById(req.params.id).lean()
   if (!event) return res.status(404).json({ error: 'Event not found.' })
   if (!event.courseId) return res.status(400).json({ error: 'This event is not linked to a course, so it has no roster to take attendance for.' })
@@ -4119,7 +4039,7 @@ app.get('/api/staff/calendar-events/:id/attendance', requireAuth, requireStaff, 
 }))
 
 app.post('/api/staff/calendar-events/:id/attendance', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Attendance requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Attendance requires MongoDB.' })
   const event = await CalendarEvent.findById(req.params.id).lean()
   if (!event) return res.status(404).json({ error: 'Event not found.' })
   if (!event.courseId) return res.status(400).json({ error: 'This event is not linked to a course, so attendance cannot be recorded.' })
@@ -4139,14 +4059,14 @@ app.post('/api/staff/calendar-events/:id/attendance', requireAuth, requireStaff,
 }))
 
 app.get('/api/calendar-events/:id/attendance/me', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Attendance requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Attendance requires MongoDB.' })
   if (req.auth.role !== 'learner') return res.json({ status: null })
   const record = await Attendance.findOne({ eventId: req.params.id, learnerId: req.auth.sub }).select('status markedAt').lean()
   res.json({ status: record?.status ?? null, markedAt: record?.markedAt ?? null })
 }))
 
 app.get('/api/search', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.json({ courses: [], announcements: [], users: [] })
+  if (!dbState.ready) return res.json({ courses: [], announcements: [], users: [] })
   const term = String(req.query.q ?? '').trim()
   if (term.length < 2) return res.json({ courses: [], announcements: [], users: [] })
   const regex = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
@@ -4166,7 +4086,7 @@ app.get('/api/search', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.get('/api/notifications/me', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Notifications require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Notifications require MongoDB.' })
   const notifications = await Notification.find({ recipientId: req.auth.sub }).sort({ createdAt: -1 }).limit(100).lean()
   res.json(notifications)
 }))
@@ -4177,7 +4097,7 @@ app.get('/api/notifications/me', requireAuth, asyncRoute(async (req, res) => {
 // anything beyond what the applicant themselves already knows (no storage keys, no other learners'
 // data) — just their own billing history.
 app.get('/api/billing/me', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Billing requires MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Billing requires MongoDB.' })
   const rows = await Enrollment.find({ 'applicant.email': req.auth.email }).sort({ createdAt: -1 }).lean()
   // Totals come from the Payment ledger, never from enrollment status. This previously read an
   // approved enrollment with no recorded payment as PAID IN FULL, which showed a ₱0 balance to
@@ -4230,20 +4150,20 @@ app.get('/api/billing/me', requireAuth, asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/notifications/:id/read', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Notifications require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Notifications require MongoDB.' })
   const notification = await Notification.findOneAndUpdate({ _id: req.params.id, recipientId: req.auth.sub }, { readAt: new Date() }, { new: true })
   if (!notification) return res.status(404).json({ error: 'Notification not found.' })
   res.json(notification)
 }))
 
 app.post('/api/notifications/read-all', requireAuth, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Notifications require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Notifications require MongoDB.' })
   await Notification.updateMany({ recipientId: req.auth.sub, readAt: { $exists: false } }, { readAt: new Date() })
   res.json({ ok: true })
 }))
 
 app.post('/api/staff/notifications', requireAuth, requireStaff, asyncRoute(async (req, res) => {
-  if (!databaseReady) return res.status(503).json({ error: 'Notifications require MongoDB.' })
+  if (!dbState.ready) return res.status(503).json({ error: 'Notifications require MongoDB.' })
   const values = notificationBroadcastInput.parse(req.body)
   let recipientIds = values.recipientIds ?? []
   if (!recipientIds.length) {
@@ -4259,9 +4179,9 @@ app.post('/api/staff/notifications', requireAuth, requireStaff, asyncRoute(async
 app.post('/api/webhooks/docusign', asyncRoute(async (req, res) => {
   if (!config.docusign.webhookSecret || !verifyHmac(req.rawBody, req.header('x-docusign-signature-1'), config.docusign.webhookSecret)) return res.status(401).json({ error: 'Invalid DocuSign webhook signature.' })
   const eventId = req.body?.data?.envelopeId ?? req.body?.event ?? id()
-  const exists = databaseReady && await WebhookEvent.exists({ provider: 'docusign', eventId })
+  const exists = dbState.ready && await WebhookEvent.exists({ provider: 'docusign', eventId })
   if (exists) return res.status(204).end()
-  if (databaseReady) await WebhookEvent.create({ provider: 'docusign', eventId, eventType: req.body?.event, processedAt: new Date() })
+  if (dbState.ready) await WebhookEvent.create({ provider: 'docusign', eventId, eventType: req.body?.event, processedAt: new Date() })
   // Provider adapter: retrieve the completed envelope PDF and transition only a completed envelope to contract_signed.
   res.status(204).end()
 }))
@@ -4273,7 +4193,7 @@ app.post('/api/webhooks/paymongo', asyncRoute(async (req, res) => {
   const event = req.body?.data
   const eventId = event?.id
   if (!eventId) return res.status(400).json({ error: 'Missing webhook event id.' })
-  const exists = databaseReady && await WebhookEvent.exists({ provider: 'paymongo', eventId })
+  const exists = dbState.ready && await WebhookEvent.exists({ provider: 'paymongo', eventId })
   if (exists) return res.status(204).end()
   const eventType = event?.attributes?.type
   const checkout = event?.attributes?.data
@@ -4281,7 +4201,7 @@ app.post('/api/webhooks/paymongo', asyncRoute(async (req, res) => {
     const referenceNumber = checkout?.attributes?.reference_number
     const checkoutId = checkout?.id
     let enrollment = null
-    if (databaseReady) {
+    if (dbState.ready) {
       if (referenceNumber && mongoose.isValidObjectId(referenceNumber)) enrollment = await Enrollment.findById(referenceNumber)
       if (!enrollment && checkoutId) enrollment = await Enrollment.findOne({ 'payment.checkoutId': checkoutId })
     } else if (referenceNumber) enrollment = memory.enrollments.get(referenceNumber)
@@ -4301,12 +4221,12 @@ app.post('/api/webhooks/paymongo', asyncRoute(async (req, res) => {
       await saveAudit('payment.paid_auto_approved', 'Enrollment', enrollment._id?.toString() ?? enrollment.id, { checkoutId, transactionId, delivery: invitation?.delivery })
     } else console.warn(`PayMongo payment ${eventId} could not be matched to an enrollment.`)
   }
-  if (databaseReady) await WebhookEvent.create({ provider: 'paymongo', eventId, eventType, processedAt: new Date() })
+  if (dbState.ready) await WebhookEvent.create({ provider: 'paymongo', eventId, eventType, processedAt: new Date() })
   res.status(204).end()
 }))
 
 app.get('/api/presence', asyncRoute(async (_req, res) => {
-  if (!databaseReady) return res.json([...memory.presence.values()])
+  if (!dbState.ready) return res.json([...memory.presence.values()])
   const onlineSince = new Date(Date.now() - 90_000)
   const records = await Presence.find({ lastHeartbeatAt: { $gte: onlineSince } }).populate('userId', 'name role avatarUrl').lean()
   res.json(records.map(({ userId }) => userId).filter(Boolean))
@@ -4317,7 +4237,7 @@ io.on('connection', (socket) => {
     if (!profile?.id || !['learner', 'instructor', 'admin'].includes(profile.role)) return
     const record = { id: profile.id, name: profile.name, role: profile.role, avatarUrl: profile.avatarUrl, socketId: socket.id, lastHeartbeatAt: new Date() }
     memory.presence.set(profile.id, record)
-    if (databaseReady && mongoose.isValidObjectId(profile.id)) await Presence.findOneAndUpdate({ userId: profile.id }, { socketId: socket.id, lastHeartbeatAt: record.lastHeartbeatAt }, { upsert: true })
+    if (dbState.ready && mongoose.isValidObjectId(profile.id)) await Presence.findOneAndUpdate({ userId: profile.id }, { socketId: socket.id, lastHeartbeatAt: record.lastHeartbeatAt }, { upsert: true })
     io.emit('presence:changed', [...memory.presence.values()])
   })
   socket.on('disconnect', () => {
@@ -4346,7 +4266,7 @@ app.use((error, _req, res, next) => {
 async function boot() {
   if (config.mongoUri) {
     await mongoose.connect(config.mongoUri)
-    databaseReady = true
+    dbState.ready = true
     await ensureDefaultEmailTemplates()
     console.log('MongoDB connected')
   } else if (isProduction) {
