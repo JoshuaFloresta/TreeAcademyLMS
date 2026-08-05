@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from 'react'
-import { Check, ExternalLink, FileCheck2 } from 'lucide-react'
+import { useCallback, useMemo, useRef, useState } from 'react'
+import { Check, ExternalLink, FileCheck2, TriangleAlert } from 'lucide-react'
 import PrimaryButton from '../PrimaryButton.jsx'
 import SignatureField from './SignatureField.jsx'
 import InteractivePdfFields from './InteractivePdfFields.jsx'
@@ -45,6 +45,35 @@ const reclexFieldDefs = [
   { name: 'w2_name' },
 ]
 
+// Shown when the interactive document can't render — an older phone browser, or a failed chunk
+// fetch. Deliberately the same field names as the overlay, so deriveFields and the server-side fill
+// are byte-identical: the overlay is a presentation nicety, and the signed PDF has always been
+// produced server-side from these values. Without this a learner whose PDF fails has no fields at
+// all and simply cannot enroll.
+function FallbackFields({ defs, defaults, isRealex }) {
+  const pickExam = (event) => {
+    const form = event.currentTarget.form
+    form?.querySelectorAll('[data-pdf-group="exam_type"]').forEach((input) => { if (input !== event.currentTarget) input.checked = false })
+  }
+  return <div className="pdf-fallback">
+    <p className="pdf-fallback-note"><TriangleAlert size={17} /><span>This device couldn&rsquo;t display the document viewer, so the same details are below as an ordinary form. Your signed agreement is produced from exactly these answers. Use &ldquo;View the original PDF&rdquo; below to read the full document first.</span></p>
+    {isRealex && <div className="application-checks">
+      <span>Examination you are enrolling for</span>
+      <label className="application-check"><input type="checkbox" name="exam_reblex" data-pdf-group="exam_type" defaultChecked={Boolean(defaults.exam_reblex)} onChange={pickExam} /><span><Check size={13} /></span>REBLEX — broker licensure examination</label>
+      <label className="application-check"><input type="checkbox" name="exam_realex" data-pdf-group="exam_type" defaultChecked={Boolean(defaults.exam_realex)} onChange={pickExam} /><span><Check size={13} /></span>REALEX — appraiser licensure examination</label>
+    </div>}
+    <div className="application-grid">
+      {defs.filter((field) => field.label).map((field) => <Field key={field.name} label={field.required ? required(field.label) : field.label} full={field.multiline}>
+        {field.multiline
+          ? <textarea name={field.name} defaultValue={defaults[field.name] ?? ''} required={field.required} />
+          : <input type={field.type ?? 'text'} name={field.name} defaultValue={defaults[field.name] ?? ''} required={field.required} />}
+      </Field>)}
+    </div>
+    {/* Dates are stamped automatically and are readOnly in the interactive view — still submitted. */}
+    {defs.filter((field) => field.readOnly).map((field) => <input key={field.name} type="hidden" name={field.name} value={defaults[field.name] ?? ''} readOnly />)}
+  </div>
+}
+
 // Required fields sit inside the PDF overlay, where a native validation bubble can land off-screen
 // or on a page the applicant has not scrolled to — reportValidity() alone made the button look dead.
 // Naming what is missing mirrors how ApplicationStep reports step 1.
@@ -63,6 +92,10 @@ export default function DocumentStep({ enrollmentId, type, applicant, applicatio
   const [signature, setSignature] = useState('')
   const [localError, setLocalError] = useState('')
   const [downloading, setDownloading] = useState(false)
+  const [pdfUnavailable, setPdfUnavailable] = useState(false)
+  // Stable identity: InteractivePdfFields lists this in its effect deps, so an inline arrow would
+  // re-run the whole load on every render.
+  const handleUnavailable = useCallback(() => setPdfUnavailable(true), [])
   const formRef = useRef(null)
   const isRealex = type === 'realex-reblex'
   const original = isRealex ? '/enrollment-documents/realex-reblex.pdf' : '/enrollment-documents/reclex.pdf'
@@ -140,5 +173,7 @@ export default function DocumentStep({ enrollmentId, type, applicant, applicatio
     }
   }
 
-  return <><p className="eyebrow">STEP 2 OF 4 · REVIEW &amp; SIGN</p><h1>Review and sign<br /><em>your agreement.</em></h1><p className="lead">Complete the required fields directly in the document below, then sign your acknowledgment. Your drawn signature and printed name appear on the agreement as you sign, and a signed, flattened copy is stored with your enrollment record.</p><form ref={formRef} className="application-form document-form" onSubmit={submit} noValidate><div className="document-preview"><InteractivePdfFields src={original} fields={fieldDefs} defaults={defaults} signatureImage={signature} signatureName={applicant.name} /></div><a className="document-template-link" href={original} target="_blank" rel="noreferrer"><FileCheck2 size={17} /> View the original PDF <ExternalLink size={14} /></a><section className="application-section"><div className="application-section-head"><div><h2>Electronic signature</h2><p>Draw your signature below. It appears on the agreement above in real time, over your legal name.</p></div></div><div className="application-grid"><Field label={required('Full legal name (from your enrollment)')}><input name="signatureName" defaultValue={applicant.name} readOnly /></Field><div className="full"><SignatureField onChange={setSignature} /></div><label className="application-check full"><input type="checkbox" name="consent" required /><span><Check size={13} /></span>I agree that my drawn signature and printed legal name are my electronic signature for this document.</label></div></section>{(localError || error) && <p className="form-alert" role="alert">{localError || error}</p>}<div className="button-row"><button type="button" className="button button-ghost" onClick={onBack}>Back</button><button type="button" className="button button-secondary" onClick={downloadPdf} disabled={downloading || submitting}>{downloading ? 'Downloading PDF…' : 'Download completed PDF'}</button><PrimaryButton type="submit" disabled={submitting}>{submitting ? 'Creating signed PDF…' : 'Continue to payment'}</PrimaryButton></div></form></>
+  return <><p className="eyebrow">STEP 2 OF 4 · REVIEW &amp; SIGN</p><h1>Review and sign<br /><em>your agreement.</em></h1><p className="lead">Complete the required fields directly in the document below, then sign your acknowledgment. Your drawn signature and printed name appear on the agreement as you sign, and a signed, flattened copy is stored with your enrollment record.</p><form ref={formRef} className="application-form document-form" onSubmit={submit} noValidate>{pdfUnavailable
+      ? <FallbackFields defs={fieldDefs} defaults={defaults} isRealex={isRealex} />
+      : <div className="document-preview"><InteractivePdfFields src={original} fields={fieldDefs} defaults={defaults} signatureImage={signature} signatureName={applicant.name} onUnavailable={handleUnavailable} /></div>}<a className="document-template-link" href={original} target="_blank" rel="noreferrer"><FileCheck2 size={17} /> View the original PDF <ExternalLink size={14} /></a><section className="application-section"><div className="application-section-head"><div><h2>Electronic signature</h2><p>Draw your signature below. It appears on the agreement above in real time, over your legal name.</p></div></div><div className="application-grid"><Field label={required('Full legal name (from your enrollment)')}><input name="signatureName" defaultValue={applicant.name} readOnly /></Field><div className="full"><SignatureField onChange={setSignature} /></div><label className="application-check full"><input type="checkbox" name="consent" required /><span><Check size={13} /></span>I agree that my drawn signature and printed legal name are my electronic signature for this document.</label></div></section>{(localError || error) && <p className="form-alert" role="alert">{localError || error}</p>}<div className="button-row"><button type="button" className="button button-ghost" onClick={onBack}>Back</button><button type="button" className="button button-secondary" onClick={downloadPdf} disabled={downloading || submitting}>{downloading ? 'Downloading PDF…' : 'Download completed PDF'}</button><PrimaryButton type="submit" disabled={submitting}>{submitting ? 'Creating signed PDF…' : 'Continue to payment'}</PrimaryButton></div></form></>
 }

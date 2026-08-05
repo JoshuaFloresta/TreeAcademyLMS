@@ -1,12 +1,26 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 
+// pdf.js v4+ calls Promise.withResolvers(), which iOS Safari only gained in 17.4. On an older phone
+// the module throws while evaluating, the dynamic import below rejects, and the viewer never
+// appears. Polyfilling it costs nothing and restores the interactive document on those devices.
+if (typeof Promise.withResolvers !== 'function') {
+  Promise.withResolvers = function withResolvers() {
+    let resolve
+    let reject
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej })
+    return { promise, resolve, reject }
+  }
+}
+
 let pdfjsLibPromise
 function loadPdfjsLib() {
+  // A rejected promise must not be cached — otherwise one transient failure (a dropped connection
+  // while fetching the worker chunk) would keep the viewer broken for the rest of the session.
   pdfjsLibPromise ??= import('pdfjs-dist').then((pdfjsLib) => {
     pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl
     return pdfjsLib
-  })
+  }).catch((error) => { pdfjsLibPromise = undefined; throw error })
   return pdfjsLibPromise
 }
 
@@ -25,7 +39,7 @@ function uncheckGroupSiblings(event, group) {
   form.querySelectorAll(`input[data-pdf-group="${group}"]`).forEach((input) => { if (input !== event.currentTarget) input.checked = false })
 }
 
-export default function InteractivePdfFields({ src, fields, defaults = {}, signatureImage = '', signatureName = '' }) {
+export default function InteractivePdfFields({ src, fields, defaults = {}, signatureImage = '', signatureName = '', onUnavailable }) {
   const [pages, setPages] = useState(null)
   const [error, setError] = useState('')
   const containerRef = useRef(null)
@@ -58,12 +72,17 @@ export default function InteractivePdfFields({ src, fields, defaults = {}, signa
         }
         if (!cancelled) setPages(built)
       } catch {
-        if (!cancelled) setError('Unable to load the document preview.')
+        if (!cancelled) { setError('Unable to load the document preview.'); onUnavailable?.() }
       }
+    // Without this the rejection is unhandled: `pages` stays null and the step sits on "Loading
+    // document…" forever, which is what a phone too old for pdf.js sees. Tell the caller so it can
+    // fall back to a plain form — otherwise the learner has no fields at all and cannot continue.
+    }).catch(() => {
+      if (!cancelled) { setError('Unable to load the document preview.'); onUnavailable?.() }
     })
 
     return () => { cancelled = true }
-  }, [src, fields])
+  }, [src, fields, onUnavailable])
 
   useEffect(() => {
     if (!pages) return
