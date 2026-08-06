@@ -49,7 +49,10 @@ export default function InteractivePdfFields({ src, fields, defaults = {}, signa
   useEffect(() => {
     let cancelled = false
     const whitelist = new Map(fields.map((field) => [field.name, field]))
-    const containerWidth = containerRef.current?.clientWidth || 900
+    // Never render narrower than this — below it, form fields and signature text become too small to
+    // read or tap on a phone. .document-preview scrolls horizontally (overflow-x: auto) to absorb the
+    // difference instead of squeezing the document down to fit.
+    const containerWidth = Math.max(containerRef.current?.clientWidth || 900, 480)
 
     loadPdfjsLib().then(async (pdfjsLib) => {
       if (cancelled) return
