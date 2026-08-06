@@ -98,7 +98,7 @@ function PaymentPlanSettings({ pricing, onSave }) {
   const set = (key, val) => setDraft({ ...(draft ?? pricing), [key]: val })
   return <div className="admin-payment-plans">
     <h2>Payment plans</h2>
-    <p className="operations-note">Applicants who pay in full get an automatic discount (no code needed, amount set per-pathway on its course card below) — suppressed if they also used a voucher. Applicants who pay only the upfront fee get a staff-tracked installment schedule for the rest.</p>
+    <p className="operations-note">These apply automatically at checkout — no code needed. Pay in full: instant discount (suppressed if a voucher was also used). Pay upfront fee only: the rest becomes a staff-tracked installment schedule.</p>
     <div className="admin-payment-plans-grid">
       <div className="admin-course-price">
         <span className="admin-course-field-label">Pay-in-full discount type</span>
@@ -124,6 +124,7 @@ function PaymentPlanSettings({ pricing, onSave }) {
         <small className="admin-course-price-current">{value.installmentStartDate ? 'Every upfront-plan learner’s schedule is anchored to this date, regardless of when they pay.' : 'Left blank: each learner’s schedule counts from their own payment date.'}</small>
       </div>
     </div>
+    <p className="admin-payment-plans-pointer">↓ Each pathway's discount amount is set on its own course card below, in the “Pricing &amp; payment plan” box.</p>
     {dirty && <div className="admin-course-actions">
       <button type="button" className="button button-primary button-compact" onClick={() => mutation.mutate()} disabled={mutation.isPending}><Save size={14} /> {mutation.isPending ? 'Saving…' : 'Save payment plan settings'}</button>
       <button type="button" className="button button-ghost button-compact" onClick={() => setDraft(null)}>Cancel</button>
@@ -307,11 +308,14 @@ function CourseCard({ course, index, pricing, onAct, onUnpublish, onArchive, onR
       </div>
       <div className="admin-status-cell"><StatusPill kind={state.kind}>{state.label}</StatusPill>{approval && <StatusPill kind={approval.kind}>{approval.label}</StatusPill>}</div>
 
-      {totalKey && <div className="admin-course-price-pair">
-        <PriceField priceKey={totalKey} label="Full enrollment price (PHP)" pricing={pricing} onSave={onSavePrice} />
-        <PriceField priceKey={upfrontKey} label="Upfront fee(PHP)" pricing={pricing} onSave={onSavePrice} />
+      {totalKey && <div className="admin-course-pricing-group">
+        <span className="admin-course-group-label">Pricing &amp; payment plan</span>
+        <div className="admin-course-price-pair">
+          <PriceField priceKey={totalKey} label="Full enrollment price (PHP)" pricing={pricing} onSave={onSavePrice} />
+          <PriceField priceKey={upfrontKey} label="Upfront fee (PHP)" pricing={pricing} onSave={onSavePrice} />
+        </div>
+        {discountKey && <DiscountField priceKey={discountKey} pricing={pricing} onSave={onSavePrice} />}
       </div>}
-      {discountKey && <DiscountField priceKey={discountKey} pricing={pricing} onSave={onSavePrice} />}
       {!totalKey && <AgreementSection course={course} />}
       <AvailabilityFields course={course} onSave={(updates) => onAct(course, updates, 'Availability updated.')} />
 
