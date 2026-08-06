@@ -390,6 +390,10 @@ const pricingSettingsSchema = new Schema({
   // see buildInstallmentSchedule. Shared across all 3 pathways rather than per-pathway.
   installmentCount: { type: Number, required: true, default: 3, min: 1, max: 12 },
   installmentIntervalDays: { type: Number, required: true, default: 30, min: 1, max: 365 },
+  // Null (default) counts each learner's schedule from when THEY paid. Set to anchor every
+  // upfront-plan learner to the same calendar dates instead (a fixed cohort repayment schedule) —
+  // see buildInstallmentSchedule's anchored mode.
+  installmentStartDate: { type: Date, default: null },
 }, { timestamps: true })
 
 // Admin-issued discount codes for the public enrollment checkout. `code` is stored uppercase and

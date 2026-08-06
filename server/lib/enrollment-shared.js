@@ -193,7 +193,7 @@ export async function markEnrollmentPaid(enrollment, paymentPatch) {
     if (settled.plan === 'upfront') {
       const pricing = await getPricingSettings()
       const balance = Math.max(0, Number(enrollment.amount) - Number(settled.planAmount ?? 0))
-      enrollment.payment.installments = buildInstallmentSchedule({ balance, count: pricing.installmentCount, intervalDays: pricing.installmentIntervalDays })
+      enrollment.payment.installments = buildInstallmentSchedule({ balance, count: pricing.installmentCount, intervalDays: pricing.installmentIntervalDays, startDate: pricing.installmentStartDate })
     }
   }
 

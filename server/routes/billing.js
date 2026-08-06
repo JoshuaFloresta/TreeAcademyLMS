@@ -25,6 +25,10 @@ const pricingSettingsInput = z.object({
   payInFullDiscountAppraiser: z.coerce.number().min(0).max(1_000_000),
   installmentCount: z.coerce.number().int().min(1).max(12),
   installmentIntervalDays: z.coerce.number().int().min(1).max(365),
+  // '' from a cleared <input type="date"> means "go back to counting from each learner's own
+  // payment date" — preprocessed to null before z.coerce.date() ever sees it, since coercing an
+  // empty string throws rather than producing null.
+  installmentStartDate: z.preprocess((value) => (value === '' || value == null ? null : value), z.coerce.date().nullable()),
 }).refine((values) => values.payInFullDiscountType !== 'percent' || (values.payInFullDiscountBroker <= 100 && values.payInFullDiscountConsultant <= 100 && values.payInFullDiscountAppraiser <= 100), { message: 'A percent discount cannot exceed 100.', path: ['payInFullDiscountBroker'] })
 // Staff-set reminder for a "pay upfront only" enrollment's remaining balance — purely
 // informational (shown on the learner's Statement of Account), not an in-app payment collector.

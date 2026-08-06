@@ -11,7 +11,7 @@ export async function getPricingSettings() {
     currency: catalog.product.currency,
     upfrontBroker: 1000, upfrontConsultant: 5000, upfrontAppraiser: 1000,
     payInFullDiscountType: 'percent', payInFullDiscountBroker: 0, payInFullDiscountConsultant: 0, payInFullDiscountAppraiser: 0,
-    installmentCount: 3, installmentIntervalDays: 30,
+    installmentCount: 3, installmentIntervalDays: 30, installmentStartDate: null,
   }
   if (!dbState.ready) return defaults
   const saved = await PricingSettings.findOne().lean()
@@ -28,6 +28,7 @@ export async function getPricingSettings() {
     payInFullDiscountAppraiser: saved.payInFullDiscountAppraiser ?? 0,
     installmentCount: saved.installmentCount ?? 3,
     installmentIntervalDays: saved.installmentIntervalDays ?? 30,
+    installmentStartDate: saved.installmentStartDate ?? null,
   }
 }
 const totalAmountKeyByPathway = { broker: 'totalBroker', consultant: 'totalConsultant', appraiser: 'totalAppraiser' }
@@ -51,14 +52,25 @@ export function payInFullDiscountFor(pricing, pathway, baseAmount) {
   return Math.max(0, Math.min(Math.round(raw * 100) / 100, base - MINIMUM_CHARGE_AMOUNT))
 }
 
-// Splits a remaining balance into `count` staff-tracked installments, spaced `intervalDays` apart
-// starting from `startDate` (payment-confirmation time). Any rounding remainder lands on the last
-// installment so the schedule always sums exactly to `balance` — never off by a centavo.
-export function buildInstallmentSchedule({ balance, count, intervalDays, startDate = new Date() }) {
+// Splits a remaining balance into `count` staff-tracked installments, spaced `intervalDays` apart.
+// Any rounding remainder lands on the last installment so the schedule always sums exactly to
+// `balance` — never off by a centavo.
+//
+// Two anchoring modes:
+//  - Unanchored (no `startDate`, the default): counts from payment-confirmation time, first
+//    installment due one full interval later — a grace period before anything is owed.
+//  - Anchored (`startDate` given, e.g. admin-set PricingSettings.installmentStartDate): every
+//    upfront-plan learner's schedule lands on the SAME calendar dates regardless of when they
+//    individually paid — first installment due exactly ON `startDate`, not one interval after it.
+//    A `startDate` already in the past by the time someone pays produces already-overdue
+//    installments; that's the admin's call (a fixed cohort schedule), not guarded against here.
+export function buildInstallmentSchedule({ balance, count, intervalDays, startDate }) {
   const total = Math.round(Number(balance ?? 0) * 100) / 100
   const installmentCount = Math.max(1, Math.trunc(Number(count ?? 1)))
   const spacing = Math.max(1, Math.trunc(Number(intervalDays ?? 30)))
   if (!(total > 0)) return []
+  const anchored = Boolean(startDate)
+  const anchor = anchored ? new Date(startDate) : new Date()
   const per = Math.floor((total / installmentCount) * 100) / 100
   const schedule = []
   let allocated = 0
@@ -66,8 +78,8 @@ export function buildInstallmentSchedule({ balance, count, intervalDays, startDa
     const isLast = index === installmentCount - 1
     const amount = isLast ? Math.round((total - allocated) * 100) / 100 : per
     allocated += amount
-    const dueDate = new Date(startDate)
-    dueDate.setDate(dueDate.getDate() + spacing * (index + 1))
+    const dueDate = new Date(anchor)
+    dueDate.setDate(dueDate.getDate() + spacing * (anchored ? index : index + 1))
     schedule.push({ amount, dueDate, label: `Installment ${index + 1} of ${installmentCount}` })
   }
   return schedule

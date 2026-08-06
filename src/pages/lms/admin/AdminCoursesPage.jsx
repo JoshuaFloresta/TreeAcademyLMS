@@ -21,6 +21,7 @@ const slugify = (value) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-'
 // agreement document — that's a document-generation detail, not a pricing one.
 const totalKeyBySlug = { 'broker-review': 'totalBroker', 'consultant-review': 'totalConsultant', 'appraiser-review': 'totalAppraiser' }
 const upfrontKeyBySlug = { 'broker-review': 'upfrontBroker', 'consultant-review': 'upfrontConsultant', 'appraiser-review': 'upfrontAppraiser' }
+const discountKeyBySlug = { 'broker-review': 'payInFullDiscountBroker', 'consultant-review': 'payInFullDiscountConsultant', 'appraiser-review': 'payInFullDiscountAppraiser' }
 
 // Availability dates are staged locally and only committed when "Save" is pressed — editing a
 // live date field on blur risked accidental changes if an admin was just skimming the card.
@@ -61,24 +62,43 @@ function PriceField({ priceKey, label = 'Full enrollment price (PHP)', pricing, 
   </div>
 }
 
-// Global, not per-course — the automatic "pay in full" discount (no voucher code needed; suppressed
-// whenever a learner also has a voucher applied) and the installment schedule offered on the
-// "pay upfront only" plan. All fields are sent together on Save since PATCH /api/admin/pricing
-// requires the full settings object, matching how PriceField above spreads `pricing` per-field.
+// The automatic "pay in full" discount's per-pathway amount — same save-on-its-own-field pattern
+// as PriceField, just living next to it on the same course card since it's another figure tied to
+// that pathway's price. The discount TYPE (percent vs. fixed) is shared across all 3 pathways and
+// lives in the Payment Plans panel above, since it's not a per-course setting.
+function DiscountField({ priceKey, pricing, onSave }) {
+  const unit = pricing?.payInFullDiscountType === 'fixed' ? '₱' : '%'
+  const saved = String(pricing?.[priceKey] ?? '')
+  const [draft, setDraft] = useState(saved)
+  const dirty = draft !== saved
+  const mutation = useMutation({ mutationFn: () => onSave(priceKey, draft) })
+  return <div className="admin-course-price">
+    <span className="admin-course-field-label">Pay-in-full discount ({unit})</span>
+    <div className="admin-season-cell">
+      <label>{unit}<input type="number" min={0} max={pricing?.payInFullDiscountType === 'percent' ? 100 : undefined} step={pricing?.payInFullDiscountType === 'percent' ? 1 : 100} value={draft} onChange={(e) => setDraft(e.target.value)} /></label>
+      {dirty && <button type="button" className="admin-season-save" onClick={() => mutation.mutate()} disabled={mutation.isPending}><Save size={12} /> {mutation.isPending ? 'Saving…' : 'Save'}</button>}
+    </div>
+    <small className="admin-course-price-current">{unit === '₱' ? `Currently ${peso(pricing?.[priceKey])}` : `Currently ${Number(pricing?.[priceKey] ?? 0)}%`} off when paid in full — no code needed.</small>
+  </div>
+}
+
+// Global, not per-course — the discount TYPE shared by all 3 pathways (each pathway's own amount
+// lives on its course card, see DiscountField), the installment schedule offered on the "pay
+// upfront only" plan, and an optional fixed start date for that schedule. All fields are sent
+// together on Save since PATCH /api/admin/pricing requires the full settings object.
 // `dirty` compares against the live `pricing` prop rather than clearing the draft on save — same
 // pattern as PriceField, so it naturally settles once the query refetches the saved values.
-const PAYMENT_PLAN_FIELDS = ['payInFullDiscountType', 'payInFullDiscountBroker', 'payInFullDiscountConsultant', 'payInFullDiscountAppraiser', 'installmentCount', 'installmentIntervalDays']
+const PAYMENT_PLAN_FIELDS = ['payInFullDiscountType', 'installmentCount', 'installmentIntervalDays', 'installmentStartDate']
 function PaymentPlanSettings({ pricing, onSave }) {
   const [draft, setDraft] = useState(null)
   const mutation = useMutation({ mutationFn: () => onSave(draft) })
   if (!pricing) return null
   const value = draft ?? pricing
-  const dirty = draft ? PAYMENT_PLAN_FIELDS.some((key) => String(draft[key]) !== String(pricing[key])) : false
+  const dirty = draft ? PAYMENT_PLAN_FIELDS.some((key) => key === 'installmentStartDate' ? toDateInput(draft[key]) !== toDateInput(pricing[key]) : String(draft[key]) !== String(pricing[key])) : false
   const set = (key, val) => setDraft({ ...(draft ?? pricing), [key]: val })
-  const unit = value.payInFullDiscountType === 'fixed' ? '₱' : '%'
   return <div className="admin-payment-plans">
     <h2>Payment plans</h2>
-    <p className="operations-note">Applicants who pay in full get an automatic discount (no code needed) — suppressed if they also used a voucher. Applicants who pay only the upfront fee get a staff-tracked installment schedule for the rest.</p>
+    <p className="operations-note">Applicants who pay in full get an automatic discount (no code needed, amount set per-pathway on its course card below) — suppressed if they also used a voucher. Applicants who pay only the upfront fee get a staff-tracked installment schedule for the rest.</p>
     <div className="admin-payment-plans-grid">
       <div className="admin-course-price">
         <span className="admin-course-field-label">Pay-in-full discount type</span>
@@ -90,23 +110,18 @@ function PaymentPlanSettings({ pricing, onSave }) {
         </div>
       </div>
       <div className="admin-course-price">
-        <span className="admin-course-field-label">Broker discount ({unit})</span>
-        <div className="admin-season-cell"><input type="number" min={0} step={value.payInFullDiscountType === 'percent' ? 1 : 100} value={value.payInFullDiscountBroker} onChange={(e) => set('payInFullDiscountBroker', e.target.value)} /></div>
-      </div>
-      <div className="admin-course-price">
-        <span className="admin-course-field-label">Consultant discount ({unit})</span>
-        <div className="admin-season-cell"><input type="number" min={0} step={value.payInFullDiscountType === 'percent' ? 1 : 100} value={value.payInFullDiscountConsultant} onChange={(e) => set('payInFullDiscountConsultant', e.target.value)} /></div>
-      </div>
-      <div className="admin-course-price">
-        <span className="admin-course-field-label">Appraiser discount ({unit})</span>
-        <div className="admin-season-cell"><input type="number" min={0} step={value.payInFullDiscountType === 'percent' ? 1 : 100} value={value.payInFullDiscountAppraiser} onChange={(e) => set('payInFullDiscountAppraiser', e.target.value)} /></div>
-      </div>
-      <div className="admin-course-price">
         <span className="admin-course-field-label">Installments &amp; spacing</span>
         <div className="admin-season-cell">
           <label>Payments<input type="number" min={1} max={12} value={value.installmentCount} onChange={(e) => set('installmentCount', e.target.value)} /></label>
           <label>Every N days<input type="number" min={1} max={365} value={value.installmentIntervalDays} onChange={(e) => set('installmentIntervalDays', e.target.value)} /></label>
         </div>
+      </div>
+      <div className="admin-course-price">
+        <span className="admin-course-field-label">Installment start date</span>
+        <div className="admin-season-cell">
+          <label>Fixed date (optional)<input type="date" value={toDateInput(value.installmentStartDate)} onChange={(e) => set('installmentStartDate', e.target.value || null)} /></label>
+        </div>
+        <small className="admin-course-price-current">{value.installmentStartDate ? 'Every upfront-plan learner’s schedule is anchored to this date, regardless of when they pay.' : 'Left blank: each learner’s schedule counts from their own payment date.'}</small>
       </div>
     </div>
     {dirty && <div className="admin-course-actions">
@@ -280,6 +295,7 @@ function CourseCard({ course, index, pricing, onAct, onUnpublish, onArchive, onR
   const approval = approvalState[course.approvalStatus]
   const totalKey = totalKeyBySlug[course.slug]
   const upfrontKey = upfrontKeyBySlug[course.slug]
+  const discountKey = discountKeyBySlug[course.slug]
   return <article className="catalog-card admin-course-card">
     <CourseBanner course={course} index={index} />
     <div>
@@ -295,6 +311,7 @@ function CourseCard({ course, index, pricing, onAct, onUnpublish, onArchive, onR
         <PriceField priceKey={totalKey} label="Full enrollment price (PHP)" pricing={pricing} onSave={onSavePrice} />
         <PriceField priceKey={upfrontKey} label="Upfront fee(PHP)" pricing={pricing} onSave={onSavePrice} />
       </div>}
+      {discountKey && <DiscountField priceKey={discountKey} pricing={pricing} onSave={onSavePrice} />}
       {!totalKey && <AgreementSection course={course} />}
       <AvailabilityFields course={course} onSave={(updates) => onAct(course, updates, 'Availability updated.')} />
 
