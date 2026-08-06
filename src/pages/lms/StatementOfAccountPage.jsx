@@ -52,6 +52,10 @@ export default function StatementOfAccountPage() {
             <div><span>Balance remaining</span><strong className={row.balance > 0 ? 'statement-balance-due' : ''}>{peso(row.balance)}</strong></div>
           </div>
           {row.balance > 0 && row.balanceDueDate && <p className="statement-due-note"><CalendarClock size={15} /> Please settle by <strong>{formatDate(row.balanceDueDate)}</strong>{row.balanceNote ? ` — ${row.balanceNote}` : ''}</p>}
+          {row.balance > 0 && row.installments?.length > 0 && <div className="statement-installments">
+            <span className="admin-course-field-label">Installment schedule</span>
+            <ul>{row.installments.map((installment, index) => <li key={index}><span>{installment.label}</span><span>{peso(installment.amount)} due {formatDate(installment.dueDate)}</span></li>)}</ul>
+          </div>}
           {row.paidAt && <small className="statement-paid-note">Last payment on {formatDate(row.paidAt)}</small>}
         </article>
       })}

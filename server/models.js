@@ -302,10 +302,19 @@ const enrollmentSchema = new Schema({
     // upfront/reservation fee at checkout — `planAmount` is what was actually charged.
     plan: { type: String, enum: ['full', 'upfront'] },
     planAmount: Number,
+    // Computed at checkout (payment-session) but only actually taken off `amount` once payment is
+    // confirmed (markEnrollmentPaid) — see payInFullDiscountFor. Zero/absent means no discount
+    // applied (a voucher was in play, or none is configured for this pathway).
+    payInFullDiscountAmount: Number,
     // Staff-set, for the "pay upfront only" plan's remaining balance — purely informational (shown
     // on the learner's Statement of Account); nothing in-app enforces or collects it automatically.
     balanceDueDate: Date,
     balanceNote: { type: String, trim: true, maxlength: 500 },
+    // Auto-generated once the upfront-plan payment is confirmed (buildInstallmentSchedule), splitting
+    // the remaining balance into dated line items. Still staff-tracked, not auto-charged — actual
+    // money received is recorded the same way as any balance payment, via the Payment ledger; this
+    // is only the plan the learner and staff can see and reconcile against.
+    installments: [{ amount: Number, dueDate: Date, label: String }],
   },
   reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   reviewedAt: Date,
@@ -370,6 +379,17 @@ const pricingSettingsSchema = new Schema({
   upfrontBroker: { type: Number, required: true, default: 1000 },
   upfrontConsultant: { type: Number, required: true, default: 5000 },
   upfrontAppraiser: { type: Number, required: true, default: 1000 },
+  // Automatic discount for choosing to pay in full at checkout — distinct from Voucher (admin-typed
+  // codes): this applies itself with no code, and is suppressed whenever a voucher is also applied
+  // (see payInFullDiscountFor) so the two never stack. One shared type, one value per pathway.
+  payInFullDiscountType: { type: String, enum: ['percent', 'fixed'], default: 'percent' },
+  payInFullDiscountBroker: { type: Number, required: true, default: 0, min: 0 },
+  payInFullDiscountConsultant: { type: Number, required: true, default: 0, min: 0 },
+  payInFullDiscountAppraiser: { type: Number, required: true, default: 0, min: 0 },
+  // How the "pay upfront only" plan's remaining balance is split into a staff-tracked schedule —
+  // see buildInstallmentSchedule. Shared across all 3 pathways rather than per-pathway.
+  installmentCount: { type: Number, required: true, default: 3, min: 1, max: 12 },
+  installmentIntervalDays: { type: Number, required: true, default: 30, min: 1, max: 365 },
 }, { timestamps: true })
 
 // Admin-issued discount codes for the public enrollment checkout. `code` is stored uppercase and

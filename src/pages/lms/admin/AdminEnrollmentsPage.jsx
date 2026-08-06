@@ -145,6 +145,9 @@ export default function AdminEnrollmentsPage() {
               Balance due {peso(row.balance)}{row.payment?.balanceDueDate ? ` by ${formatDueDate(row.payment.balanceDueDate)}` : ' — follow up'}
             </small>}
             {row.status === 'approved' && Number(row.balance ?? 0) > 0 && row.payment?.balanceNote && <small style={{ display: 'block', marginTop: 2, color: '#8b9389', fontStyle: 'italic' }}>{row.payment.balanceNote}</small>}
+            {row.status === 'approved' && Number(row.balance ?? 0) > 0 && row.payment?.installments?.length > 0 && <small style={{ display: 'block', marginTop: 4, color: '#8b9389' }} title={row.payment.installments.map((i) => `${i.label}: ${peso(i.amount)} due ${formatDueDate(i.dueDate)}`).join(' · ')}>
+              {row.payment.installments.length} installments — next {peso(row.payment.installments[0].amount)} due {formatDueDate(row.payment.installments[0].dueDate)}
+            </small>}
           </span>
           <span><EnrollmentDocumentLinks enrollmentId={rowId(row)} applicantName={row.applicant?.name} documents={row.documents} /></span>
           <span>{formatDate(row.createdAt)}</span>

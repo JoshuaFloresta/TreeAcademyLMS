@@ -5,7 +5,7 @@ import { Course, Enrollment, LearningProgress, Payment, User } from '../models.j
 import { dbState, memory } from '../state.js'
 import { bestEffortEmail, issueAccountSetupUrl, sendCredentialsEmail } from './accounts.js'
 import { claimVoucherUse } from './vouchers.js'
-import { pathwayTitleById, planLabel } from './pricing.js'
+import { buildInstallmentSchedule, getPricingSettings, pathwayTitleById, planLabel } from './pricing.js'
 
 export async function findEnrollment(enrollmentId) {
   if (dbState.ready) return Enrollment.findById(enrollmentId)
@@ -170,11 +170,35 @@ export async function markEnrollmentPaid(enrollment, paymentPatch) {
     enrollment.reviewedAt = new Date()
   }
   enrollment.payment = { ...(enrollment.payment?.toObject?.() ?? enrollment.payment ?? {}), ...paymentPatch }
+
+  // Guarded on wasAwaitingPayment so a repeated webhook delivery for an already-approved enrollment
+  // can never double-apply the discount or regenerate a schedule on top of one staff may have
+  // already started collecting against.
+  if (wasAwaitingPayment) {
+    const settled = enrollment.payment
+    // Pay-in-full discount: deferred from payment-session (see there) until payment is actually
+    // confirmed, so a cancelled/abandoned checkout never permanently discounts an unpaid enrollment.
+    // Re-checking !enrollment.voucher here (not just trusting the stored amount from checkout-creation
+    // time) closes a narrow race: opening a "pay in full" checkout, then going back and applying a
+    // voucher, then completing that original stale checkout link — without this guard the voucher
+    // discount and the stale pay-in-full discount could both land on `amount`, even though the two
+    // are meant to be mutually exclusive.
+    if (settled.plan === 'full' && !enrollment.voucher && Number(settled.payInFullDiscountAmount) > 0) {
+      const discount = Number(settled.payInFullDiscountAmount)
+      enrollment.feeBreakdown = [{ label: 'Enrollment fee', amount: enrollment.amount }, { label: 'Pay-in-full discount', amount: -discount }]
+      enrollment.amount = Math.max(0, Number(enrollment.amount) - discount)
+    }
+    // Upfront plan: turn whatever remains into a dated, staff-tracked installment schedule instead
+    // of the old single free-text balance reminder.
+    if (settled.plan === 'upfront') {
+      const pricing = await getPricingSettings()
+      const balance = Math.max(0, Number(enrollment.amount) - Number(settled.planAmount ?? 0))
+      enrollment.payment.installments = buildInstallmentSchedule({ balance, count: pricing.installmentCount, intervalDays: pricing.installmentIntervalDays })
+    }
+  }
+
   if (dbState.ready) await enrollment.save()
   if (!wasAwaitingPayment) return null
-  // Guarded on wasAwaitingPayment so a repeated webhook delivery for an already-approved enrollment
-  // cannot add a second ledger row on top of WebhookEvent's own dedupe.
-  //
   // Read from the MERGED payment object, not from paymentPatch. plan/planAmount are written at
   // checkout-creation time and the webhook's patch carries only provider/transactionId/paidAt — so
   // reading the patch alone left planAmount undefined, fell through to the full enrollment price,

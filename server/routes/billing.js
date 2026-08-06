@@ -16,7 +16,16 @@ const pricingSettingsInput = z.object({
   upfrontBroker: z.coerce.number().min(1).max(1_000_000),
   upfrontConsultant: z.coerce.number().min(1).max(1_000_000),
   upfrontAppraiser: z.coerce.number().min(1).max(1_000_000),
-})
+  // No code required — see payInFullDiscountFor. `percent` values are capped at 100; a `fixed`
+  // pathway value above its own total is meaningless but caught by the payable-balance floor at
+  // checkout rather than here, since which cap applies depends on payInFullDiscountType.
+  payInFullDiscountType: z.enum(['percent', 'fixed']),
+  payInFullDiscountBroker: z.coerce.number().min(0).max(1_000_000),
+  payInFullDiscountConsultant: z.coerce.number().min(0).max(1_000_000),
+  payInFullDiscountAppraiser: z.coerce.number().min(0).max(1_000_000),
+  installmentCount: z.coerce.number().int().min(1).max(12),
+  installmentIntervalDays: z.coerce.number().int().min(1).max(365),
+}).refine((values) => values.payInFullDiscountType !== 'percent' || (values.payInFullDiscountBroker <= 100 && values.payInFullDiscountConsultant <= 100 && values.payInFullDiscountAppraiser <= 100), { message: 'A percent discount cannot exceed 100.', path: ['payInFullDiscountBroker'] })
 // Staff-set reminder for a "pay upfront only" enrollment's remaining balance — purely
 // informational (shown on the learner's Statement of Account), not an in-app payment collector.
 const balanceDueInput = z.object({
@@ -323,6 +332,10 @@ router.get('/api/billing/me', requireAuth, asyncRoute(async (req, res) => {
       paidAt: payments.length ? payments[payments.length - 1].receivedAt : null,
       balanceDueDate: row.payment?.balanceDueDate ?? null,
       balanceNote: row.payment?.balanceNote ?? '',
+      // Auto-generated for the upfront plan once payment is confirmed (see buildInstallmentSchedule)
+      // — the learner's own preview of what's due and when, alongside the plain balanceDueDate/Note
+      // reminder above for billing records that predate this or were created manually.
+      installments: (row.payment?.installments ?? []).map((line) => ({ amount: line.amount, dueDate: line.dueDate, label: line.label })),
     }
   }).filter(Boolean))
 }))

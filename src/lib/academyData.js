@@ -51,7 +51,19 @@ export const pathways = [
 // is exactly what happened when broker/appraiser drifted to half their real price.
 export const totalKeyByPathway = { broker: 'totalBroker', consultant: 'totalConsultant', appraiser: 'totalAppraiser' }
 export const upfrontKeyByPathway = { broker: 'upfrontBroker', consultant: 'upfrontConsultant', appraiser: 'upfrontAppraiser' }
+export const payInFullDiscountKeyByPathway = { broker: 'payInFullDiscountBroker', consultant: 'payInFullDiscountConsultant', appraiser: 'payInFullDiscountAppraiser' }
 export const peso = (value) => `₱${Number(value).toLocaleString('en-PH')}`
+
+// Client-side preview only — mirrors payInFullDiscountFor in server/lib/pricing.js so the payment
+// step can show the discounted price before checkout, but the server always recomputes and enforces
+// this independently at /payment-session; nothing here is ever trusted as the real charge amount.
+export const payInFullDiscountPreview = (pricing, pathwayId, baseAmount) => {
+  const value = Number(pricing?.[payInFullDiscountKeyByPathway[pathwayId]] ?? 0)
+  const base = Number(baseAmount ?? 0)
+  if (!(value > 0) || !(base > 0)) return 0
+  const raw = pricing?.payInFullDiscountType === 'fixed' ? value : (base * value) / 100
+  return Math.max(0, Math.min(Math.round(raw * 100) / 100, base))
+}
 export const pathwayPricing = (pathway, pricing) => {
   const total = Number(pricing?.[totalKeyByPathway[pathway.id]])
   const upfront = Number(pricing?.[upfrontKeyByPathway[pathway.id]])

@@ -61,6 +61,61 @@ function PriceField({ priceKey, label = 'Full enrollment price (PHP)', pricing, 
   </div>
 }
 
+// Global, not per-course — the automatic "pay in full" discount (no voucher code needed; suppressed
+// whenever a learner also has a voucher applied) and the installment schedule offered on the
+// "pay upfront only" plan. All fields are sent together on Save since PATCH /api/admin/pricing
+// requires the full settings object, matching how PriceField above spreads `pricing` per-field.
+// `dirty` compares against the live `pricing` prop rather than clearing the draft on save — same
+// pattern as PriceField, so it naturally settles once the query refetches the saved values.
+const PAYMENT_PLAN_FIELDS = ['payInFullDiscountType', 'payInFullDiscountBroker', 'payInFullDiscountConsultant', 'payInFullDiscountAppraiser', 'installmentCount', 'installmentIntervalDays']
+function PaymentPlanSettings({ pricing, onSave }) {
+  const [draft, setDraft] = useState(null)
+  const mutation = useMutation({ mutationFn: () => onSave(draft) })
+  if (!pricing) return null
+  const value = draft ?? pricing
+  const dirty = draft ? PAYMENT_PLAN_FIELDS.some((key) => String(draft[key]) !== String(pricing[key])) : false
+  const set = (key, val) => setDraft({ ...(draft ?? pricing), [key]: val })
+  const unit = value.payInFullDiscountType === 'fixed' ? '₱' : '%'
+  return <div className="admin-payment-plans">
+    <h2>Payment plans</h2>
+    <p className="operations-note">Applicants who pay in full get an automatic discount (no code needed) — suppressed if they also used a voucher. Applicants who pay only the upfront fee get a staff-tracked installment schedule for the rest.</p>
+    <div className="admin-payment-plans-grid">
+      <div className="admin-course-price">
+        <span className="admin-course-field-label">Pay-in-full discount type</span>
+        <div className="admin-season-cell">
+          <select value={value.payInFullDiscountType} onChange={(e) => set('payInFullDiscountType', e.target.value)}>
+            <option value="percent">Percent off</option>
+            <option value="fixed">Fixed peso amount off</option>
+          </select>
+        </div>
+      </div>
+      <div className="admin-course-price">
+        <span className="admin-course-field-label">Broker discount ({unit})</span>
+        <div className="admin-season-cell"><input type="number" min={0} step={value.payInFullDiscountType === 'percent' ? 1 : 100} value={value.payInFullDiscountBroker} onChange={(e) => set('payInFullDiscountBroker', e.target.value)} /></div>
+      </div>
+      <div className="admin-course-price">
+        <span className="admin-course-field-label">Consultant discount ({unit})</span>
+        <div className="admin-season-cell"><input type="number" min={0} step={value.payInFullDiscountType === 'percent' ? 1 : 100} value={value.payInFullDiscountConsultant} onChange={(e) => set('payInFullDiscountConsultant', e.target.value)} /></div>
+      </div>
+      <div className="admin-course-price">
+        <span className="admin-course-field-label">Appraiser discount ({unit})</span>
+        <div className="admin-season-cell"><input type="number" min={0} step={value.payInFullDiscountType === 'percent' ? 1 : 100} value={value.payInFullDiscountAppraiser} onChange={(e) => set('payInFullDiscountAppraiser', e.target.value)} /></div>
+      </div>
+      <div className="admin-course-price">
+        <span className="admin-course-field-label">Installments &amp; spacing</span>
+        <div className="admin-season-cell">
+          <label>Payments<input type="number" min={1} max={12} value={value.installmentCount} onChange={(e) => set('installmentCount', e.target.value)} /></label>
+          <label>Every N days<input type="number" min={1} max={365} value={value.installmentIntervalDays} onChange={(e) => set('installmentIntervalDays', e.target.value)} /></label>
+        </div>
+      </div>
+    </div>
+    {dirty && <div className="admin-course-actions">
+      <button type="button" className="button button-primary button-compact" onClick={() => mutation.mutate()} disabled={mutation.isPending}><Save size={14} /> {mutation.isPending ? 'Saving…' : 'Save payment plan settings'}</button>
+      <button type="button" className="button button-ghost button-compact" onClick={() => setDraft(null)}>Cancel</button>
+    </div>}
+  </div>
+}
+
 function NewCourseCard({ onCreated, onCancel }) {
   const [values, setValues] = useState({ title: '', slug: '', description: '' })
   const [touchedSlug, setTouchedSlug] = useState(false)
@@ -303,6 +358,13 @@ export default function AdminCoursesPage() {
       queryClient.invalidateQueries({ queryKey: ['admin-pricing'] })
     } catch (e) { toast.error(e.message) }
   }
+  const savePricingPatch = async (patch) => {
+    try {
+      await priceMutation.mutateAsync({ ...pricing, ...patch })
+      toast.success('Payment plan settings updated.')
+      queryClient.invalidateQueries({ queryKey: ['admin-pricing'] })
+    } catch (e) { toast.error(e.message) }
+  }
 
   const pendingReview = courses.filter((course) => course.approvalStatus === 'pending_review')
 
@@ -311,6 +373,7 @@ export default function AdminCoursesPage() {
       <div><p className="eyebrow">PLATFORM ADMIN</p><h1>Course Catalog &amp; Pricing</h1><p>Create courses, approve, publish, schedule availability, and set each pathway's price — all in one place.</p></div>
       {!creating && <button type="button" className="button button-primary" onClick={() => setCreating(true)}><Plus size={15} /> New course</button>}
     </div>
+    <PaymentPlanSettings pricing={pricing} onSave={savePricingPatch} />
     {pendingReview.length > 0 && <div className="admin-bulkbar"><span>{pendingReview.length} course{pendingReview.length === 1 ? '' : 's'} awaiting your approval:</span>
       {pendingReview.map((course) => <span className="admin-review-chip" key={course.id}>
         <strong>{course.title}</strong>

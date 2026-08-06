@@ -14,7 +14,7 @@ import { asyncRoute, sendPrivateDownload } from '../lib/http.js'
 import { saveAudit } from '../lib/audit.js'
 import { bestEffortEmail } from '../lib/accounts.js'
 import { courseIsAvailable, pathwayCourseIsOpen } from '../lib/course-visibility.js'
-import { getPricingSettings, paidByEnrollment, totalAmountForPathway, upfrontAmountForPathway } from '../lib/pricing.js'
+import { getPricingSettings, paidByEnrollment, payInFullDiscountFor, totalAmountForPathway, upfrontAmountForPathway } from '../lib/pricing.js'
 import {
   MINIMUM_CHARGE_AMOUNT, VOUCHER_EDIT_STATUSES, applyVoucherToEnrollment, clearVoucherFromEnrollment,
   upfrontChargeFor, voucherApplicantRejection, voucherBaseAmount, voucherDiscountFor, voucherRedeemInput,
@@ -291,15 +291,21 @@ router.post('/api/enrollments/:id/payment-session', asyncRoute(async (req, res) 
   // The full plan charges `enrollment.amount`, which applyVoucherToEnrollment already made net of
   // any TOTAL-scoped voucher — an UPFRONT-scoped one leaves it at list price on purpose, so paying
   // in full correctly ignores it. upfrontChargeFor applies the reverse split for the other plan.
+  // The automatic pay-in-full discount is mutually exclusive with a voucher (a code already reflects
+  // whatever deal was agreed) — computed here, but only actually taken off `enrollment.amount` once
+  // markEnrollmentPaid confirms the payment, so a cancelled/retried checkout never mutates it.
+  const payInFullDiscountAmount = resolvedPlan === 'full' && !enrollment.voucher
+    ? payInFullDiscountFor(pricing, enrollment.applicant.pathway, enrollment.amount)
+    : 0
   const chargeAmount = resolvedPlan === 'upfront'
     ? upfrontChargeFor(enrollment, upfrontAmountForPathway(pricing, enrollment.applicant.pathway))
-    : enrollment.amount
+    : enrollment.amount - payInFullDiscountAmount
   if (!(chargeAmount >= MINIMUM_CHARGE_AMOUNT)) {
     return res.status(409).json({ error: 'This enrollment has no payable balance left for online checkout. Please contact the academy to finalise it.' })
   }
 
   if (!config.paymongo.secretKey) {
-    enrollment.payment = { provider: 'paymongo-payment-link', checkoutUrl: config.paymongo.paymentLink, referenceNumber: req.params.id, plan: resolvedPlan, planAmount: chargeAmount }
+    enrollment.payment = { provider: 'paymongo-payment-link', checkoutUrl: config.paymongo.paymentLink, referenceNumber: req.params.id, plan: resolvedPlan, planAmount: chargeAmount, payInFullDiscountAmount }
     if (dbState.ready) await enrollment.save()
     return res.json({ checkoutUrl: config.paymongo.paymentLink, mode: 'payment_link_fallback', message: 'The PayMongo payment page is open. Add a PayMongo secret key and webhook to enable automatic payment matching and account email.' })
   }
@@ -308,7 +314,7 @@ router.post('/api/enrollments/:id/payment-session', asyncRoute(async (req, res) 
     data: {
       attributes: {
         billing: { name: enrollment.applicant.name, email: enrollment.applicant.email, phone: enrollment.applicant.phone },
-        line_items: [{ name: resolvedPlan === 'upfront' ? `${catalog.product.name} — upfront fee` : catalog.product.name, description: `PASS-FIRST enrollment for ${enrollment.applicant.name}`, amount: Math.round(chargeAmount * 100), currency: enrollment.currency, quantity: 1 }],
+        line_items: [{ name: resolvedPlan === 'upfront' ? `${catalog.product.name} — upfront fee` : payInFullDiscountAmount > 0 ? `${catalog.product.name} — paid in full` : catalog.product.name, description: `PASS-FIRST enrollment for ${enrollment.applicant.name}`, amount: Math.round(chargeAmount * 100), currency: enrollment.currency, quantity: 1 }],
         payment_method_types: config.paymongo.paymentMethods,
         send_email_receipt: true,
         show_description: true,
@@ -341,6 +347,7 @@ router.post('/api/enrollments/:id/payment-session', asyncRoute(async (req, res) 
     referenceNumber: req.params.id,
     plan: resolvedPlan,
     planAmount: chargeAmount,
+    payInFullDiscountAmount,
   }
   if (dbState.ready) await enrollment.save()
   await saveAudit('payment.checkout_created', 'Enrollment', req.params.id, { checkoutId: result.data.id, plan: resolvedPlan, planAmount: chargeAmount })
@@ -433,7 +440,7 @@ router.get('/api/staff/enrollments', requireAuth, requireStaff, asyncRoute(async
     _id: String(row._id ?? row.id), applicant: row.applicant, status: row.status, amount: row.amount, currency: row.currency,
     origin: row.origin ?? 'enrollment',
     amountPaid: paid, balance: Math.max(0, Number(row.amount ?? 0) - paid),
-    payment: row.payment ? { plan: row.payment.plan, planAmount: row.payment.planAmount, paidAt: row.payment.paidAt, referenceNumber: row.payment.referenceNumber, balanceDueDate: row.payment.balanceDueDate ?? null, balanceNote: row.payment.balanceNote ?? '' } : undefined,
+    payment: row.payment ? { plan: row.payment.plan, planAmount: row.payment.planAmount, paidAt: row.payment.paidAt, referenceNumber: row.payment.referenceNumber, balanceDueDate: row.payment.balanceDueDate ?? null, balanceNote: row.payment.balanceNote ?? '', installments: (row.payment.installments ?? []).map((line) => ({ amount: line.amount, dueDate: line.dueDate, label: line.label })) } : undefined,
     createdAt: row.createdAt, archivedAt: row.archivedAt ?? null, documents: enrollmentDocuments(row),
   })
   if (dbState.ready) {

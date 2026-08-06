@@ -49,7 +49,8 @@
       "Bash(curl -s -w \"\\\\nHTTP:%{http_code}\\\\n\" http://localhost:4000/api/public/pathway-stats)",
       "Bash(curl -s -w \"\\\\nHTTP:%{http_code}\\\\n\" http://localhost:4000/api/staff/overview)",
       "Bash(curl -s -w \"\\\\nHTTP:%{http_code}\\\\n\" http://localhost:4000/api/calendar)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(npx playwright *)"
     ]
   }
 }
