@@ -166,7 +166,7 @@ export default function LandingPage() {
                   configured for this pathway — see pathwayPricing in academyData.js. */}
               {modalPrice.discountedPrice && <p className="price-was"><s>{modalPrice.price} PHP</s></p>}
               <div className="price">{modalPrice.discountedPrice ?? modalPrice.price}<span>PHP</span></div>
-              {modalPrice.discountedPrice && <p className="price-discount-note">Save {modalPrice.discountAmount} when you pay in full — no code needed.</p>}
+              {modalPrice.discountedPrice && <p className="price-discount-note">Save {modalPrice.discountAmount} when you pay in full.</p>}
               <p>{modalPrice.upfrontFee}</p>
               <div className="price-divider" />
               <div className="price-feature">
