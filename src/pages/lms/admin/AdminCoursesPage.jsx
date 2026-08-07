@@ -84,18 +84,18 @@ function DiscountField({ priceKey, pricing, onSave }) {
 
 // Global, not per-course — the discount TYPE shared by all 3 pathways (each pathway's own amount
 // lives on its course card, see DiscountField), the installment schedule offered on the "pay
-// upfront only" plan, and an optional fixed start date for that schedule. All fields are sent
-// together on Save since PATCH /api/admin/pricing requires the full settings object.
-// `dirty` compares against the live `pricing` prop rather than clearing the draft on save — same
-// pattern as PriceField, so it naturally settles once the query refetches the saved values.
-const PAYMENT_PLAN_FIELDS = ['payInFullDiscountType', 'installmentCount', 'installmentIntervalDays', 'installmentStartDate']
+// upfront only" plan, and an optional fixed start date for that schedule.
+// `draft` only ever accumulates the fields actually touched here — never a spread of the whole
+// `pricing` prop — so Save sends a true partial patch. Spreading `pricing` into the draft used to
+// mean saving one field could silently revert some OTHER field to whatever this browser tab had
+// cached, if that field had just been changed elsewhere moments before this save fired.
 function PaymentPlanSettings({ pricing, onSave }) {
-  const [draft, setDraft] = useState(null)
+  const [draft, setDraft] = useState({})
   const mutation = useMutation({ mutationFn: () => onSave(draft) })
   if (!pricing) return null
-  const value = draft ?? pricing
-  const dirty = draft ? PAYMENT_PLAN_FIELDS.some((key) => key === 'installmentStartDate' ? toDateInput(draft[key]) !== toDateInput(pricing[key]) : String(draft[key]) !== String(pricing[key])) : false
-  const set = (key, val) => setDraft({ ...(draft ?? pricing), [key]: val })
+  const value = { ...pricing, ...draft }
+  const dirty = Object.keys(draft).some((key) => key === 'installmentStartDate' ? toDateInput(draft[key]) !== toDateInput(pricing[key]) : String(draft[key]) !== String(pricing[key]))
+  const set = (key, val) => setDraft((current) => ({ ...current, [key]: val }))
   return <div className="admin-payment-plans">
     <h2>Payment plans</h2>
     <p className="operations-note">These apply automatically at checkout — no code needed. Pay in full: instant discount (suppressed if a voucher was also used). Pay upfront fee only: the rest becomes a staff-tracked installment schedule.</p>
@@ -127,7 +127,7 @@ function PaymentPlanSettings({ pricing, onSave }) {
     <p className="admin-payment-plans-pointer">↓ Each pathway's discount amount is set on its own course card below, in the “Pricing &amp; payment plan” box.</p>
     {dirty && <div className="admin-course-actions">
       <button type="button" className="button button-primary button-compact" onClick={() => mutation.mutate()} disabled={mutation.isPending}><Save size={14} /> {mutation.isPending ? 'Saving…' : 'Save payment plan settings'}</button>
-      <button type="button" className="button button-ghost button-compact" onClick={() => setDraft(null)}>Cancel</button>
+      <button type="button" className="button button-ghost button-compact" onClick={() => setDraft({})}>Cancel</button>
     </div>}
   </div>
 }
@@ -372,16 +372,19 @@ export default function AdminCoursesPage() {
     if (!(await confirm({ title: 'Delete this course?', message: `“${course.title}” and all its modules, lessons, assignments and quizzes will be permanently deleted.`, confirmLabel: 'Delete course' }))) return
     try { await deleteCourse(course.id); toast.success(`“${course.title}” was deleted.`); invalidateCourses() } catch (e) { toast.error(e.message) }
   }
+  // Sends only the changed field(s), never the whole `pricing` object — PATCH /api/admin/pricing
+  // merges against the database's own current row, not a client-supplied snapshot, specifically so
+  // two fields saved moments apart (or two admins editing at once) can never revert each other.
   const savePrice = async (priceKey, value) => {
     try {
-      await priceMutation.mutateAsync({ ...pricing, [priceKey]: value })
+      await priceMutation.mutateAsync({ [priceKey]: value })
       toast.success('Price updated.')
       queryClient.invalidateQueries({ queryKey: ['admin-pricing'] })
     } catch (e) { toast.error(e.message) }
   }
   const savePricingPatch = async (patch) => {
     try {
-      await priceMutation.mutateAsync({ ...pricing, ...patch })
+      await priceMutation.mutateAsync(patch)
       toast.success('Payment plan settings updated.')
       queryClient.invalidateQueries({ queryKey: ['admin-pricing'] })
     } catch (e) { toast.error(e.message) }

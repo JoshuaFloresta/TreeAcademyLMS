@@ -162,7 +162,11 @@ export default function LandingPage() {
             <div className="access-price">
               <div className="price-sticker">{modalPathway.examTag}</div>
               <p className="eyebrow">LICENSURE REVIEW · {modalPathway.duration}</p>
-              <div className="price">{modalPrice.price}<span>PHP</span></div>
+              {/* Struck-through original only appears once a pay-in-full discount is actually
+                  configured for this pathway — see pathwayPricing in academyData.js. */}
+              {modalPrice.discountedPrice && <p className="price-was"><s>{modalPrice.price} PHP</s></p>}
+              <div className="price">{modalPrice.discountedPrice ?? modalPrice.price}<span>PHP</span></div>
+              {modalPrice.discountedPrice && <p className="price-discount-note">Save {modalPrice.discountAmount} when you pay in full — no code needed.</p>}
               <p>{modalPrice.upfrontFee}</p>
               <div className="price-divider" />
               <div className="price-feature">

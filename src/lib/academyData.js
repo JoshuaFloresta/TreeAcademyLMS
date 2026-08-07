@@ -67,9 +67,17 @@ export const payInFullDiscountPreview = (pricing, pathwayId, baseAmount) => {
 export const pathwayPricing = (pathway, pricing) => {
   const total = Number(pricing?.[totalKeyByPathway[pathway.id]])
   const upfront = Number(pricing?.[upfrontKeyByPathway[pathway.id]])
+  const hasLiveTotal = Number.isFinite(total) && total > 0
+  // Only meaningful once live pricing has loaded — the static fallback copy in `pathways` above has
+  // no discount concept, so a discount never shows against it.
+  const discount = hasLiveTotal ? payInFullDiscountPreview(pricing, pathway.id, total) : 0
   return {
-    price: Number.isFinite(total) && total > 0 ? peso(total) : pathway.price,
+    price: hasLiveTotal ? peso(total) : pathway.price,
     upfrontFee: Number.isFinite(upfront) && upfront > 0 ? `${peso(upfront)} upfront fee` : pathway.upfrontFee,
+    // Set only when a pay-in-full discount is actually configured for this pathway — callers show
+    // the crossed-out `price` above this figure when present, plain `price` otherwise.
+    discountedPrice: discount > 0 ? peso(total - discount) : null,
+    discountAmount: discount > 0 ? peso(discount) : null,
   }
 }
 

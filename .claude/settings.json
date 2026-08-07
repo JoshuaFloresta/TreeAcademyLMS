@@ -50,7 +50,8 @@
       "Bash(curl -s -w \"\\\\nHTTP:%{http_code}\\\\n\" http://localhost:4000/api/staff/overview)",
       "Bash(curl -s -w \"\\\\nHTTP:%{http_code}\\\\n\" http://localhost:4000/api/calendar)",
       "Bash(git commit -m ' *)",
-      "Bash(npx playwright *)"
+      "Bash(npx playwright *)",
+      "Bash(powershell -NoProfile -Command 'Get-NetTCPConnection -LocalPort 4000 -ErrorAction SilentlyContinue | Select-Object -Property OwningProcess -Unique | ForEach-Object { $_.OwningProcess }')"
     ]
   }
 }

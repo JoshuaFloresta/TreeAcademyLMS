@@ -9,7 +9,12 @@ import { getPricingSettings, paidByEnrollment, pathwayTitleById, totalAmountForP
 
 export const router = express.Router()
 
-const pricingSettingsInput = z.object({
+// The bare shape, reused two ways below: `pricingSettingsInput` (full + cross-field validation) to
+// check the MERGED result, and `pricingPatchInput` (partial) to parse whatever subset of fields the
+// client actually sent. The admin UI saves one field (or one small group) at a time — see savePrice/
+// savePricingPatch in AdminCoursesPage.jsx — specifically so two admins, or two fields in the same
+// browser, editing at once can never stomp on each other by round-tripping a stale full snapshot.
+const pricingSettingsShape = z.object({
   totalBroker: z.coerce.number().min(1).max(1_000_000),
   totalConsultant: z.coerce.number().min(1).max(1_000_000),
   totalAppraiser: z.coerce.number().min(1).max(1_000_000),
@@ -29,7 +34,10 @@ const pricingSettingsInput = z.object({
   // payment date" — preprocessed to null before z.coerce.date() ever sees it, since coercing an
   // empty string throws rather than producing null.
   installmentStartDate: z.preprocess((value) => (value === '' || value == null ? null : value), z.coerce.date().nullable()),
-}).refine((values) => values.payInFullDiscountType !== 'percent' || (values.payInFullDiscountBroker <= 100 && values.payInFullDiscountConsultant <= 100 && values.payInFullDiscountAppraiser <= 100), { message: 'A percent discount cannot exceed 100.', path: ['payInFullDiscountBroker'] })
+})
+const percentDiscountCap = (values) => values.payInFullDiscountType !== 'percent' || (values.payInFullDiscountBroker <= 100 && values.payInFullDiscountConsultant <= 100 && values.payInFullDiscountAppraiser <= 100)
+const pricingSettingsInput = pricingSettingsShape.refine(percentDiscountCap, { message: 'A percent discount cannot exceed 100.', path: ['payInFullDiscountBroker'] })
+const pricingPatchInput = pricingSettingsShape.partial()
 // Staff-set reminder for a "pay upfront only" enrollment's remaining balance — purely
 // informational (shown on the learner's Statement of Account), not an in-app payment collector.
 const balanceDueInput = z.object({
@@ -85,9 +93,17 @@ router.get('/api/pricing', asyncRoute(async (_req, res) => {
 
 router.patch('/api/admin/pricing', requireAuth, requireAdmin, asyncRoute(async (req, res) => {
   if (!dbState.ready) return res.status(503).json({ error: 'Pricing settings require MongoDB.' })
-  const values = pricingSettingsInput.parse(req.body)
-  const settings = await PricingSettings.findOneAndUpdate({}, values, { new: true, upsert: true, setDefaultsOnInsert: true })
-  await saveAudit('pricing.updated', 'PricingSettings', settings.id, values, req.auth.sub)
+  const patch = pricingPatchInput.parse(req.body)
+  // Validated against the database's current row (via getPricingSettings, which already fills in
+  // defaults for a brand-new row), never against whatever the client had cached — otherwise a
+  // second field saved a moment after the first, before its refetch lands, would validate against a
+  // stale picture. The actual write below only $sets the patched fields (never the merged whole),
+  // so two saves landing at nearly the same moment can never stomp on each other even at the
+  // database level — each only ever touches the paths it was asked to touch.
+  const current = await getPricingSettings()
+  pricingSettingsInput.parse({ ...current, ...patch })
+  const settings = await PricingSettings.findOneAndUpdate({}, { $set: patch }, { new: true, upsert: true, setDefaultsOnInsert: true })
+  await saveAudit('pricing.updated', 'PricingSettings', settings.id, patch, req.auth.sub)
   res.json(settings)
 }))
 
