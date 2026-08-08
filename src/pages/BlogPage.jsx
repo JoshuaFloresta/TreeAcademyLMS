@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { ArrowUpRight, CalendarClock, Newspaper } from 'lucide-react'
+import { ArrowUpRight, CalendarClock } from 'lucide-react'
 import PublicHeader from '../components/PublicHeader.jsx'
 import PublicFooter from '../components/PublicFooter.jsx'
 import StatusPill from '../components/StatusPill.jsx'
@@ -28,11 +28,15 @@ export default function BlogPage() {
         </div>
       </section>
 
-      <section className="blog-layout shell section">
-        <div className="blog-list">
-          {isLoading && <p className="operations-note">Loading posts…</p>}
-          {!isLoading && !posts.length && <div className="empty-state"><Newspaper size={26} /><strong>No posts yet</strong><p>Check back soon — the academy is just getting started here.</p></div>}
-          <div className="blog-grid">
+      {/* Hidden entirely (no heading, no empty state) once loading finishes with nothing to show —
+          an admin who hasn't published anything yet shouldn't advertise an empty blog. */}
+      {(isLoading || posts.length > 0) && <section className="academy-blog-section shell section">
+        <div className="section-heading">
+          <div><p className="eyebrow">ACADEMY BLOG</p><h2>Straight from<br /><em>the team.</em></h2></div>
+        </div>
+        {isLoading
+          ? <p className="operations-note">Loading posts…</p>
+          : <div className="blog-grid">
             {posts.map((post) => <Link className="blog-card" to={`/blog/${post.slug}`} key={post.id}>
               {post.coverImageUrl && <div className="blog-card-cover" style={{ backgroundImage: `url(${post.coverImageUrl})` }} />}
               <div className="blog-card-body">
@@ -42,23 +46,26 @@ export default function BlogPage() {
                 <small><CalendarClock size={13} /> {formatDate(post.publishedAt)}</small>
               </div>
             </Link>)}
-          </div>
-        </div>
+          </div>}
+      </section>}
 
-        {news.configured && <aside className="blog-news-panel">
-          <p className="eyebrow">REAL ESTATE NEWS</p>
-          <h3>What's happening<br />in the market.</h3>
-          {!news.articles.length && <p className="operations-note">No headlines available right now.</p>}
-          <ul>
-            {news.articles.map((article) => <li key={article.url}>
-              <a href={article.url} target="_blank" rel="noreferrer">
-                <span>{article.title}</span>
-                <small>{article.sourceName} <ArrowUpRight size={11} /></small>
-              </a>
-            </li>)}
-          </ul>
-        </aside>}
-      </section>
+      {news.configured && <section className="news-section shell section">
+        <div className="section-heading">
+          <div><p className="eyebrow">REAL ESTATE NEWS</p><h2>What's happening<br /><em>in the market.</em></h2></div>
+        </div>
+        {!news.articles.length
+          ? <p className="operations-note">No headlines available right now.</p>
+          : <div className="blog-grid">
+            {news.articles.map((article) => <a className="blog-card news-card" href={article.url} target="_blank" rel="noreferrer" key={article.url}>
+              {article.imageUrl && <div className="blog-card-cover" style={{ backgroundImage: `url(${article.imageUrl})` }} />}
+              <div className="blog-card-body">
+                <h3>{article.title}</h3>
+                {article.description && <p>{article.description}</p>}
+                <small>{article.sourceName} <ArrowUpRight size={12} /></small>
+              </div>
+            </a>)}
+          </div>}
+      </section>}
     </main>
     <PublicFooter />
   </div>
