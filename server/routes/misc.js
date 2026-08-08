@@ -1,8 +1,9 @@
 import express from 'express'
+import rateLimit from 'express-rate-limit'
 import { z } from 'zod'
 import { integrations } from '../config.js'
 import { catalog } from '../catalog.js'
-import { Announcement, Course, LearningProgress, NewsletterSubscriber, Notification, User, Webinar, WebinarRegistration } from '../models.js'
+import { Announcement, BlogPost, Course, LearningProgress, NewsletterSubscriber, Notification, User, Webinar, WebinarRegistration } from '../models.js'
 import { requireAuth, requireStaff } from '../security.js'
 import { sendTemplatedEmail } from '../email.js'
 import { dbState, memory } from '../state.js'
@@ -10,6 +11,7 @@ import { asyncRoute } from '../lib/http.js'
 import { saveAudit } from '../lib/audit.js'
 import { learnerVisibleCourseFilter } from '../lib/course-visibility.js'
 import { RESERVED_COURSE_SLUGS } from '../lib/enrollment-shared.js'
+import { fetchRealEstateNews } from '../lib/real-estate-news.js'
 
 export const router = express.Router()
 
@@ -98,6 +100,50 @@ router.post('/api/public/webinars/:id/register', asyncRoute(async (req, res) => 
     .catch((emailError) => console.error('webinar_registration email failed:', emailError.message))
   await saveAudit('webinar.registered', 'Webinar', webinar.id, { email: values.email })
   res.status(201).json({ registered: true })
+}))
+
+// --- Blog (public reads) ----------------------------------------------------------------------
+// Staff-facing CRUD lives in routes/admin-catalog.js — this is the read-only public side, same
+// split as webinars above. `select` deliberately excludes nothing here: a published post has no
+// field an anonymous reader shouldn't see (unlike, say, enrollment records).
+const blogListItem = (post) => ({
+  id: String(post._id), title: post.title, slug: post.slug, excerpt: post.excerpt ?? '',
+  coverImageUrl: post.coverImageUrl ?? null, category: post.category, publishedAt: post.publishedAt,
+})
+
+router.get('/api/public/blog', asyncRoute(async (_req, res) => {
+  if (!dbState.ready) return res.json([])
+  const posts = await BlogPost.find({ status: 'published' }).sort({ publishedAt: -1 }).limit(50).lean()
+  res.json(posts.map(blogListItem))
+}))
+
+router.get('/api/public/blog/:slug', asyncRoute(async (req, res) => {
+  if (!dbState.ready) return res.status(404).json({ error: 'Post not found.' })
+  const post = await BlogPost.findOne({ slug: req.params.slug, status: 'published' }).populate('authorId', 'name').lean()
+  if (!post) return res.status(404).json({ error: 'Post not found.' })
+  res.json({ ...blogListItem(post), body: post.body, authorName: post.authorId?.name ?? 'Tree Academy' })
+}))
+
+// Per-IP, not per-account — this route is public/unauthenticated like the rest of the blog. The
+// shared in-memory cache in lib/real-estate-news.js is what actually protects the upstream GNews
+// quota (one cached fetch serves every visitor for an hour, regardless of traffic); this is just
+// defense-in-depth against someone hammering our own endpoint pointlessly.
+const newsFeedLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please wait a few minutes and try again.' },
+})
+
+// Best-effort — a provider hiccup on the very first (uncached) request degrades to an empty list
+// rather than a 500, since this section is decorative next to the staff-authored blog above it.
+router.get('/api/public/real-estate-news', newsFeedLimiter, asyncRoute(async (_req, res) => {
+  try {
+    res.json(await fetchRealEstateNews())
+  } catch {
+    res.json({ configured: true, articles: [] })
+  }
 }))
 
 router.post('/api/newsletter', asyncRoute(async (req, res) => {

@@ -679,6 +679,27 @@ const webinarRegistrationSchema = new Schema({
 }, { timestamps: true })
 webinarRegistrationSchema.index({ webinarId: 1, email: 1 }, { unique: true })
 
+// Staff-authored blog — program updates, exam tips, real-estate commentary. Deliberately plain text
+// (no rich-text/markdown library), same convention as Announcement.body elsewhere in this app;
+// paragraph breaks are preserved with CSS white-space, not markup.
+const blogPostSchema = new Schema({
+  title: { type: String, required: true, trim: true, maxlength: 200 },
+  // Stored lowercase-hyphenated and unique so it doubles as the public URL (/blog/:slug) — chosen
+  // by staff at creation time (auto-suggested from the title) rather than the title itself, so
+  // renaming a post later never breaks a link already shared.
+  slug: { type: String, required: true, unique: true, trim: true, lowercase: true, maxlength: 200 },
+  // Short standalone summary for the listing page and link previews — kept separate from body so
+  // the listing never has to truncate long-form content mid-sentence.
+  excerpt: { type: String, trim: true, maxlength: 300 },
+  body: { type: String, required: true, trim: true, maxlength: 20000 },
+  coverImageUrl: { type: String, trim: true, maxlength: 500 },
+  category: { type: String, enum: ['program_updates', 'exam_tips', 'real_estate_news', 'company_news'], default: 'program_updates' },
+  status: { type: String, enum: ['draft', 'published'], default: 'draft', index: true },
+  publishedAt: Date,
+  authorId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+}, { timestamps: true })
+blogPostSchema.index({ status: 1, publishedAt: -1 })
+
 const emailTemplateSchema = new Schema({
   key: { type: String, enum: ['enrollment_received', 'webinar_registration', 'enrollment_credentials', 'payment_receipt', 'newsletter_confirmation', 'password_reset'], unique: true, required: true },
   subject: { type: String, required: true, trim: true, maxlength: 200 },
@@ -738,4 +759,5 @@ export const ForumPost = models.ForumPost || model('ForumPost', forumPostSchema)
 export const ForumReaction = models.ForumReaction || model('ForumReaction', forumReactionSchema)
 export const Webinar = models.Webinar || model('Webinar', webinarSchema)
 export const WebinarRegistration = models.WebinarRegistration || model('WebinarRegistration', webinarRegistrationSchema)
+export const BlogPost = models.BlogPost || model('BlogPost', blogPostSchema)
 export const EmailTemplate = models.EmailTemplate || model('EmailTemplate', emailTemplateSchema)

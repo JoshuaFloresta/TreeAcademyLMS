@@ -68,6 +68,15 @@ export const config = {
   // one IP legitimately covers many people.
   voucherAttemptLimit: Number(process.env.VOUCHER_ATTEMPT_LIMIT ?? 20),
   demoMode: bool(process.env.DEMO_MODE ?? 'true'),
+  // Optional — powers the Blog page's "Real Estate News" feed (see lib/real-estate-news.js).
+  // Absent by default: the feed section simply doesn't render rather than erroring, same
+  // degrade-gracefully convention as email/PayMongo. Written against GNews's v4 search API
+  // (https://gnews.io) since it has a usable free tier and allows attributed production use as of
+  // this writing — verify current terms/pricing before relying on it, they change over time.
+  newsApi: {
+    apiKey: process.env.NEWS_API_KEY,
+    query: process.env.NEWS_API_QUERY ?? 'real estate Philippines',
+  },
 }
 
 export const isProduction = config.nodeEnv === 'production'
@@ -92,4 +101,5 @@ export function isAllowedOrigin(origin) {
 export const integrations = {
   docusign: Boolean(config.docusign.integrationKey && config.docusign.accountId && config.docusign.templateId),
   paymongo: Boolean(config.paymongo.secretKey),
+  newsApi: Boolean(config.newsApi.apiKey),
 }

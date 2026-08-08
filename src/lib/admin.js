@@ -152,6 +152,17 @@ export const updateWebinar = (id, body) => patch(`/api/admin/webinars/${id}`, bo
 export const deleteWebinar = (id) => del(`/api/admin/webinars/${id}`)
 export const fetchWebinarRegistrations = (id) => get(`/api/admin/webinars/${id}/registrations`)
 
+// Blog
+export const fetchAdminBlogPosts = () => get('/api/admin/blog')
+export const createBlogPost = (body) => post('/api/admin/blog', body)
+export const updateBlogPost = (id, body) => patch(`/api/admin/blog/${id}`, body)
+export const deleteBlogPost = (id) => del(`/api/admin/blog/${id}`)
+export const uploadBlogCover = async (file) => {
+  const body = new FormData()
+  body.append('cover', file)
+  return authedFetch('/api/admin/blog/cover', { method: 'POST', body }).then(json)
+}
+
 // Email automation
 export const fetchEmailTemplates = () => get('/api/admin/email-templates')
 // Sends one template to a real inbox with stand-in data. Blank `to` means the signed-in admin's own

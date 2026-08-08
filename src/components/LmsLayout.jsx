@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Navigate, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useIsFetching, useIsMutating, useQuery } from '@tanstack/react-query'
 import { io } from 'socket.io-client'
-import { BarChart3, Bell, BookOpen, CalendarClock, CalendarDays, ChevronDown, ChevronRight, ClipboardCheck, FileText, Flag, GraduationCap, LayoutDashboard, Library, LifeBuoy, LogOut, Mail, Megaphone, Menu, MessagesSquare, MoreHorizontal, Receipt, ScrollText, Search, Settings, ShieldCheck, Sparkles, Ticket, UserCheck, UserRound, Users, UsersRound, X } from 'lucide-react'
+import { BarChart3, Bell, BookOpen, CalendarClock, CalendarDays, ChevronDown, ChevronRight, ClipboardCheck, FileText, Flag, GraduationCap, LayoutDashboard, Library, LifeBuoy, LogOut, Mail, Megaphone, Menu, MessagesSquare, MoreHorizontal, Newspaper, Receipt, ScrollText, Search, Settings, ShieldCheck, Sparkles, Ticket, UserCheck, UserRound, Users, UsersRound, X } from 'lucide-react'
 import { API_URL, avatarSrc } from '../lib/api.js'
 import { authedFetch, stopImpersonation } from '../lib/auth.js'
 import { fetchCourses, fetchNotifications, fetchPresence, fetchStaffOverview, searchAcademy } from '../lib/lms.js'
@@ -56,6 +56,7 @@ const adminNavItems = [
   { label: 'Support / Helpdesk', icon: LifeBuoy, to: '/admin/support' },
   { label: 'Reports', icon: Flag, to: '/admin/reports' },
   { label: 'Webinars & Special Courses', icon: CalendarClock, to: '/admin/webinars' },
+  { label: 'Blog', icon: Newspaper, to: '/admin/blog' },
   { label: 'Email Automation', icon: Mail, to: '/admin/email-automation' },
 ]
 

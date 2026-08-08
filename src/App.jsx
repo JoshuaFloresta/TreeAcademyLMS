@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Route, Routes } from 'react-router-dom'
 import LmsLayout from './components/LmsLayout.jsx'
 import AuthPage from './pages/AuthPage.jsx'
+import BlogPage from './pages/BlogPage.jsx'
+import BlogPostPage from './pages/BlogPostPage.jsx'
 import CourseApplicationPage from './pages/CourseApplicationPage.jsx'
 import EnrollmentPage from './pages/EnrollmentPage.jsx'
 import LandingPage from './pages/LandingPage.jsx'
@@ -25,6 +27,8 @@ function App() {
 
   return <Routes>
     <Route path="/" element={<LandingPage />} />
+    <Route path="/blog" element={<BlogPage />} />
+    <Route path="/blog/:slug" element={<BlogPostPage />} />
     <Route path="/enroll" element={<EnrollmentPage />} />
     <Route path="/apply/:slug" element={<CourseApplicationPage />} />
     <Route path="/auth" element={<AuthPage onAuthenticated={setUser} />} />

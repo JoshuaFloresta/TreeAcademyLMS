@@ -15,6 +15,7 @@ export default function PublicHeader() {
         <a href="#programs" onClick={() => setOpen(false)}>Programs</a>
         <a href="#how-it-works" onClick={() => setOpen(false)}>How it works</a>
         <a href="#faq" onClick={() => setOpen(false)}>FAQ</a>
+        <Link to="/blog" onClick={() => setOpen(false)}>Blog</Link>
         <Link to="/auth" onClick={() => setOpen(false)}>Sign in</Link>
         <PrimaryButton to="/enroll" className="nav-cta" onClick={() => setOpen(false)}>Get all-access</PrimaryButton>
       </nav>

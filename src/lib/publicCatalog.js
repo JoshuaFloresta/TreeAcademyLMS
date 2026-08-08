@@ -14,3 +14,9 @@ export const registerForWebinar = (id, payload) => fetch(`${API_URL}/api/public/
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(payload),
 }).then(json)
+
+// Blog — staff-authored posts plus the (optional) external real-estate news feed. Both fail soft
+// to an empty list/unconfigured state rather than throwing, since a blog page reads fine empty.
+export const fetchBlogPosts = () => fetch(`${API_URL}/api/public/blog`).then((response) => (response.ok ? response.json() : []))
+export const fetchBlogPost = (slug) => fetch(`${API_URL}/api/public/blog/${slug}`).then(json)
+export const fetchRealEstateNews = () => fetch(`${API_URL}/api/public/real-estate-news`).then((response) => (response.ok ? response.json() : { configured: false, articles: [] }))

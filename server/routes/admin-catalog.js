@@ -2,7 +2,7 @@ import express from 'express'
 import rateLimit from 'express-rate-limit'
 import { z } from 'zod'
 import {
-  Assignment, AuditLog, Course, ContentAsset, Enrollment, EmailTemplate, LearningProgress, Lesson,
+  Assignment, AuditLog, BlogPost, Course, ContentAsset, Enrollment, EmailTemplate, LearningProgress, Lesson,
   Module, Quiz, Report, RolePermission, Submission, SupportTicket, User, Webinar, WebinarRegistration,
 } from '../models.js'
 import { requireAdmin, requireAuth } from '../security.js'
@@ -11,6 +11,7 @@ import { dbState } from '../state.js'
 import { asyncRoute, requireDb } from '../lib/http.js'
 import { saveAudit } from '../lib/audit.js'
 import { bestEffortEmail } from '../lib/accounts.js'
+import { blogCoverUpload, saveBlogCoverUpload } from '../lib/uploads.js'
 import { provisionLearnerAccount, sendPaymentReceiptEmail } from '../lib/enrollment-shared.js'
 
 export const router = express.Router()
@@ -33,6 +34,18 @@ const webinarInput = z.object({
   isPublished: z.boolean().optional(),
 })
 const webinarUpdateInput = webinarInput.partial()
+const slugify = (value) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 200)
+const blogInput = z.object({
+  title: z.string().trim().min(2).max(200),
+  // Optional — auto-derived from the title when omitted, same as course creation elsewhere.
+  slug: z.string().trim().min(2).max(200).optional(),
+  excerpt: z.string().trim().max(300).optional(),
+  body: z.string().trim().min(2).max(20000),
+  coverImageUrl: z.string().trim().max(500).nullable().optional(),
+  category: z.enum(['program_updates', 'exam_tips', 'real_estate_news', 'company_news']).optional(),
+  status: z.enum(['draft', 'published']).optional(),
+})
+const blogUpdateInput = blogInput.partial()
 const emailTemplateUpdateInput = z.object({
   subject: z.string().trim().min(2).max(200).optional(),
   body: z.string().trim().min(2).max(20000).optional(),
@@ -198,6 +211,64 @@ router.get('/api/admin/webinars/:id/registrations', ...adminOnly, asyncRoute(asy
   if (!dbState.ready) return requireDb(res, 'Webinar management')
   const registrations = await WebinarRegistration.find({ webinarId: req.params.id }).sort({ createdAt: -1 }).lean()
   res.json(registrations)
+}))
+
+// --- Blog (staff-authored posts) ------------------------------------------------------------
+// Public reads live in routes/misc.js (GET /api/public/blog, /api/public/blog/:slug) — this file
+// only has the staff-facing write/list side, same split as Webinars above.
+
+router.get('/api/admin/blog', ...adminOnly, asyncRoute(async (_req, res) => {
+  if (!dbState.ready) return requireDb(res, 'Blog')
+  const posts = await BlogPost.find().sort({ createdAt: -1 }).populate('authorId', 'name').lean()
+  res.json(posts.map((post) => ({ ...post, id: String(post._id), authorName: post.authorId?.name ?? '—', authorId: undefined })))
+}))
+
+router.post('/api/admin/blog', ...adminOnly, asyncRoute(async (req, res) => {
+  if (!dbState.ready) return requireDb(res, 'Blog')
+  const values = blogInput.parse(req.body)
+  const slug = slugify(values.slug || values.title)
+  if (!slug) return res.status(422).json({ error: 'Enter a title or slug that can produce a valid URL.' })
+  if (await BlogPost.findOne({ slug })) return res.status(409).json({ error: 'That slug is already used by another post.' })
+  const post = await BlogPost.create({
+    ...values, slug, authorId: req.auth.sub,
+    publishedAt: values.status === 'published' ? new Date() : undefined,
+  })
+  await saveAudit('blog.created', 'BlogPost', post.id, { title: post.title, status: post.status }, req.auth.sub)
+  res.status(201).json(post)
+}))
+
+router.patch('/api/admin/blog/:id', ...adminOnly, asyncRoute(async (req, res) => {
+  if (!dbState.ready) return requireDb(res, 'Blog')
+  const values = blogUpdateInput.parse(req.body)
+  const post = await BlogPost.findById(req.params.id)
+  if (!post) return res.status(404).json({ error: 'Post not found.' })
+  if ('slug' in values) {
+    const slug = slugify(values.slug || post.title)
+    if (!slug) return res.status(422).json({ error: 'Enter a slug that can produce a valid URL.' })
+    if (slug !== post.slug && await BlogPost.findOne({ slug, _id: { $ne: post._id } })) return res.status(409).json({ error: 'That slug is already used by another post.' })
+    values.slug = slug
+  }
+  // First publish stamps the date; re-publishing (or editing while already published) never
+  // bumps it, so a typo fix doesn't bounce a post back to the top of a date-sorted feed.
+  if (values.status === 'published' && post.status !== 'published') values.publishedAt = new Date()
+  Object.assign(post, values)
+  await post.save()
+  await saveAudit('blog.updated', 'BlogPost', post.id, { fields: Object.keys(values) }, req.auth.sub)
+  res.json(post)
+}))
+
+router.delete('/api/admin/blog/:id', ...adminOnly, asyncRoute(async (req, res) => {
+  if (!dbState.ready) return requireDb(res, 'Blog')
+  const post = await BlogPost.findByIdAndDelete(req.params.id)
+  if (!post) return res.status(404).json({ error: 'Post not found.' })
+  await saveAudit('blog.deleted', 'BlogPost', req.params.id, { title: post.title }, req.auth.sub)
+  res.status(204).end()
+}))
+
+router.post('/api/admin/blog/cover', ...adminOnly, blogCoverUpload.single('cover'), asyncRoute(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Choose a JPG, PNG, or WEBP image under 4MB.' })
+  const coverImageUrl = await saveBlogCoverUpload(req.file)
+  res.json({ coverImageUrl })
 }))
 
 router.get('/api/admin/email-templates', ...adminOnly, asyncRoute(async (_req, res) => {
