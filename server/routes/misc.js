@@ -136,14 +136,11 @@ const newsFeedLimiter = rateLimit({
   message: { error: 'Too many requests. Please wait a few minutes and try again.' },
 })
 
-// Best-effort — a provider hiccup on the very first (uncached) request degrades to an empty list
-// rather than a 500, since this section is decorative next to the staff-authored blog above it.
+// Always answers instantly from cache (stale-while-revalidate — see lib/real-estate-news.js) so a
+// slow/flaky upstream never holds up this route, which is decorative next to the staff-authored
+// blog above it.
 router.get('/api/public/real-estate-news', newsFeedLimiter, asyncRoute(async (_req, res) => {
-  try {
-    res.json(await fetchRealEstateNews())
-  } catch {
-    res.json({ configured: true, articles: [] })
-  }
+  res.json(fetchRealEstateNews())
 }))
 
 router.post('/api/newsletter', asyncRoute(async (req, res) => {

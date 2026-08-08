@@ -75,7 +75,18 @@ export const config = {
   // this writing — verify current terms/pricing before relying on it, they change over time.
   newsApi: {
     apiKey: process.env.NEWS_API_KEY,
-    query: process.env.NEWS_API_QUERY ?? 'real estate Philippines',
+    // Comma-separated — a single narrow phrase (e.g. "real estate Philippines" requiring every
+    // word to match) often returns only a handful of articles. Several broader terms, searched
+    // separately and merged, reliably produce a fuller feed. GNews's free tier caps results at 10
+    // per search regardless of `max`, which is the other reason one query alone rarely reaches 12.
+    // A mix of general, local-market, and investment angles — one narrow phrase alone rarely fills
+    // a 12-card grid within GNews's free-tier 30-day recency window (see CACHE_TTL_MS above).
+    queries: list(process.env.NEWS_API_QUERY ?? [
+      'real estate Philippines', 'Philippine property market', 'Philippines housing market',
+      'Metro Manila real estate', 'Philippine real estate investment', 'BGC Makati property',
+      'PRC real estate broker Philippines',
+    ].join(',')),
+    maxArticles: Number(process.env.NEWS_API_MAX ?? 12),
   },
 }
 
