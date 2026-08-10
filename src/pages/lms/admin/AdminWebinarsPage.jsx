@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarClock, Eye, EyeOff, Plus, Trash2, Users } from 'lucide-react'
+import { CalendarClock, Eye, EyeOff, FileText, Plus, Trash2, Upload, Users, X } from 'lucide-react'
 import StatusPill from '../../../components/StatusPill.jsx'
 import { useConfirm } from '../../../lib/confirmContext.js'
 import { useToast } from '../../../lib/toastContext.js'
-import { createWebinar, deleteWebinar, fetchAdminWebinars, fetchWebinarRegistrations, updateWebinar } from '../../../lib/admin.js'
+import { createWebinar, deleteWebinar, fetchAdminWebinars, fetchWebinarRegistrations, updateWebinar, uploadWebinarCover } from '../../../lib/admin.js'
 import Loading from '../../../components/Loading.jsx'
 
 const toLocalInput = (value) => { if (!value) return ''; const date = new Date(value); return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16) }
@@ -15,14 +15,17 @@ function WebinarForm({ webinar, onDone, onCancel }) {
     title: webinar?.title ?? '', description: webinar?.description ?? '',
     startsAt: toLocalInput(webinar?.startsAt) || toLocalInput(new Date()),
     registrationDeadline: toLocalInput(webinar?.registrationDeadline),
-    capacity: webinar?.capacity ?? '',
+    capacity: webinar?.capacity ?? '', coverImageUrl: webinar?.coverImageUrl ?? '', link: webinar?.link ?? '',
   })
   const [error, setError] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef(null)
   const toast = useToast()
   const payload = () => ({
     title: values.title.trim(), description: values.description.trim() || undefined,
     startsAt: values.startsAt, registrationDeadline: values.registrationDeadline || null,
     capacity: values.capacity === '' ? null : Number(values.capacity),
+    coverImageUrl: values.coverImageUrl || null, link: values.link.trim() || null,
   })
   const mutation = useMutation({ mutationFn: () => (webinar ? updateWebinar(webinar.id, payload()) : createWebinar(payload())) })
   const submit = async (event) => {
@@ -31,6 +34,16 @@ function WebinarForm({ webinar, onDone, onCancel }) {
     setError('')
     try { await mutation.mutateAsync(); toast.success(webinar ? 'Session updated.' : 'Session created.'); onDone() } catch (e) { setError(e.message) }
   }
+  const chooseFile = () => fileInputRef.current?.click()
+  const onFileChosen = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    setUploading(true)
+    try { const { coverImageUrl } = await uploadWebinarCover(file); setValues((v) => ({ ...v, coverImageUrl })) }
+    catch (e) { toast.error(e.message) }
+    finally { setUploading(false) }
+  }
   return <form className="admin-webinar-form" onSubmit={submit}>
     <input value={values.title} onChange={(e) => setValues((v) => ({ ...v, title: e.target.value }))} placeholder="Webinar or special course title" aria-label="Title" />
     <textarea value={values.description} onChange={(e) => setValues((v) => ({ ...v, description: e.target.value }))} placeholder="Description (optional)" rows={2} />
@@ -38,6 +51,18 @@ function WebinarForm({ webinar, onDone, onCancel }) {
       <label className="builder-field"><span>Session date</span><input type="datetime-local" value={values.startsAt} onChange={(e) => setValues((v) => ({ ...v, startsAt: e.target.value }))} /></label>
       <label className="builder-field"><span>Registration closes</span><input type="datetime-local" value={values.registrationDeadline} onChange={(e) => setValues((v) => ({ ...v, registrationDeadline: e.target.value }))} placeholder="Defaults to session date" /></label>
       <label className="builder-field"><span>Capacity</span><input type="number" min={1} value={values.capacity} onChange={(e) => setValues((v) => ({ ...v, capacity: e.target.value }))} placeholder="Unlimited" /></label>
+    </div>
+    <div className="builder-lesson-row">
+      <label className="builder-field"><span>Cover image (optional)</span>
+        <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={onFileChosen} />
+        {values.coverImageUrl
+          ? <div className="admin-agreement-row"><FileText size={13} /> Image attached
+            <button type="button" className="admin-count-toggle" title="Replace" onClick={chooseFile}><Upload size={12} /></button>
+            <button type="button" className="admin-count-toggle" title="Remove" onClick={() => setValues((v) => ({ ...v, coverImageUrl: '' }))}><X size={12} /></button>
+          </div>
+          : <button type="button" className="button button-ghost button-compact" onClick={chooseFile} disabled={uploading}><Upload size={13} /> {uploading ? 'Uploading…' : 'Upload image'}</button>}
+      </label>
+      <label className="builder-field"><span>External link (optional)</span><input type="url" value={values.link} onChange={(e) => setValues((v) => ({ ...v, link: e.target.value }))} placeholder="https://zoom.us/j/… or a landing page" /></label>
     </div>
     <div className="builder-lesson-actions"><button className="button button-primary button-compact" disabled={mutation.isPending}>{webinar ? 'Save changes' : 'Create'}</button><button type="button" className="button button-ghost button-compact" onClick={onCancel}>Cancel</button></div>
     {error && <span className="builder-error">{error}</span>}
@@ -85,7 +110,10 @@ export default function AdminWebinarsPage() {
               ? <WebinarForm webinar={webinar} onCancel={() => setEditingId('')} onDone={() => { setEditingId(''); invalidate() }} />
               : <>
                 <div className="admin-webinar-head">
-                  <div><strong>{webinar.title}</strong><small>{formatDate(webinar.startsAt)}</small></div>
+                  <div className="admin-webinar-title-cell">
+                    {webinar.coverImageUrl && <img className="admin-webinar-thumb" src={webinar.coverImageUrl} alt="" />}
+                    <div><strong>{webinar.title}</strong><small>{formatDate(webinar.startsAt)}</small></div>
+                  </div>
                   <div className="admin-status-cell">
                     <StatusPill kind={webinar.isPublished ? 'green' : 'gold'}>{webinar.isPublished ? 'Published' : 'Draft'}</StatusPill>
                     {expired && <StatusPill kind="red">Closed</StatusPill>}
@@ -93,6 +121,7 @@ export default function AdminWebinarsPage() {
                   </div>
                 </div>
                 {webinar.description && <p className="admin-webinar-desc">{webinar.description}</p>}
+                {webinar.link && <a className="admin-webinar-link" href={webinar.link} target="_blank" rel="noreferrer">{webinar.link}</a>}
                 <div className="admin-row-actions">
                   <span className="admin-enroll-cell"><Users size={13} /> {webinar.registeredCount} registered</span>
                   <button className="button button-ghost button-compact" onClick={() => setViewingId(viewingId === webinar.id ? '' : webinar.id)}>{viewingId === webinar.id ? 'Hide list' : 'View registrations'}</button>

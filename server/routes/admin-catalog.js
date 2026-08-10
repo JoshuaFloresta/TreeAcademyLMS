@@ -11,7 +11,8 @@ import { dbState } from '../state.js'
 import { asyncRoute, requireDb } from '../lib/http.js'
 import { saveAudit } from '../lib/audit.js'
 import { bestEffortEmail } from '../lib/accounts.js'
-import { blogCoverUpload, saveBlogCoverUpload } from '../lib/uploads.js'
+import { blogCoverUpload, saveBlogCoverUpload, saveWebinarCoverUpload, webinarCoverUpload } from '../lib/uploads.js'
+import { blankToNull } from '../lib/zod-helpers.js'
 import { provisionLearnerAccount, sendPaymentReceiptEmail } from '../lib/enrollment-shared.js'
 
 export const router = express.Router()
@@ -32,6 +33,10 @@ const webinarInput = z.object({
   registrationDeadline: z.coerce.date().nullable().optional(),
   capacity: z.coerce.number().int().min(1).nullable().optional(),
   isPublished: z.boolean().optional(),
+  coverImageUrl: z.string().trim().max(500).nullable().optional(),
+  // Restricted to http(s): this renders as a button learners are told to click, so it must not be
+  // able to carry a `javascript:`/`data:` URL — same reasoning as CalendarEvent.meetingUrl.
+  link: blankToNull(z.string().trim().max(500).refine((value) => /^https?:\/\//i.test(value), 'Enter a full link starting with https://')),
 })
 const webinarUpdateInput = webinarInput.partial()
 const slugify = (value) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 200)
@@ -179,6 +184,7 @@ router.get('/api/admin/webinars', ...adminOnly, asyncRoute(async (_req, res) => 
     id: webinar._id.toString(), title: webinar.title, description: webinar.description ?? '',
     startsAt: webinar.startsAt, registrationDeadline: webinar.registrationDeadline ?? null,
     capacity: webinar.capacity ?? null, isPublished: webinar.isPublished,
+    coverImageUrl: webinar.coverImageUrl ?? null, link: webinar.link ?? null,
     registeredCount: countById.get(String(webinar._id)) ?? 0, createdAt: webinar.createdAt,
   })))
 }))
@@ -211,6 +217,12 @@ router.get('/api/admin/webinars/:id/registrations', ...adminOnly, asyncRoute(asy
   if (!dbState.ready) return requireDb(res, 'Webinar management')
   const registrations = await WebinarRegistration.find({ webinarId: req.params.id }).sort({ createdAt: -1 }).lean()
   res.json(registrations)
+}))
+
+router.post('/api/admin/webinars/cover', ...adminOnly, webinarCoverUpload.single('cover'), asyncRoute(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Choose a JPG, PNG, or WEBP image under 4MB.' })
+  const coverImageUrl = await saveWebinarCoverUpload(req.file)
+  res.json({ coverImageUrl })
 }))
 
 // --- Blog (staff-authored posts) ------------------------------------------------------------

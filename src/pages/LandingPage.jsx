@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { ArrowDownRight, ArrowRight, CalendarClock, Check, CheckCircle2, ChevronRight, ClipboardCheck, FileSignature, Mail, Minus, MoreHorizontal, Play, Plus, Users, Zap } from 'lucide-react'
+import { ArrowDownRight, ArrowRight, ArrowUpRight, CalendarClock, Check, CheckCircle2, ChevronRight, ClipboardCheck, FileSignature, Mail, Minus, MoreHorizontal, Play, Plus, Users, Zap } from 'lucide-react'
 import PublicHeader from '../components/PublicHeader.jsx'
 import PublicFooter from '../components/PublicFooter.jsx'
 import NewsletterForm from '../components/NewsletterForm.jsx'
@@ -193,14 +193,20 @@ export default function LandingPage() {
             {webinars.map((webinar) => {
               const seatsLeft = webinar.capacity != null ? webinar.capacity - webinar.registeredCount : null
               return <article className={`webinar-card ${seatsLeft != null && seatsLeft <= 5 ? 'filling-fast' : ''}`} key={webinar.id}>
-                <div className="webinar-head">
-                  <StatusPill kind={seatsLeft != null && seatsLeft <= 5 ? 'gold' : 'green'}>{seatsLeft != null && seatsLeft <= 5 ? 'Filling fast' : 'Open'}</StatusPill>
-                  {seatsLeft != null && <span className="webinar-seats"><Users size={13} /> {seatsLeft} seat{seatsLeft === 1 ? '' : 's'} left</span>}
+                {webinar.coverImageUrl && <div className="webinar-card-cover" style={{ backgroundImage: `url(${webinar.coverImageUrl})` }} />}
+                <div className="webinar-card-body">
+                  <div className="webinar-head">
+                    <StatusPill kind={seatsLeft != null && seatsLeft <= 5 ? 'gold' : 'green'}>{seatsLeft != null && seatsLeft <= 5 ? 'Filling fast' : 'Open'}</StatusPill>
+                    {seatsLeft != null && <span className="webinar-seats"><Users size={13} /> {seatsLeft} seat{seatsLeft === 1 ? '' : 's'} left</span>}
+                  </div>
+                  <h3>{webinar.title}</h3>
+                  {webinar.description && <p>{webinar.description}</p>}
+                  <small><CalendarClock size={13} /> {new Date(webinar.startsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} · {webinarDeadlineLabel(webinar)}</small>
+                  <div className="webinar-card-actions">
+                    <button type="button" className="button button-primary" onClick={() => setRegisteringWebinar(webinar)}>Register</button>
+                    {webinar.link && <a className="text-link" href={webinar.link} target="_blank" rel="noreferrer">Learn more <ArrowUpRight size={15} /></a>}
+                  </div>
                 </div>
-                <h3>{webinar.title}</h3>
-                {webinar.description && <p>{webinar.description}</p>}
-                <small><CalendarClock size={13} /> {new Date(webinar.startsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} · {webinarDeadlineLabel(webinar)}</small>
-                <button type="button" className="button button-primary" onClick={() => setRegisteringWebinar(webinar)}>Register</button>
               </article>
             })}
           </div>

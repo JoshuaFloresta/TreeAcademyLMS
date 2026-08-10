@@ -669,6 +669,12 @@ const webinarSchema = new Schema({
   registrationDeadline: Date,
   capacity: { type: Number, min: 1 },
   isPublished: { type: Boolean, default: false },
+  // Optional card cover — same public-image pattern as a blog post's coverImageUrl.
+  coverImageUrl: { type: String, trim: true },
+  // Optional external link (Zoom, a landing page, a Facebook event…) shown on the card as its own
+  // button alongside the built-in Register flow. http(s)-only at the zod layer, same reasoning as
+  // CalendarEvent.meetingUrl — it renders as a link learners are told to click.
+  link: { type: String, trim: true, maxlength: 500 },
   createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
 }, { timestamps: true })
 

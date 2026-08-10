@@ -60,6 +60,14 @@ export const blogCoverUpload = multer({
 })
 export const saveBlogCoverUpload = (file) => savePublicImage('blog', file)
 
+// A webinar's optional card cover — same public-image pattern as avatars/banners/blog covers.
+export const webinarCoverUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 4 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, callback) => callback(null, Boolean(avatarMimeExtension[file.mimetype])),
+})
+export const saveWebinarCoverUpload = (file) => savePublicImage('webinars', file)
+
 // Assignment submission attachments (the "drop box") — private storage, same as certificates.
 export const submissionUpload = multer({
   storage: multer.memoryStorage(),

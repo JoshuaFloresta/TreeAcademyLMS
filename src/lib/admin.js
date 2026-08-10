@@ -151,6 +151,11 @@ export const createWebinar = (body) => post('/api/admin/webinars', body)
 export const updateWebinar = (id, body) => patch(`/api/admin/webinars/${id}`, body)
 export const deleteWebinar = (id) => del(`/api/admin/webinars/${id}`)
 export const fetchWebinarRegistrations = (id) => get(`/api/admin/webinars/${id}/registrations`)
+export const uploadWebinarCover = async (file) => {
+  const body = new FormData()
+  body.append('cover', file)
+  return authedFetch('/api/admin/webinars/cover', { method: 'POST', body }).then(json)
+}
 
 // Blog
 export const fetchAdminBlogPosts = () => get('/api/admin/blog')

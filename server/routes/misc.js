@@ -77,6 +77,7 @@ router.get('/api/public/webinars', asyncRoute(async (_req, res) => {
       id: webinar._id.toString(), title: webinar.title, description: webinar.description ?? '',
       startsAt: webinar.startsAt, registrationDeadline: webinar.registrationDeadline ?? null,
       capacity: webinar.capacity ?? null, registeredCount: countById.get(String(webinar._id)) ?? 0,
+      coverImageUrl: webinar.coverImageUrl ?? null, link: webinar.link ?? null,
     }))
     .filter((webinar) => webinar.capacity == null || webinar.registeredCount < webinar.capacity))
 }))
