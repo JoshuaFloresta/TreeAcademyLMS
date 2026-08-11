@@ -728,7 +728,12 @@ a.task-row:hover { background: #f7f8f5; }
 /* Groups Full price / Upfront fee / Pay-in-full discount into one visually distinct, clearly
    labeled box per course card — the answer to "where do I edit this pathway's payment plan?" */
 .admin-course-pricing-group { display: grid; gap: 12px; padding: 14px; background: #f8f9f6; border: 1px solid #e7e9e3; border-radius: 8px; }
+.admin-course-pricing-group-head { display: flex; align-items: center; justify-content: space-between; }
 .admin-course-group-label { color: var(--forest); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
+/* Collapsed state — a single-line summary button, so a card doesn't default to showing 3 editable
+   fields per pathway before an admin has asked to edit anything. */
+.admin-course-pricing-toggle { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; height: auto; padding: 10px 12px; text-align: left; }
+.admin-course-pricing-toggle small { color: #7a8079; font-size: 10px; font-weight: 600; }
 
 /* Admin — global pay-in-full discount type / installment-plan settings (not per-course; each
    pathway's own discount amount lives on its course card, in .admin-course-pricing-group above) */

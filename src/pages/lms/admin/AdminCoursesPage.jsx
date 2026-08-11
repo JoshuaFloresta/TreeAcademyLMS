@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, ArchiveRestore, Check, Eye, EyeOff, FileText, Link2, Pencil, Plus, Save, Trash2, Upload, Users, X } from 'lucide-react'
+import { Archive, ArchiveRestore, Check, ChevronUp, Eye, EyeOff, FileText, Link2, Pencil, Plus, Save, Trash2, Upload, Users, X } from 'lucide-react'
 import CourseBanner from '../../../components/lms/CourseBanner.jsx'
 import StatusPill from '../../../components/StatusPill.jsx'
 import Modal from '../../../components/Modal.jsx'
@@ -291,12 +291,24 @@ function CourseTitle({ course, slugLocked, onRenamed }) {
   </div>
 }
 
+// Collapsed by default — a plain "Edit pricing" button showing a one-line summary, matching how
+// "New course" reveals its form only on click. Expanded state resets per mount only (not persisted
+// across a query refetch), which is fine since a save doesn't remount the card.
+function PricingSummaryToggle({ totalKey, upfrontKey, discountKey, pricing, onOpen }) {
+  const discountValue = discountKey ? Number(pricing?.[discountKey] ?? 0) : 0
+  const discountLabel = discountValue > 0 ? ` · ${pricing?.payInFullDiscountType === 'fixed' ? peso(discountValue) : `${discountValue}%`} off in full` : ''
+  return <button type="button" className="button button-ghost button-compact admin-course-pricing-toggle" onClick={onOpen}>
+    <Pencil size={13} /> Edit pricing <small>{peso(pricing?.[totalKey])} · {peso(pricing?.[upfrontKey])} upfront{discountLabel}</small>
+  </button>
+}
+
 function CourseCard({ course, index, pricing, onAct, onUnpublish, onArchive, onReview, onRemove, onSavePrice, onRenamed }) {
   const state = courseState(course)
   const approval = approvalState[course.approvalStatus]
   const totalKey = totalKeyBySlug[course.slug]
   const upfrontKey = upfrontKeyBySlug[course.slug]
   const discountKey = discountKeyBySlug[course.slug]
+  const [pricingOpen, setPricingOpen] = useState(false)
   return <article className="catalog-card admin-course-card">
     <CourseBanner course={course} index={index} />
     <div>
@@ -308,14 +320,19 @@ function CourseCard({ course, index, pricing, onAct, onUnpublish, onArchive, onR
       </div>
       <div className="admin-status-cell"><StatusPill kind={state.kind}>{state.label}</StatusPill>{approval && <StatusPill kind={approval.kind}>{approval.label}</StatusPill>}</div>
 
-      {totalKey && <div className="admin-course-pricing-group">
-        <span className="admin-course-group-label">Pricing &amp; payment plan</span>
-        <div className="admin-course-price-pair">
-          <PriceField priceKey={totalKey} label="Full enrollment price (PHP)" pricing={pricing} onSave={onSavePrice} />
-          <PriceField priceKey={upfrontKey} label="Upfront fee (PHP)" pricing={pricing} onSave={onSavePrice} />
+      {totalKey && (pricingOpen
+        ? <div className="admin-course-pricing-group">
+          <div className="admin-course-pricing-group-head">
+            <span className="admin-course-group-label">Pricing &amp; payment plan</span>
+            <button type="button" className="admin-count-toggle" title="Collapse" onClick={() => setPricingOpen(false)}><ChevronUp size={13} /></button>
+          </div>
+          <div className="admin-course-price-pair">
+            <PriceField priceKey={totalKey} label="Full enrollment price" pricing={pricing} onSave={onSavePrice} />
+            <PriceField priceKey={upfrontKey} label="Upfront fee" pricing={pricing} onSave={onSavePrice} />
+          </div>
+          {discountKey && <DiscountField priceKey={discountKey} pricing={pricing} onSave={onSavePrice} />}
         </div>
-        {discountKey && <DiscountField priceKey={discountKey} pricing={pricing} onSave={onSavePrice} />}
-      </div>}
+        : <PricingSummaryToggle totalKey={totalKey} upfrontKey={upfrontKey} discountKey={discountKey} pricing={pricing} onOpen={() => setPricingOpen(true)} />)}
       {!totalKey && <AgreementSection course={course} />}
       <AvailabilityFields course={course} onSave={(updates) => onAct(course, updates, 'Availability updated.')} />
 

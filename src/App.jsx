@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Route, Routes } from 'react-router-dom'
+import { useCallback, useEffect, useState } from 'react'
+import { Route, Routes, useNavigate } from 'react-router-dom'
 import LmsLayout from './components/LmsLayout.jsx'
 import AuthPage from './pages/AuthPage.jsx'
 import BlogPage from './pages/BlogPage.jsx'
@@ -8,11 +8,15 @@ import CourseApplicationPage from './pages/CourseApplicationPage.jsx'
 import EnrollmentPage from './pages/EnrollmentPage.jsx'
 import LandingPage from './pages/LandingPage.jsx'
 import { getCurrentUser, logout, refreshSession } from './lib/auth.js'
+import { useIdleLogout } from './lib/useIdleLogout.js'
+import { useToast } from './lib/toastContext.js'
 import './App.css'
 
 function App() {
   const [user, setUser] = useState(getCurrentUser)
   const [authReady, setAuthReady] = useState(false)
+  const navigate = useNavigate()
+  const toast = useToast()
 
   // Restore the session from the httpOnly refresh cookie on first load, since the in-memory
   // access token in lib/auth.js does not survive a page refresh.
@@ -24,6 +28,14 @@ function App() {
 
   const signOut = async () => { await logout(); setUser(null) }
   const updateUser = (patch) => setUser((current) => (current ? { ...current, ...patch } : current))
+
+  const handleIdle = useCallback(async () => {
+    await logout()
+    setUser(null)
+    navigate('/auth')
+    toast.info('You were signed out after 30 minutes of inactivity.')
+  }, [navigate, toast])
+  useIdleLogout(user, handleIdle)
 
   return <Routes>
     <Route path="/" element={<LandingPage />} />
