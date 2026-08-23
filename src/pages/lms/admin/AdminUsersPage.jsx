@@ -236,7 +236,7 @@ function UserDetail({ user, enrollments, onChanged, onBillingChanged }) {
 
     {user.role === 'learner' && <section className="admin-detail-billing">
       <h4>Enrollment &amp; billing</h4>
-      {!enrollments.length ? <p className="operations-note">No enrollment found for this email.</p>
+      {!enrollments.length ? <p className="operations-note">No paid enrollment on record for this email — an admission form was never completed with payment, or is still in progress.</p>
         : enrollments.map((row) => <div className="admin-billing-row" key={enrollmentRowId(row)}>
           <div className="admin-billing-row-head">
             <span><strong>{pathwayLabel[row.applicant?.pathway] ?? row.applicant?.pathway}</strong><StatusPill kind={enrollmentPillKind(row.status)}>{enrollmentStatusLabel[row.status] ?? row.status}</StatusPill></span>
@@ -279,9 +279,14 @@ export default function AdminUsersPage({ user }) {
   // Documents/payments/balance now live here per learner (see UserDetail's billing section) —
   // fetched in bulk once rather than per row, so expanding "Manage" never costs its own round trip.
   const { data: enrollments = [] } = useQuery({ queryKey: ['admin-enrollments', false], queryFn: () => fetchAdminEnrollments({}) })
+  // A learner can restart the admission form and land several Enrollment rows on the same email —
+  // most never get past documents_pending/payment_pending. Only the copy that actually collected
+  // money (amountPaid from the Payment ledger, same source of truth the rest of this page uses) is
+  // a real enrollment worth showing here; the rest are abandoned duplicates, not a second program.
   const enrollmentsByEmail = useMemo(() => {
     const map = new Map()
     for (const row of enrollments) {
+      if (Number(row.amountPaid ?? 0) <= 0) continue
       const email = row.applicant?.email?.toLowerCase()
       if (!email) continue
       if (!map.has(email)) map.set(email, [])
@@ -377,7 +382,7 @@ export default function AdminUsersPage({ user }) {
       <select value={filters.role} onChange={(e) => setFilter('role', e.target.value)}><option value="">All roles</option>{Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
       <select value={filters.status} onChange={(e) => setFilter('status', e.target.value)}><option value="">All statuses</option>{['active', 'inactive', 'suspended', 'invited'].map((value) => <option key={value} value={value}>{value}</option>)}</select>
       <select value={filters.course} onChange={(e) => setFilter('course', e.target.value)}><option value="">All courses</option>{courses.map((course) => <option key={course.id} value={course.id}>{course.title}</option>)}</select>
-      <select value={filters.billing} onChange={(e) => setFilter('billing', e.target.value)}><option value="">All billing</option><option value="due">Balance due</option><option value="settled">Fully settled</option><option value="none">No enrollment</option></select>
+      <select value={filters.billing} onChange={(e) => setFilter('billing', e.target.value)}><option value="">All billing</option><option value="due">Balance due</option><option value="settled">Fully settled</option><option value="none">No paid enrollment</option></select>
       <input placeholder="Search name, email, username…" value={filters.search} onChange={(e) => setFilter('search', e.target.value)} />
     </div>
 
