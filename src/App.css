@@ -1432,10 +1432,13 @@ button.forum-stat.active svg { fill: currentColor; }
 /* User Management — Enrollment & billing (moved in from Enrollment Management: documents, payment
    history, balance/due-date, one card per enrollment this email holds). */
 .admin-detail-billing { margin-top: 22px; }
+.admin-detail-billing-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; margin-bottom: 13px; }
+.admin-detail-billing-head h4 { margin: 0; }
 .admin-billing-row { display: grid; gap: 9px; padding: 14px 16px; margin-bottom: 10px; background: #fff; border: 1px solid #e1e5df; border-radius: 8px; }
 .admin-billing-row:last-of-type { margin-bottom: 0; }
 .admin-billing-row-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
 .admin-billing-row-head > span:first-child { display: inline-flex; gap: 8px; align-items: center; color: var(--forest); font-size: 12px; font-weight: 700; }
+.admin-billing-manual-tag { padding: 2px 7px; color: #6a726a; background: #eef1ea; border-radius: 9px; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
 .admin-billing-figures { color: #6a726a; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .admin-billing-balance { color: #a17e40; font-weight: 800; }
 .admin-billing-due-note { margin: 0; padding: 8px 11px; color: #7a5d20; background: #fdf6e5; border: 1px solid #ecdcb4; border-radius: 6px; font-size: 11px; font-weight: 600; }

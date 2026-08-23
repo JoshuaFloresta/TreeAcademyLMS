@@ -9,6 +9,7 @@ import PasswordInput from '../../../components/PasswordInput.jsx'
 import EnrollmentDocumentLinks from '../../../components/EnrollmentDocumentLinks.jsx'
 import BillingDetailModal from '../../../components/admin/BillingDetailModal.jsx'
 import BalanceDueModal from '../../../components/admin/BalanceDueModal.jsx'
+import ManualBillingModal from '../../../components/admin/ManualBillingModal.jsx'
 import { avatarSrc } from '../../../lib/api.js'
 import { startImpersonation } from '../../../lib/auth.js'
 import { useConfirm } from '../../../lib/confirmContext.js'
@@ -103,6 +104,7 @@ function UserDetail({ user, enrollments, onChanged, onBillingChanged }) {
   const queryClient = useQueryClient()
   const [billingRow, setBillingRow] = useState(null)
   const [dueDateRow, setDueDateRow] = useState(null)
+  const [manualBillingOpen, setManualBillingOpen] = useState(false)
   const toast = useToast()
   const confirm = useConfirm()
   const avatarFileRef = useRef(null)
@@ -235,14 +237,20 @@ function UserDetail({ user, enrollments, onChanged, onBillingChanged }) {
     </section>
 
     {user.role === 'learner' && <section className="admin-detail-billing">
-      <h4>Enrollment &amp; billing</h4>
+      <div className="admin-detail-billing-head">
+        <h4>Enrollment &amp; billing</h4>
+        {/* For someone added directly via Create user / CSV import rather than the public
+            enrollment flow — creates a billing record with no admission form or agreement behind
+            it, so payments and a balance can still be tracked against them. */}
+        <button type="button" className="button button-ghost button-compact" onClick={() => setManualBillingOpen(true)}><UserPlus size={13} /> Bill manually</button>
+      </div>
       {!enrollments.length ? <p className="operations-note">No paid enrollment on record for this email — an admission form was never completed with payment, or is still in progress.</p>
         : enrollments.map((row) => <div className="admin-billing-row" key={enrollmentRowId(row)}>
           <div className="admin-billing-row-head">
-            <span><strong>{pathwayLabel[row.applicant?.pathway] ?? row.applicant?.pathway}</strong><StatusPill kind={enrollmentPillKind(row.status)}>{enrollmentStatusLabel[row.status] ?? row.status}</StatusPill></span>
+            <span><strong>{pathwayLabel[row.applicant?.pathway] ?? row.applicant?.pathway}</strong><StatusPill kind={enrollmentPillKind(row.status)}>{enrollmentStatusLabel[row.status] ?? row.status}</StatusPill>{row.origin === 'manual' && <small className="admin-billing-manual-tag">Manually billed</small>}</span>
             <span className="admin-billing-figures">{peso(row.amount)} total · {peso(row.amountPaid)} paid{Number(row.balance ?? 0) > 0 && <b className="admin-billing-balance"> · {peso(row.balance)} due</b>}</span>
           </div>
-          <EnrollmentDocumentLinks enrollmentId={enrollmentRowId(row)} applicantName={user.name} documents={row.documents} />
+          <EnrollmentDocumentLinks enrollmentId={enrollmentRowId(row)} applicantName={user.name} documents={row.documents} emptyLabel={row.origin === 'manual' ? null : undefined} />
           {row.status === 'approved' && Number(row.balance ?? 0) > 0 && (row.payment?.balanceDueDate || row.payment?.balanceNote) && <p className="admin-billing-due-note">
             {row.payment?.balanceDueDate && <>Due {formatDueDate(row.payment.balanceDueDate)}. </>}{row.payment?.balanceNote}
           </p>}
@@ -253,6 +261,7 @@ function UserDetail({ user, enrollments, onChanged, onBillingChanged }) {
         </div>)}
       {billingRow && <BillingDetailModal key={enrollmentRowId(billingRow)} enrollmentId={enrollmentRowId(billingRow)} name={user.name} email={user.email} pathwayTitle={pathwayLabel[billingRow.applicant?.pathway] ?? billingRow.applicant?.pathway} onClose={() => setBillingRow(null)} onChanged={onBillingChanged} />}
       {dueDateRow && <BalanceDueModal key={enrollmentRowId(dueDateRow)} row={dueDateRow} onClose={() => setDueDateRow(null)} onSaved={() => { setDueDateRow(null); onBillingChanged() }} />}
+      <ManualBillingModal open={manualBillingOpen} learnerId={user.id} learnerName={user.name} onClose={() => setManualBillingOpen(false)} onCreated={() => { setManualBillingOpen(false); onBillingChanged() }} />
     </section>}
   </div>
 }
@@ -283,10 +292,13 @@ export default function AdminUsersPage({ user }) {
   // most never get past documents_pending/payment_pending. Only the copy that actually collected
   // money (amountPaid from the Payment ledger, same source of truth the rest of this page uses) is
   // a real enrollment worth showing here; the rest are abandoned duplicates, not a second program.
+  // origin:'manual' is exempt from that check — it's a billing record staff created on purpose for
+  // someone onboarded outside the public flow, so it belongs here even before its first payment is
+  // recorded (otherwise a freshly created record would vanish before anyone could pay against it).
   const enrollmentsByEmail = useMemo(() => {
     const map = new Map()
     for (const row of enrollments) {
-      if (Number(row.amountPaid ?? 0) <= 0) continue
+      if (Number(row.amountPaid ?? 0) <= 0 && row.origin !== 'manual') continue
       const email = row.applicant?.email?.toLowerCase()
       if (!email) continue
       if (!map.has(email)) map.set(email, [])

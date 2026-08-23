@@ -227,6 +227,16 @@ how `AdminUsersPage` finds a learner's enrollment(s) (`Enrollment` has no `learn
 joins a `User` by `applicant.email`). `AdminEnrollmentsPage` ("Enrollment Management") stays a lean
 approve/reject/refund/archive queue — it no longer surfaces documents, payments, or balance.
 
+A learner who restarts the admission form leaves behind one `Enrollment` row per attempt on the
+same email; only the copy with `amountPaid > 0` (from the Payment ledger) is a real enrollment, so
+`AdminUsersPage` filters the rest out as abandoned duplicates rather than listing every attempt. The
+one exception is `origin: 'manual'` — a billing record staff create via "Bill manually" (Enrollment
+& billing → `ManualBillingModal`, `POST /api/staff/billing/enrollments`) for someone added directly
+through Create user / CSV import instead of the public flow. It has no admission form or signed
+agreement behind it and starts at `amountPaid: 0`, so it's exempted from that filter — otherwise a
+freshly created record would disappear before anyone could record a payment against it. Blocked with
+409 if that email already has an (any-origin) enrollment for the same pathway.
+
 ## Submissions review (instructors)
 
 The old Gradebook grid is now **Submissions** (`/submissions`; `/gradebook` redirects, since
