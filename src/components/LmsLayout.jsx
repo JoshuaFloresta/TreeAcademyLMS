@@ -166,6 +166,7 @@ export default function LmsLayout({ user, authReady, onSignOut, onUserUpdate }) 
   const [onlinePanelOpen, setOnlinePanelOpen] = useState(false)
   const [adminNavExpanded, setAdminNavExpanded] = useState(false)
   const location = useLocation()
+  const [prevAdminPathname, setPrevAdminPathname] = useState(location.pathname)
   const navigate = useNavigate()
   const page = location.pathname.split('/')[1] || 'dashboard'
   const title = pageTitles[page] ?? getLmsPage(location.pathname)?.label ?? `${page.charAt(0).toUpperCase()}${page.slice(1)}`
@@ -174,10 +175,18 @@ export default function LmsLayout({ user, authReady, onSignOut, onUserUpdate }) 
   // Learner access is pathway-scoped (see learnerVisibleCourseFilter) — the course(s) /api/courses
   // returns for a learner *are* the program(s) they're enrolled in, so no separate lookup is needed.
   const { data: learnerCourses = [] } = useQuery({ queryKey: ['courses'], queryFn: fetchCourses, enabled: user?.role === 'learner' })
-  // If the active page lives behind the "More" toggle, keep it expanded so the highlighted
-  // link stays visible instead of hiding on navigation.
-  const onSecondaryAdminPage = adminNavItems.some((item) => !item.primary && (item.to === location.pathname || location.pathname.startsWith(`${item.to}/`)))
-  const showAllAdminItems = adminNavExpanded || onSecondaryAdminPage
+  // If navigation lands directly on a page that lives behind the "More" toggle (a deep link,
+  // browser back/forward, the header search), auto-expand once so the highlighted link isn't
+  // hidden. Adjusted here during render (React's documented pattern for "state derived from a prop
+  // change") rather than in an effect, and only when the pathname actually changed — folding this
+  // into the render-time boolean below as `adminNavExpanded || onSecondaryAdminPage` used to mean
+  // the section could never be collapsed by the button while still sitting on that page, since the
+  // OR forced it back open on every render regardless of what the button had just set.
+  if (location.pathname !== prevAdminPathname) {
+    setPrevAdminPathname(location.pathname)
+    if (adminNavItems.some((item) => !item.primary && (item.to === location.pathname || location.pathname.startsWith(`${item.to}/`)))) setAdminNavExpanded(true)
+  }
+  const showAllAdminItems = adminNavExpanded
 
   if (!authReady) return <div className="lms-auth-loading"><span className="spinner" /></div>
   if (!user) return <Navigate to="/auth" replace />

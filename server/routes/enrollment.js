@@ -6,7 +6,7 @@ import { config, isProduction } from '../config.js'
 import { catalog } from '../catalog.js'
 import { Course, CourseEnrollment, Enrollment, Voucher } from '../models.js'
 import { requireAuth, requireStaff } from '../security.js'
-import { sendEnrollmentDocumentsEmail, sendTemplatedEmail } from '../email.js'
+import { sendTemplatedEmail } from '../email.js'
 import { createApplicationPdf, createFilledAgreement, createFilledDocument, createFilledDocumentBytes } from '../enrollment-documents.js'
 import { getFile } from '../storage.js'
 import { dbState, memory } from '../state.js'
@@ -21,7 +21,7 @@ import {
   voucherRejection, voucherTargetsUpfront,
 } from '../lib/vouchers.js'
 import {
-  courseForPathway, findEnrollment, markEnrollmentPaid, pathwayDocumentType, paymentReturnUrl,
+  courseForPathway, findEnrollment, markEnrollmentPaid, notifyStaffOfNewEnrollee, pathwayDocumentType, paymentReturnUrl,
   provisionCourseEnrollmentAccess, provisionLearnerAccount, publicEnrollment, sendPaymentReceiptEmail,
 } from '../lib/enrollment-shared.js'
 import { ENROLLMENT_DOCUMENT_TYPES, enrollmentDocuments } from '../lib/enrollment-doc-meta.js'
@@ -177,15 +177,8 @@ router.post('/api/enrollments/:id/documents/:type', asyncRoute(async (req, res) 
   enrollment.status = 'payment_pending'
   if (dbState.ready) await enrollment.save()
 
-  await bestEffortEmail(sendEnrollmentDocumentsEmail({
-    enrollmentId: req.params.id,
-    applicant: enrollment.applicant,
-    documentKeys: [
-      { key: enrollment.intake.pdfKey, filename: `PASS-FIRST-Application-${req.params.id}.pdf` },
-      { key: pdfKey, filename: type === 'realex-reblex' ? `REALEX-REBLEX-${req.params.id}.pdf` : `RECLEX-${req.params.id}.pdf` },
-    ],
-  }), 'enrollment documents notification')
-
+  // Staff are not notified here — signing the agreement doesn't mean the applicant will actually
+  // pay. See notifyStaffOfNewEnrollee, which fires only once payment is confirmed.
   await saveAudit(`enrollment.document_${type}_submitted`, 'Enrollment', req.params.id)
   res.json({ ...publicEnrollment(enrollment), nextStep: 'payment', documentsComplete: true })
 }))
@@ -429,6 +422,11 @@ router.get('/api/staff/enrollments', requireAuth, requireStaff, asyncRoute(async
   // Archived enrollments (abandoned/incomplete signups an admin tidied away) are hidden unless
   // explicitly requested with ?archived=only (just archived) or ?archived=all (everything).
   const scope = req.query.archived
+  // ?email= scopes this to one applicant — used by User Management to pull a single learner's
+  // enrollment(s) (documents, payments, balance) without fetching the whole academy's, since
+  // Enrollment has no learnerId and is only ever joined to a User by this address (see
+  // provisionLearnerAccount / GET /api/users/:id).
+  const email = typeof req.query.email === 'string' ? req.query.email.trim().toLowerCase() : ''
   // The stored row carries the whole intake form and the PDF storage keys. The list only renders a
   // summary, so send a summary — raw applicant answers and file keys have no business in a payload
   // this widely fetched. Staff read the full form by opening the document itself.
@@ -445,11 +443,13 @@ router.get('/api/staff/enrollments', requireAuth, requireStaff, asyncRoute(async
   })
   if (dbState.ready) {
     const filter = scope === 'all' ? {} : scope === 'only' ? { archivedAt: { $ne: null } } : { archivedAt: null }
+    if (email) filter['applicant.email'] = email
     const rows = await Enrollment.find(filter).sort({ createdAt: -1 }).lean()
     const paid = await paidByEnrollment(rows.map((row) => row._id))
     return res.json(rows.map((row) => summarise(row, paid.get(String(row._id)) ?? 0)))
   }
   const rows = [...memory.enrollments.values()].reverse()
+    .filter((row) => !email || row.applicant?.email?.toLowerCase() === email)
   // Explicit arrow, not `.map(summarise)` — map passes the index as the second argument, which would
   // land in `paid` and report the row's position as the amount collected.
   res.json((scope === 'all' ? rows : rows.filter((row) => (scope === 'only' ? row.archivedAt : !row.archivedAt))).map((row) => summarise(row, 0)))
@@ -480,7 +480,11 @@ router.post('/api/staff/enrollments/:id/decision', requireAuth, requireStaff, as
   enrollment.decisionReason = body.reason
   enrollment.reviewedAt = new Date()
   let invitation = null
-  if (body.decision === 'approved') { invitation = await provisionLearnerAccount(enrollment); await bestEffortEmail(sendPaymentReceiptEmail(enrollment, invitation?.setupUrl), 'payment_receipt email') }
+  if (body.decision === 'approved') {
+    invitation = await provisionLearnerAccount(enrollment)
+    await bestEffortEmail(sendPaymentReceiptEmail(enrollment, invitation?.setupUrl), 'payment_receipt email')
+    await notifyStaffOfNewEnrollee(enrollment)
+  }
   if (dbState.ready) await enrollment.save()
   await saveAudit(`enrollment.${body.decision}`, 'Enrollment', req.params.id, { reason: body.reason }, req.auth.sub)
   res.json({ ...publicEnrollment(enrollment), invitation })

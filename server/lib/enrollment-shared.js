@@ -1,5 +1,5 @@
 import { config } from '../config.js'
-import { sendTemplatedEmail } from '../email.js'
+import { sendEnrollmentDocumentsEmail, sendTemplatedEmail } from '../email.js'
 import { applyIntakeToProfile } from '../profile.js'
 import { Course, Enrollment, LearningProgress, Payment, User } from '../models.js'
 import { dbState, memory } from '../state.js'
@@ -162,6 +162,30 @@ async function recordPayment({ enrollment, amount, method, kind, receivedAt, ref
   }
 }
 
+// Staff used to be emailed the moment an applicant signed the agreement — before they'd paid a
+// peso, and often before they ever would. Most of that traffic was noise: abandoned checkouts,
+// people still deciding. This fires instead only once an enrollment is genuinely paid and the
+// learner account provisioned — from markEnrollmentPaid (the webhook / dev-mark-paid path) and the
+// manual staff-decision fallback, the only two places an enrollment actually becomes "enrolled".
+// Best-effort and silent on missing paperwork: an enrollment can reach here without a signed
+// document on file only in an anomalous state a human is already looking at via the decision route.
+export async function notifyStaffOfNewEnrollee(enrollment) {
+  const type = pathwayDocumentType(enrollment.applicant.pathway)
+  const documentName = type === 'realex-reblex' ? 'realexReblex' : 'reclex'
+  const pdfKey = enrollment.documents?.[documentName]?.pdfKey
+  const intakeKey = enrollment.intake?.pdfKey
+  if (!pdfKey || !intakeKey) return
+  const enrollmentId = enrollment._id?.toString() ?? enrollment.id
+  await bestEffortEmail(sendEnrollmentDocumentsEmail({
+    enrollmentId,
+    applicant: enrollment.applicant,
+    documentKeys: [
+      { key: intakeKey, filename: `PASS-FIRST-Application-${enrollmentId}.pdf` },
+      { key: pdfKey, filename: type === 'realex-reblex' ? `REALEX-REBLEX-${enrollmentId}.pdf` : `RECLEX-${enrollmentId}.pdf` },
+    ],
+  }), 'enrollment documents notification')
+}
+
 export async function markEnrollmentPaid(enrollment, paymentPatch) {
   const wasAwaitingPayment = ['payment_pending', 'contract_signed'].includes(enrollment.status)
   if (wasAwaitingPayment) {
@@ -221,6 +245,7 @@ export async function markEnrollmentPaid(enrollment, paymentPatch) {
   const learner = dbState.ready ? await User.findOne({ email: enrollment.applicant.email }).select('_id') : null
   await claimVoucherUse(enrollment, learner)
   await bestEffortEmail(sendPaymentReceiptEmail(enrollment, invitation?.setupUrl), 'payment_receipt email')
+  await notifyStaffOfNewEnrollee(enrollment)
   return invitation
 }
 

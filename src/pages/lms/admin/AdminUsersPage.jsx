@@ -1,18 +1,21 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { BookOpen, Camera, ChevronDown, Download, IdCard, KeyRound, LogIn, RefreshCw, Save, Trash2, Upload, UserPlus } from 'lucide-react'
+import { BookOpen, CalendarClock, Camera, ChevronDown, Download, IdCard, KeyRound, LogIn, Receipt, RefreshCw, Save, Trash2, Upload, UserPlus, Wallet } from 'lucide-react'
 import StatusPill from '../../../components/StatusPill.jsx'
 import Modal from '../../../components/Modal.jsx'
 import ImageCropModal from '../../../components/ImageCropModal.jsx'
 import PasswordInput from '../../../components/PasswordInput.jsx'
+import EnrollmentDocumentLinks from '../../../components/EnrollmentDocumentLinks.jsx'
+import BillingDetailModal from '../../../components/admin/BillingDetailModal.jsx'
+import BalanceDueModal from '../../../components/admin/BalanceDueModal.jsx'
 import { avatarSrc } from '../../../lib/api.js'
 import { startImpersonation } from '../../../lib/auth.js'
 import { useConfirm } from '../../../lib/confirmContext.js'
 import { useToast } from '../../../lib/toastContext.js'
 import Loading from '../../../components/Loading.jsx'
 import {
-  bulkEnrollUsers, bulkUserAction, createAdminUser, deleteAdminUser, enrollUserCourse, fetchAdminCourses,
+  bulkEnrollUsers, bulkUserAction, createAdminUser, deleteAdminUser, enrollUserCourse, fetchAdminCourses, fetchAdminEnrollments,
   fetchAdminUsers, fetchInstructorTeachingCourses, fetchUserCourses, importUsers, resetAdminUserPassword, saveInstructorTeachingCourses, unenrollUserCourse, updateAdminUser, uploadAdminUserAvatar,
 } from '../../../lib/admin.js'
 
@@ -20,6 +23,28 @@ const roleLabels = { learner: 'Learner', instructor: 'Instructor', admin: 'Admin
 const statuses = ['active', 'inactive', 'suspended']
 const statusKind = { active: 'green', invited: 'gold', inactive: 'gold', suspended: 'red' }
 const formatDate = (value) => (value ? new Date(value).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' }) : 'Never')
+
+// Enrollment paperwork and billing moved here from Enrollment Management (which kept only the
+// approve/reject/refund workflow) — a learner's documents, payment history, and balance are now
+// managed alongside the rest of their account in one place.
+const pathwayLabel = { broker: 'Broker Review', consultant: 'Consultant Review', appraiser: 'Appraiser Review' }
+const enrollmentStatusLabel = {
+  application_pending: 'Application started', documents_pending: 'Awaiting signature', documents_complete: 'Agreement signed',
+  payment_pending: 'Awaiting payment', contract_pending: 'Awaiting signature', contract_signed: 'Agreement signed',
+  paid_approval_pending: 'Paid · awaiting approval', approved: 'Approved', rejected: 'Rejected', refunded: 'Refunded',
+}
+const enrollmentPillKind = (status) => (status === 'approved' ? 'green' : status === 'rejected' || status === 'refunded' ? 'red' : status === 'paid_approval_pending' ? 'gold' : 'green')
+const enrollmentRowId = (row) => row._id ?? row.id
+const peso = (value) => `₱${Number(value ?? 0).toLocaleString('en-PH')}`
+const formatDueDate = (value) => (value ? new Date(value).toLocaleDateString('en-PH', { dateStyle: 'medium' }) : '')
+// Drives both the toolbar filter and the compact per-row badge — one learner can hold several
+// enrollments (a second pathway), so this rolls them up into the single worst-case state a glance
+// at the table needs: any balance outstanding beats "settled", which beats "no enrollment on file".
+const billingSummary = (rows) => {
+  if (!rows.length) return { state: 'none', balance: 0 }
+  const balance = rows.reduce((sum, row) => sum + Number(row.balance ?? 0), 0)
+  return { state: balance > 0 ? 'due' : 'settled', balance }
+}
 
 function parseCsv(text) {
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
@@ -71,9 +96,13 @@ function ResetPasswordModal({ user, onClose, onDone }) {
   </Modal>
 }
 
-// Per-user drawer: full profile edit, status, security, impersonation, delete, and course enrollment.
-function UserDetail({ user, onChanged }) {
+// Per-user drawer: full profile edit, status, security, impersonation, delete, course enrollment,
+// and (for learners) enrollment paperwork and billing. `enrollments` is this learner's slice of the
+// page-level bulk fetch (see AdminUsersPage) — matched by email, since Enrollment has no learnerId.
+function UserDetail({ user, enrollments, onChanged, onBillingChanged }) {
   const queryClient = useQueryClient()
+  const [billingRow, setBillingRow] = useState(null)
+  const [dueDateRow, setDueDateRow] = useState(null)
   const toast = useToast()
   const confirm = useConfirm()
   const avatarFileRef = useRef(null)
@@ -204,6 +233,27 @@ function UserDetail({ user, onChanged }) {
           </label>)}
         </div>)}
     </section>
+
+    {user.role === 'learner' && <section className="admin-detail-billing">
+      <h4>Enrollment &amp; billing</h4>
+      {!enrollments.length ? <p className="operations-note">No enrollment found for this email.</p>
+        : enrollments.map((row) => <div className="admin-billing-row" key={enrollmentRowId(row)}>
+          <div className="admin-billing-row-head">
+            <span><strong>{pathwayLabel[row.applicant?.pathway] ?? row.applicant?.pathway}</strong><StatusPill kind={enrollmentPillKind(row.status)}>{enrollmentStatusLabel[row.status] ?? row.status}</StatusPill></span>
+            <span className="admin-billing-figures">{peso(row.amount)} total · {peso(row.amountPaid)} paid{Number(row.balance ?? 0) > 0 && <b className="admin-billing-balance"> · {peso(row.balance)} due</b>}</span>
+          </div>
+          <EnrollmentDocumentLinks enrollmentId={enrollmentRowId(row)} applicantName={user.name} documents={row.documents} />
+          {row.status === 'approved' && Number(row.balance ?? 0) > 0 && (row.payment?.balanceDueDate || row.payment?.balanceNote) && <p className="admin-billing-due-note">
+            {row.payment?.balanceDueDate && <>Due {formatDueDate(row.payment.balanceDueDate)}. </>}{row.payment?.balanceNote}
+          </p>}
+          <div className="admin-row-actions">
+            <button type="button" className="button button-ghost button-compact" onClick={() => setBillingRow(row)}><Receipt size={14} /> Payments</button>
+            {row.status === 'approved' && Number(row.balance ?? 0) > 0 && <button type="button" className="button button-ghost button-compact" onClick={() => setDueDateRow(row)}><CalendarClock size={14} /> {row.payment?.balanceDueDate ? 'Edit due date' : 'Set due date'}</button>}
+          </div>
+        </div>)}
+      {billingRow && <BillingDetailModal key={enrollmentRowId(billingRow)} enrollmentId={enrollmentRowId(billingRow)} name={user.name} email={user.email} pathwayTitle={pathwayLabel[billingRow.applicant?.pathway] ?? billingRow.applicant?.pathway} onClose={() => setBillingRow(null)} onChanged={onBillingChanged} />}
+      {dueDateRow && <BalanceDueModal key={enrollmentRowId(dueDateRow)} row={dueDateRow} onClose={() => setDueDateRow(null)} onSaved={() => { setDueDateRow(null); onBillingChanged() }} />}
+    </section>}
   </div>
 }
 
@@ -212,7 +262,7 @@ export default function AdminUsersPage({ user }) {
   const toast = useToast()
   const confirm = useConfirm()
   const fileRef = useRef(null)
-  const [filters, setFilters] = useState({ role: '', status: '', course: '', search: '' })
+  const [filters, setFilters] = useState({ role: '', status: '', course: '', billing: '', search: '' })
   const [error, setError] = useState('')
   const [form, setForm] = useState({ name: '', email: '', username: '', role: 'learner', courseIds: [] })
   const [selected, setSelected] = useState(() => new Set())
@@ -222,9 +272,32 @@ export default function AdminUsersPage({ user }) {
   const { data: allUsers = [], isLoading } = useQuery({ queryKey: ['admin-users', filters], queryFn: () => fetchAdminUsers(filters) })
   // The signed-in admin can't manage themselves here (self-edit is blocked server-side anyway,
   // and self-delete/impersonate would be nonsensical) — drop that row entirely to declutter.
-  const users = allUsers.filter((row) => row.id !== user.id)
+  const usersExcludingSelf = allUsers.filter((row) => row.id !== user.id)
   const { data: courses = [] } = useQuery({ queryKey: ['admin-courses-min'], queryFn: fetchAdminCourses })
+  // Same query key/args AdminEnrollmentsPage uses for its default (non-archived) view, so the two
+  // pages share one cached fetch when visited in the same session rather than each paying for it.
+  // Documents/payments/balance now live here per learner (see UserDetail's billing section) —
+  // fetched in bulk once rather than per row, so expanding "Manage" never costs its own round trip.
+  const { data: enrollments = [] } = useQuery({ queryKey: ['admin-enrollments', false], queryFn: () => fetchAdminEnrollments({}) })
+  const enrollmentsByEmail = useMemo(() => {
+    const map = new Map()
+    for (const row of enrollments) {
+      const email = row.applicant?.email?.toLowerCase()
+      if (!email) continue
+      if (!map.has(email)) map.set(email, [])
+      map.get(email).push(row)
+    }
+    return map
+  }, [enrollments])
+  const enrollmentsFor = (row) => enrollmentsByEmail.get(row.email?.toLowerCase()) ?? []
+  // Billing is the one filter this page can't hand to the server — it's derived from the
+  // Enrollment ledger, not the User document — so it's applied client-side, after the server-side
+  // role/status/course/search filters have already narrowed the list down.
+  const users = filters.billing
+    ? usersExcludingSelf.filter((row) => billingSummary(enrollmentsFor(row)).state === filters.billing)
+    : usersExcludingSelf
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin-users'] })
+  const invalidateEnrollments = () => queryClient.invalidateQueries({ queryKey: ['admin-enrollments'] })
 
   const createMutation = useMutation({ mutationFn: createAdminUser })
   const updateMutation = useMutation({ mutationFn: ({ id, updates }) => updateAdminUser(id, updates) })
@@ -304,6 +377,7 @@ export default function AdminUsersPage({ user }) {
       <select value={filters.role} onChange={(e) => setFilter('role', e.target.value)}><option value="">All roles</option>{Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
       <select value={filters.status} onChange={(e) => setFilter('status', e.target.value)}><option value="">All statuses</option>{['active', 'inactive', 'suspended', 'invited'].map((value) => <option key={value} value={value}>{value}</option>)}</select>
       <select value={filters.course} onChange={(e) => setFilter('course', e.target.value)}><option value="">All courses</option>{courses.map((course) => <option key={course.id} value={course.id}>{course.title}</option>)}</select>
+      <select value={filters.billing} onChange={(e) => setFilter('billing', e.target.value)}><option value="">All billing</option><option value="due">Balance due</option><option value="settled">Fully settled</option><option value="none">No enrollment</option></select>
       <input placeholder="Search name, email, username…" value={filters.search} onChange={(e) => setFilter('search', e.target.value)} />
     </div>
 
@@ -317,15 +391,21 @@ export default function AdminUsersPage({ user }) {
     </div>}
 
     <div className="admin-table admin-table-users">
-      <div className="admin-table-head"><span>{allIds.length > 0 && <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all" />}</span><span>MEMBER</span><span>ROLE</span><span>STATUS</span><span>LAST ACTIVE</span><span>ACTIONS</span></div>
+      <div className="admin-table-head"><span>{allIds.length > 0 && <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all" />}</span><span>MEMBER</span><span>ROLE</span><span>STATUS</span><span>BILLING</span><span>LAST ACTIVE</span><span>ACTIONS</span></div>
       {isLoading ? <Loading label="Loading users…" />
         : !users.length ? <p className="operations-note">No users match those filters.</p>
-        : users.map((row) => <div key={row.id}>
+        : users.map((row) => { const billing = billingSummary(enrollmentsFor(row)); return <div key={row.id}>
           <div className={`admin-table-row ${expandedId === row.id ? 'expanded' : ''}`}>
             <span><input type="checkbox" checked={selected.has(row.id)} onChange={() => toggle(row.id)} aria-label={`Select ${row.name}`} /></span>
             <span><strong>{row.name}</strong><small>{row.email}{row.username ? ` · @${row.username}` : ''}</small></span>
             <span><select value={row.role} onChange={(e) => quickUpdate(row, { role: e.target.value })}>{Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></span>
             <span><StatusPill kind={statusKind[row.status] ?? 'green'}>{row.status}</StatusPill></span>
+            {/* Rolled up from every enrollment on this email — surfaced here so an admin can spot
+                who owes money without opening "Manage" first. */}
+            <span>{billing.state === 'due'
+              ? <span className="admin-billing-chip due"><Wallet size={12} /> {peso(billing.balance)} due</span>
+              : billing.state === 'settled' ? <span className="admin-billing-chip settled">Settled</span>
+              : <span className="admin-billing-chip none">—</span>}</span>
             <span>{formatDate(row.lastSeenAt)}</span>
             <span className="admin-row-actions">
               {row.status === 'active'
@@ -337,8 +417,8 @@ export default function AdminUsersPage({ user }) {
               <button className="button button-ghost button-compact" onClick={() => setExpandedId(expandedId === row.id ? '' : row.id)} aria-expanded={expandedId === row.id}>Manage <ChevronDown size={14} className={expandedId === row.id ? 'rotate' : ''} /></button>
             </span>
           </div>
-          {expandedId === row.id && <UserDetail user={row} onChanged={invalidate} />}
-        </div>)}
+          {expandedId === row.id && <UserDetail user={row} enrollments={enrollmentsFor(row)} onChanged={invalidate} onBillingChanged={invalidateEnrollments} />}
+        </div> })}
     </div>
   </>
 }

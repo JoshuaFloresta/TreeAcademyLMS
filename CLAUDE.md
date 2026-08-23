@@ -87,10 +87,16 @@ template (Settings → Email Automation), rendered with `{{name}}`/`{{email}}`/`
 `{{loginUrl}}`. `paid_approval_pending` still exists in the schema and
 `POST /api/staff/enrollments/:id/decision` still works, as a manual fallback for anomalies (e.g. a
 payment-link enrollment that never got a webhook) — it is not part of the normal flow.
+`notifyStaffOfNewEnrollee` (`server/lib/enrollment-shared.js`) emails staff the "New Enrollee
+Registration" notice (with the application + signed agreement attached) — **only** from
+`markEnrollmentPaid` and this manual-decision fallback's `approved` branch, i.e. only once an
+enrollment is genuinely paid and provisioned. Signing the agreement alone (`/documents/:type`) no
+longer notifies staff, since most of that traffic used to be applicants who never went on to pay.
 
 - `POST /api/enrollments` create; `/application` saves intake + summary PDF;
-  `/documents/:type` fills+flattens the agreement and emails staff; `/payment-session` (accepts
-  `{ plan: 'full' | 'upfront' }`) opens PayMongo checkout for the corresponding amount.
+  `/documents/:type` fills+flattens the agreement (no staff email yet — see
+  `notifyStaffOfNewEnrollee` above); `/payment-session` (accepts `{ plan: 'full' | 'upfront' }`)
+  opens PayMongo checkout for the corresponding amount.
 - `POST /api/webhooks/paymongo` — signature-verified, idempotent via `WebhookEvent`. On
   `checkout_session.payment.paid` it calls `markEnrollmentPaid`, which provisions the account. This
   only runs from inside the signature-verified handler — a browser redirect alone still never
@@ -114,8 +120,9 @@ static values if no settings row exists yet or Mongo is unavailable. An "upfront
 the fee — `enrollment.amount` holds the full price (net of any voucher, see below), and
 `enrollment.payment.plan`/
 `payment.planAmount` record what was actually charged, so staff can see the outstanding balance
-(surfaced in `AdminEnrollmentsPage`). Balance collection for upfront-plan enrollments is
-manual/offline — there's no in-app "pay the rest" flow.
+(surfaced per learner on `AdminUsersPage`, alongside their documents and payment history — see
+"Learner profiles and enrollment documents" below). Balance collection for upfront-plan enrollments
+is manual/offline — there's no in-app "pay the rest" flow.
 
 Only the 3 pathway courses (`broker-review`/`consultant-review`/`agent-review`, joined to
 `PricingSettings` purely by slug convention) show price fields on their Course Catalog card — a
@@ -211,9 +218,14 @@ keys**; `enrollmentDocuments`/`ENROLLMENT_DOCUMENT_TYPES` expose only type, labe
 Staff read a file through `GET /api/staff/enrollments/:id/documents/:type`
 (`application` | `realex-reblex` | `reclex`), which re-authorizes the caller, streams via
 `sendPrivateDownload`, and writes an `enrollment.document_viewed` audit row every time. Entry
-points: the Documents column on `AdminEnrollmentsPage`, and a Profile link from the admin User
-Management rows and the instructor Student Roster. `GET /api/staff/enrollments` returns a summary
-only — the raw intake answers and PDF keys stay server-side.
+points: the "Enrollment & billing" section inside a learner's row on `AdminUsersPage` (Manage →
+documents, payment history via `BillingDetailModal`, and balance due-date via `BalanceDueModal`,
+both `src/components/admin/`), and a Profile link from the admin User Management rows and the
+instructor Student Roster. `GET /api/staff/enrollments` returns a summary only — the raw intake
+answers and PDF keys stay server-side — and accepts `?email=` to scope it to one applicant, which is
+how `AdminUsersPage` finds a learner's enrollment(s) (`Enrollment` has no `learnerId`; it only ever
+joins a `User` by `applicant.email`). `AdminEnrollmentsPage` ("Enrollment Management") stays a lean
+approve/reject/refund/archive queue — it no longer surfaces documents, payments, or balance.
 
 ## Submissions review (instructors)
 

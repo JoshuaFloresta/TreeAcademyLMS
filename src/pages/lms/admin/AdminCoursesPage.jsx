@@ -132,7 +132,13 @@ function PaymentPlanSettings({ pricing, onSave }) {
   </div>
 }
 
-function NewCourseForm({ onCreated, onCancel }) {
+// Owns the create-course form state and renders the payment-plan panel plus a single action bar
+// anchored at the very bottom of the modal (below the payment-plan panel, never mid-content). This
+// lives as Modal's child (not in CreateCourseModal below) specifically so its state resets for
+// free each time the modal is closed and reopened — Modal unmounts its children while closed,
+// while CreateCourseModal itself stays mounted the whole time (it's rendered unconditionally by
+// the page), so state declared there would otherwise carry stale input into the next open.
+function CreateCourseModalBody({ onClose, onCreated, pricing, onSavePricing }) {
   const [values, setValues] = useState({ title: '', slug: '', description: '' })
   const [touchedSlug, setTouchedSlug] = useState(false)
   const [templateFile, setTemplateFile] = useState(null)
@@ -152,21 +158,26 @@ function NewCourseForm({ onCreated, onCancel }) {
       onCreated()
     } catch (e) { setError(e.message) }
   }
-  return <form className="admin-new-course-form" onSubmit={submit}>
-    <input value={values.title} onChange={(event) => { const title = event.target.value; setValues((prev) => ({ ...prev, title, slug: touchedSlug ? prev.slug : slugify(title) })) }} placeholder="Course title" aria-label="Course title" autoFocus />
-    <input value={values.slug} onChange={(event) => { setTouchedSlug(true); setValues((prev) => ({ ...prev, slug: slugify(event.target.value) })) }} placeholder="course-slug" aria-label="Course slug" />
-    <textarea value={values.description} onChange={(event) => setValues((prev) => ({ ...prev, description: event.target.value }))} placeholder="Short description (optional)" rows={3} />
-    <label className="admin-agreement-upload-label">
-      <span>Commitment / agreement PDF (optional)</span>
-      <input type="file" accept="application/pdf" onChange={(event) => setTemplateFile(event.target.files?.[0] ?? null)} />
-    </label>
-    {templateFile && <small className="admin-agreement-filename"><FileText size={12} /> {templateFile.name}</small>}
-    {error && <span className="builder-error">{error}</span>}
-    <div className="admin-course-actions">
-      <button type="submit" className="button button-primary button-compact" disabled={mutation.isPending || values.title.trim().length < 2}><Plus size={14} /> {mutation.isPending ? 'Creating…' : 'Create course'}</button>
-      <button type="button" className="button button-ghost button-compact" onClick={onCancel}>Cancel</button>
+  return <>
+    {/* The submit button lives in the footer below, outside this element — the HTML `form`
+        attribute lets it submit this form by id without sitting mid-modal. */}
+    <form id="new-course-form" className="admin-new-course-form" onSubmit={submit}>
+      <input value={values.title} onChange={(event) => { const title = event.target.value; setValues((prev) => ({ ...prev, title, slug: touchedSlug ? prev.slug : slugify(title) })) }} placeholder="Course title" aria-label="Course title" autoFocus />
+      <input value={values.slug} onChange={(event) => { setTouchedSlug(true); setValues((prev) => ({ ...prev, slug: slugify(event.target.value) })) }} placeholder="course-slug" aria-label="Course slug" />
+      <textarea value={values.description} onChange={(event) => setValues((prev) => ({ ...prev, description: event.target.value }))} placeholder="Short description (optional)" rows={3} />
+      <label className="admin-agreement-upload-label">
+        <span>Commitment / agreement PDF (optional)</span>
+        <input type="file" accept="application/pdf" onChange={(event) => setTemplateFile(event.target.files?.[0] ?? null)} />
+      </label>
+      {templateFile && <small className="admin-agreement-filename"><FileText size={12} /> {templateFile.name}</small>}
+      {error && <span className="builder-error">{error}</span>}
+    </form>
+    <PaymentPlanSettings pricing={pricing} onSave={onSavePricing} />
+    <div className="new-course-modal-actions">
+      <button type="submit" form="new-course-form" className="button button-primary button-compact" disabled={mutation.isPending || values.title.trim().length < 2}><Plus size={14} /> {mutation.isPending ? 'Creating…' : 'Create course'}</button>
+      <button type="button" className="button button-ghost button-compact" onClick={onClose}>Cancel</button>
     </div>
-  </form>
+  </>
 }
 
 // Course creation and the global payment-plan settings both belong to "setting up a course", so
@@ -177,8 +188,7 @@ function CreateCourseModal({ open, onClose, onCreated, pricing, onSavePricing })
   return <Modal open={open} onClose={onClose} labelledBy="new-course-modal-title" className="new-course-modal">
     <p className="eyebrow">NEW COURSE</p>
     <h2 id="new-course-modal-title">Create a course</h2>
-    <NewCourseForm onCreated={onCreated} onCancel={onClose} />
-    <PaymentPlanSettings pricing={pricing} onSave={onSavePricing} />
+    <CreateCourseModalBody onClose={onClose} onCreated={onCreated} pricing={pricing} onSavePricing={onSavePricing} />
   </Modal>
 }
 
