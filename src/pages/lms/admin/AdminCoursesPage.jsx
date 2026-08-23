@@ -124,7 +124,7 @@ function PaymentPlanSettings({ pricing, onSave }) {
         <small className="admin-course-price-current">{value.installmentStartDate ? 'Every upfront-plan learner’s schedule is anchored to this date, regardless of when they pay.' : 'Left blank: each learner’s schedule counts from their own payment date.'}</small>
       </div>
     </div>
-    <p className="admin-payment-plans-pointer">↓ Each pathway's discount amount is set on its own course card below, in the “Pricing &amp; payment plan” box.</p>
+    <p className="admin-payment-plans-pointer">Each pathway's discount amount is set on its own course card in the catalog, in the “Pricing &amp; payment plan” box.</p>
     {dirty && <div className="admin-course-actions">
       <button type="button" className="button button-primary button-compact" onClick={() => mutation.mutate()} disabled={mutation.isPending}><Save size={14} /> {mutation.isPending ? 'Saving…' : 'Save payment plan settings'}</button>
       <button type="button" className="button button-ghost button-compact" onClick={() => setDraft({})}>Cancel</button>
@@ -132,7 +132,7 @@ function PaymentPlanSettings({ pricing, onSave }) {
   </div>
 }
 
-function NewCourseCard({ onCreated, onCancel }) {
+function NewCourseForm({ onCreated, onCancel }) {
   const [values, setValues] = useState({ title: '', slug: '', description: '' })
   const [touchedSlug, setTouchedSlug] = useState(false)
   const [templateFile, setTemplateFile] = useState(null)
@@ -152,24 +152,34 @@ function NewCourseCard({ onCreated, onCancel }) {
       onCreated()
     } catch (e) { setError(e.message) }
   }
-  return <article className="catalog-card admin-course-card admin-new-course-card">
-    <form onSubmit={submit}>
-      <p className="eyebrow">NEW COURSE</p>
-      <input value={values.title} onChange={(event) => { const title = event.target.value; setValues((prev) => ({ ...prev, title, slug: touchedSlug ? prev.slug : slugify(title) })) }} placeholder="Course title" aria-label="Course title" autoFocus />
-      <input value={values.slug} onChange={(event) => { setTouchedSlug(true); setValues((prev) => ({ ...prev, slug: slugify(event.target.value) })) }} placeholder="course-slug" aria-label="Course slug" />
-      <textarea value={values.description} onChange={(event) => setValues((prev) => ({ ...prev, description: event.target.value }))} placeholder="Short description (optional)" rows={3} />
-      <label className="admin-agreement-upload-label">
-        <span>Commitment / agreement PDF (optional)</span>
-        <input type="file" accept="application/pdf" onChange={(event) => setTemplateFile(event.target.files?.[0] ?? null)} />
-      </label>
-      {templateFile && <small className="admin-agreement-filename"><FileText size={12} /> {templateFile.name}</small>}
-      {error && <span className="builder-error">{error}</span>}
-      <div className="admin-course-actions">
-        <button type="submit" className="button button-primary button-compact" disabled={mutation.isPending || values.title.trim().length < 2}><Plus size={14} /> {mutation.isPending ? 'Creating…' : 'Create course'}</button>
-        <button type="button" className="button button-ghost button-compact" onClick={onCancel}>Cancel</button>
-      </div>
-    </form>
-  </article>
+  return <form className="admin-new-course-form" onSubmit={submit}>
+    <input value={values.title} onChange={(event) => { const title = event.target.value; setValues((prev) => ({ ...prev, title, slug: touchedSlug ? prev.slug : slugify(title) })) }} placeholder="Course title" aria-label="Course title" autoFocus />
+    <input value={values.slug} onChange={(event) => { setTouchedSlug(true); setValues((prev) => ({ ...prev, slug: slugify(event.target.value) })) }} placeholder="course-slug" aria-label="Course slug" />
+    <textarea value={values.description} onChange={(event) => setValues((prev) => ({ ...prev, description: event.target.value }))} placeholder="Short description (optional)" rows={3} />
+    <label className="admin-agreement-upload-label">
+      <span>Commitment / agreement PDF (optional)</span>
+      <input type="file" accept="application/pdf" onChange={(event) => setTemplateFile(event.target.files?.[0] ?? null)} />
+    </label>
+    {templateFile && <small className="admin-agreement-filename"><FileText size={12} /> {templateFile.name}</small>}
+    {error && <span className="builder-error">{error}</span>}
+    <div className="admin-course-actions">
+      <button type="submit" className="button button-primary button-compact" disabled={mutation.isPending || values.title.trim().length < 2}><Plus size={14} /> {mutation.isPending ? 'Creating…' : 'Create course'}</button>
+      <button type="button" className="button button-ghost button-compact" onClick={onCancel}>Cancel</button>
+    </div>
+  </form>
+}
+
+// Course creation and the global payment-plan settings both belong to "setting up a course", so
+// they now live in one modal opened from "New course" rather than a permanently-visible page
+// section — an admin configuring a new pathway course sees both in the same place instead of
+// having to scroll the whole catalog to find the payment-plan panel.
+function CreateCourseModal({ open, onClose, onCreated, pricing, onSavePricing }) {
+  return <Modal open={open} onClose={onClose} labelledBy="new-course-modal-title" className="new-course-modal">
+    <p className="eyebrow">NEW COURSE</p>
+    <h2 id="new-course-modal-title">Create a course</h2>
+    <NewCourseForm onCreated={onCreated} onCancel={onClose} />
+    <PaymentPlanSettings pricing={pricing} onSave={onSavePricing} />
+  </Modal>
 }
 
 // Shown only on courses outside the 3 fixed enrollment pathways (which keep their own hardcoded
@@ -412,9 +422,9 @@ export default function AdminCoursesPage() {
   return <>
     <div className="page-title-row">
       <div><p className="eyebrow">PLATFORM ADMIN</p><h1>Course Catalog &amp; Pricing</h1><p>Create courses, approve, publish, schedule availability, and set each pathway's price — all in one place.</p></div>
-      {!creating && <button type="button" className="button button-primary" onClick={() => setCreating(true)}><Plus size={15} /> New course</button>}
+      <button type="button" className="button button-primary" onClick={() => setCreating(true)}><Plus size={15} /> New course</button>
     </div>
-    <PaymentPlanSettings pricing={pricing} onSave={savePricingPatch} />
+    <CreateCourseModal open={creating} onClose={() => setCreating(false)} onCreated={() => { setCreating(false); invalidateCourses() }} pricing={pricing} onSavePricing={savePricingPatch} />
     {pendingReview.length > 0 && <div className="admin-bulkbar"><span>{pendingReview.length} course{pendingReview.length === 1 ? '' : 's'} awaiting your approval:</span>
       {pendingReview.map((course) => <span className="admin-review-chip" key={course.id}>
         <strong>{course.title}</strong>
@@ -424,9 +434,8 @@ export default function AdminCoursesPage() {
     </div>}
 
     <div className="catalog-grid admin-course-grid">
-      {creating && <NewCourseCard onCreated={() => { setCreating(false); invalidateCourses() }} onCancel={() => setCreating(false)} />}
       {isLoading ? <Loading label="Loading catalog…" />
-        : !courses.length && !creating ? <p className="operations-note">No courses have been created yet.</p>
+        : !courses.length ? <p className="operations-note">No courses have been created yet.</p>
         : courses.map((course, index) => <CourseCard key={course.id} course={course} index={index} pricing={pricing} onAct={act} onUnpublish={unpublish} onArchive={archive} onReview={review} onRemove={remove} onSavePrice={savePrice} onRenamed={invalidateCourses} />)}
     </div>
     <p className="operations-note"><Users size={17} /> The eye toggle controls whether that course’s live enrolled count appears on the public landing page. Only Broker, Consultant, and Appraiser Review show a price field — pricing follows the enrollment pathway, not arbitrary courses.</p>
