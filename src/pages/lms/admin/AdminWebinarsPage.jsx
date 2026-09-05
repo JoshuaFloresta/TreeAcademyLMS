@@ -6,6 +6,7 @@ import { useConfirm } from '../../../lib/confirmContext.js'
 import { useToast } from '../../../lib/toastContext.js'
 import { createWebinar, deleteWebinar, fetchAdminWebinars, fetchWebinarRegistrations, updateWebinar, uploadWebinarCover } from '../../../lib/admin.js'
 import Loading from '../../../components/Loading.jsx'
+import { publicImageSrc } from '../../../lib/api.js'
 
 const toLocalInput = (value) => { if (!value) return ''; const date = new Date(value); return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16) }
 const formatDate = (value) => (value ? new Date(value).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' }) : '—')
@@ -111,7 +112,7 @@ export default function AdminWebinarsPage() {
               : <>
                 <div className="admin-webinar-head">
                   <div className="admin-webinar-title-cell">
-                    {webinar.coverImageUrl && <img className="admin-webinar-thumb" src={webinar.coverImageUrl} alt="" />}
+                    {webinar.coverImageUrl && <img className="admin-webinar-thumb" src={publicImageSrc(webinar.coverImageUrl)} alt="" />}
                     <div><strong>{webinar.title}</strong><small>{formatDate(webinar.startsAt)}</small></div>
                   </div>
                   <div className="admin-status-cell">

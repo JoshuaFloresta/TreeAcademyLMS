@@ -4,9 +4,13 @@
 // same-origin URLs, and the trailing slash is stripped since every caller appends "/api/…".
 export const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:4000').replace(/\/$/, '')
 
-// Uploaded avatars are returned as API-relative paths (e.g. /uploads/avatars/xyz.png); resolve
-// them against the API origin since the client and API can run on different hosts/ports.
-export const avatarSrc = (url) => (url && url.startsWith('/') ? `${API_URL}${url}` : url)
+// Public uploads are returned as API-relative paths (e.g. /uploads/webinars/xyz.png). Resolve
+// those paths against the API origin: in production the client and API may be on different hosts,
+// so using the relative path directly would request the image from the frontend host instead.
+export const publicImageSrc = (url) => (url && url.startsWith('/') ? `${API_URL}${url}` : url)
+
+// Kept as the avatar-specific name for existing profile consumers.
+export const avatarSrc = publicImageSrc
 
 // Public — no auth — since the enrollment flow that needs it isn't signed in yet. Admin-editable
 // via the "Pricing Settings" console page; falls back to catalog.js's static price server-side.

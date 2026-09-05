@@ -6,6 +6,7 @@ import PublicFooter from '../components/PublicFooter.jsx'
 import StatusPill from '../components/StatusPill.jsx'
 import Loading from '../components/Loading.jsx'
 import { fetchBlogPost } from '../lib/publicCatalog.js'
+import { publicImageSrc } from '../lib/api.js'
 
 const categoryLabel = {
   program_updates: 'Program updates',
@@ -27,7 +28,7 @@ export default function BlogPostPage() {
         {isLoading && <Loading block label="Loading post…" />}
         {error && <div className="empty-state"><FileQuestion size={26} /><strong>Post not found</strong><p>It may have been unpublished or the link is out of date.</p></div>}
         {post && <article>
-          {post.coverImageUrl && <div className="blog-post-cover" style={{ backgroundImage: `url(${post.coverImageUrl})` }} />}
+          {post.coverImageUrl && <div className="blog-post-cover" style={{ backgroundImage: `url(${publicImageSrc(post.coverImageUrl)})` }} />}
           <StatusPill kind="gold">{categoryLabel[post.category] ?? post.category}</StatusPill>
           <h1>{post.title}</h1>
           <p className="blog-post-meta"><CalendarClock size={14} /> {formatDate(post.publishedAt)} · {post.authorName}</p>

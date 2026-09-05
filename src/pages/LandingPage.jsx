@@ -17,7 +17,7 @@ import PassFirst from '../components/PassFirst.jsx'
 import Testimonials from '../components/Testimonials.jsx'
 import { blockedPathwayMessage, faq, pathwayPricing, pathways } from '../lib/academyData.js'
 import { fetchPathwayStats, fetchPublicWebinars, registerForWebinar } from '../lib/publicCatalog.js'
-import { fetchPricing } from '../lib/api.js'
+import { fetchPricing, publicImageSrc } from '../lib/api.js'
 
 const webinarDeadlineLabel = (webinar) => {
   const deadline = new Date(webinar.registrationDeadline ?? webinar.startsAt)
@@ -193,7 +193,7 @@ export default function LandingPage() {
             {webinars.map((webinar) => {
               const seatsLeft = webinar.capacity != null ? webinar.capacity - webinar.registeredCount : null
               return <article className={`webinar-card ${seatsLeft != null && seatsLeft <= 5 ? 'filling-fast' : ''}`} key={webinar.id}>
-                {webinar.coverImageUrl && <div className="webinar-card-cover" style={{ backgroundImage: `url(${webinar.coverImageUrl})` }} />}
+                {webinar.coverImageUrl && <div className="webinar-card-cover" style={{ backgroundImage: `url(${publicImageSrc(webinar.coverImageUrl)})` }} />}
                 <div className="webinar-card-body">
                   <div className="webinar-head">
                     <StatusPill kind={seatsLeft != null && seatsLeft <= 5 ? 'gold' : 'green'}>{seatsLeft != null && seatsLeft <= 5 ? 'Filling fast' : 'Open'}</StatusPill>

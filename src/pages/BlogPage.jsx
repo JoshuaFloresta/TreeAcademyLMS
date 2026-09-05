@@ -5,6 +5,7 @@ import PublicHeader from '../components/PublicHeader.jsx'
 import PublicFooter from '../components/PublicFooter.jsx'
 import StatusPill from '../components/StatusPill.jsx'
 import { fetchBlogPosts, fetchRealEstateNews } from '../lib/publicCatalog.js'
+import { publicImageSrc } from '../lib/api.js'
 
 const categoryLabel = {
   program_updates: 'Program updates',
@@ -38,7 +39,7 @@ export default function BlogPage() {
           ? <p className="operations-note">Loading posts…</p>
           : <div className="blog-grid">
             {posts.map((post) => <Link className="blog-card" to={`/blog/${post.slug}`} key={post.id}>
-              {post.coverImageUrl && <div className="blog-card-cover" style={{ backgroundImage: `url(${post.coverImageUrl})` }} />}
+              {post.coverImageUrl && <div className="blog-card-cover" style={{ backgroundImage: `url(${publicImageSrc(post.coverImageUrl)})` }} />}
               <div className="blog-card-body">
                 <StatusPill kind="gold">{categoryLabel[post.category] ?? post.category}</StatusPill>
                 <h3>{post.title}</h3>
