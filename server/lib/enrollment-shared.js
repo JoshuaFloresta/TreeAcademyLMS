@@ -39,6 +39,11 @@ export const publicEnrollment = (enrollment) => ({
 // neither be moved off one of the 3 pathway courses nor reused by a different one.
 export const RESERVED_COURSE_SLUGS = ['broker-review', 'consultant-review', 'appraiser-review']
 export const courseForPathway = (pathway) => Course.findOne({ slug: `${pathway}-review` })
+export const pathwayForCourseSlug = (slug) => {
+  if (!slug) return null
+  const bySlug = { 'broker-review': 'broker', 'consultant-review': 'consultant', 'appraiser-review': 'appraiser' }
+  return bySlug[slug] ?? (slug.endsWith('-review') ? slug.replace(/-review$/, '') : null)
+}
 // Which agreement a pathway signs. Single source of truth — the document route validates against
 // this and the application route reports it as the next step, so the two can't drift apart.
 export const pathwayDocumentType = (pathway) => (pathway === 'consultant' ? 'reclex' : 'realex-reblex')
@@ -255,3 +260,41 @@ export function paymentReturnUrl(state, enrollmentId) {
   url.searchParams.set('enrollment', enrollmentId)
   return url.toString()
 }
+
+// Automatically archives approved enrollments whose learners no longer have active course access
+// (e.g. access was removed via User Management prior to enrollment synchronization).
+export async function syncRemovedEnrollments() {
+  if (!dbState.ready) return
+  try {
+    const approvedEnrollments = await Enrollment.find({ status: 'approved', archivedAt: null }).lean()
+    if (!approvedEnrollments.length) return
+    const emails = [...new Set(approvedEnrollments.map((e) => e.applicant?.email).filter(Boolean))]
+    const learners = await User.find({ email: { $in: emails } }).select('_id email').lean()
+    const learnerByEmail = new Map(learners.map((l) => [l.email.toLowerCase(), l]))
+    const courses = await Course.find({}).select('_id slug').lean()
+    const courseIdByPathway = new Map()
+    for (const c of courses) {
+      const p = pathwayForCourseSlug(c.slug)
+      if (p) courseIdByPathway.set(p, c._id)
+    }
+    const toArchive = []
+    for (const enrollment of approvedEnrollments) {
+      const email = enrollment.applicant?.email?.toLowerCase()
+      const learner = learnerByEmail.get(email)
+      const courseId = courseIdByPathway.get(enrollment.applicant?.pathway)
+      if (learner && courseId) {
+        const hasAccess = await LearningProgress.exists({ learnerId: learner._id, courseId })
+        if (!hasAccess) {
+          toArchive.push(enrollment._id)
+        }
+      }
+    }
+    if (toArchive.length) {
+      await Enrollment.updateMany({ _id: { $in: toArchive } }, { $set: { archivedAt: new Date() } })
+      console.log(`Synced ${toArchive.length} orphaned enrollment(s) to archived.`)
+    }
+  } catch (err) {
+    console.error('syncRemovedEnrollments error:', err.message)
+  }
+}
+

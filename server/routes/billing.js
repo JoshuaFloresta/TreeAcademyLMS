@@ -1,11 +1,12 @@
 import express from 'express'
 import { z } from 'zod'
-import { Enrollment, Payment, PricingSettings, User } from '../models.js'
+import { Course, Enrollment, LearningProgress, Payment, PricingSettings, User } from '../models.js'
 import { requireAdmin, requireAuth, requireStaff } from '../security.js'
 import { dbState } from '../state.js'
 import { asyncRoute, httpError } from '../lib/http.js'
 import { saveAudit } from '../lib/audit.js'
 import { getPricingSettings, paidByEnrollment, pathwayTitleById, totalAmountForPathway } from '../lib/pricing.js'
+import { pathwayForCourseSlug } from '../lib/enrollment-shared.js'
 
 export const router = express.Router()
 
@@ -305,7 +306,7 @@ router.post('/api/staff/payments/:id/void', requireAuth, requireStaff, asyncRout
 // data) — just their own billing history.
 router.get('/api/billing/me', requireAuth, asyncRoute(async (req, res) => {
   if (!dbState.ready) return res.status(503).json({ error: 'Billing requires MongoDB.' })
-  const rows = await Enrollment.find({ 'applicant.email': req.auth.email }).sort({ createdAt: -1 }).lean()
+  const rows = await Enrollment.find({ 'applicant.email': req.auth.email, archivedAt: null }).sort({ createdAt: -1 }).lean()
   // Totals come from the Payment ledger, never from enrollment status. This previously read an
   // approved enrollment with no recorded payment as PAID IN FULL, which showed a ₱0 balance to
   // every learner onboarded manually — the opposite of what they actually owe.
@@ -323,7 +324,28 @@ router.get('/api/billing/me', requireAuth, asyncRoute(async (req, res) => {
   // payment stage, or has money against it, still appears.
   const abandoned = (row, amountPaid) => amountPaid === 0 && ['application_pending', 'documents_pending'].includes(row.status)
 
-  res.json(rows.map((row) => {
+  // A learner should only see statement records for programs they actually have access to.
+  // If course access was removed by staff, the enrollment must not appear on their Statement of Account.
+  const progress = await LearningProgress.find({ learnerId: req.auth.sub }).select('courseId').lean()
+  const activeCourses = progress.length
+    ? await Course.find({ _id: { $in: progress.map((p) => p.courseId) } }).select('slug').lean()
+    : []
+  const activePathways = new Set(activeCourses.map((c) => pathwayForCourseSlug(c.slug)).filter(Boolean))
+
+  const unlinkedApprovedIds = []
+  const validRows = rows.filter((row) => {
+    if (row.status === 'approved' && !activePathways.has(row.applicant?.pathway)) {
+      unlinkedApprovedIds.push(row._id)
+      return false
+    }
+    return true
+  })
+
+  if (unlinkedApprovedIds.length > 0) {
+    await Enrollment.updateMany({ _id: { $in: unlinkedApprovedIds } }, { $set: { archivedAt: new Date() } })
+  }
+
+  res.json(validRows.map((row) => {
     const payments = byEnrollment.get(String(row._id)) ?? []
     const amount = Number(row.amount ?? 0)
     const amountPaid = payments.reduce((sum, payment) => sum + Number(payment.amount ?? 0), 0)

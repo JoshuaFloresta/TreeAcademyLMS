@@ -4,7 +4,7 @@ import rateLimit from 'express-rate-limit'
 import { z } from 'zod'
 import { config, isProduction } from '../config.js'
 import { catalog } from '../catalog.js'
-import { Course, CourseEnrollment, Enrollment, Voucher } from '../models.js'
+import { Course, CourseEnrollment, Enrollment, LearningProgress, User, Voucher } from '../models.js'
 import { requireAuth, requireStaff } from '../security.js'
 import { sendTemplatedEmail } from '../email.js'
 import { createApplicationPdf, createFilledAgreement, createFilledDocument, createFilledDocumentBytes } from '../enrollment-documents.js'
@@ -484,6 +484,12 @@ router.post('/api/staff/enrollments/:id/decision', requireAuth, requireStaff, as
     invitation = await provisionLearnerAccount(enrollment)
     await bestEffortEmail(sendPaymentReceiptEmail(enrollment, invitation?.setupUrl), 'payment_receipt email')
     await notifyStaffOfNewEnrollee(enrollment)
+  } else if (['rejected', 'refunded'].includes(body.decision)) {
+    const course = await courseForPathway(enrollment.applicant?.pathway)
+    const learner = await User.findOne({ email: enrollment.applicant?.email })
+    if (course && learner) {
+      await LearningProgress.deleteOne({ learnerId: learner._id, courseId: course._id })
+    }
   }
   if (dbState.ready) await enrollment.save()
   await saveAudit(`enrollment.${body.decision}`, 'Enrollment', req.params.id, { reason: body.reason }, req.auth.sub)

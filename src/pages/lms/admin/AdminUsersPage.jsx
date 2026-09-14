@@ -158,7 +158,11 @@ function UserDetail({ user, enrollments, onChanged, onBillingChanged }) {
   const toggleCourse = async (course) => {
     if (course.enrolled && !(await confirm({ title: 'Remove course access?', message: `${user.name} will lose access to ${course.title}${course.completedModules ? ' — their progress stays on record but they can no longer continue it' : ''}.`, confirmLabel: 'Remove access' }))) return
     run(
-      enrollMutation.mutateAsync({ courseId: course.id, enrolled: course.enrolled }).then(() => queryClient.invalidateQueries({ queryKey: ['admin-user-courses', user.id] })),
+      enrollMutation.mutateAsync({ courseId: course.id, enrolled: course.enrolled }).then(() => {
+        queryClient.invalidateQueries({ queryKey: ['admin-user-courses', user.id] })
+        queryClient.invalidateQueries({ queryKey: ['admin-enrollments'] })
+        queryClient.invalidateQueries({ queryKey: ['staff-billing'] })
+      }),
       `${course.enrolled ? 'Unenrolled from' : 'Enrolled in'} ${course.title}.`,
     )
   }

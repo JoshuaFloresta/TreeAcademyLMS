@@ -13,7 +13,7 @@ import { saveAudit } from '../lib/audit.js'
 import { bestEffortEmail } from '../lib/accounts.js'
 import { blogCoverUpload, saveBlogCoverUpload, saveWebinarCoverUpload, webinarCoverUpload } from '../lib/uploads.js'
 import { blankToNull } from '../lib/zod-helpers.js'
-import { provisionLearnerAccount, sendPaymentReceiptEmail } from '../lib/enrollment-shared.js'
+import { courseForPathway, provisionLearnerAccount, sendPaymentReceiptEmail } from '../lib/enrollment-shared.js'
 
 export const router = express.Router()
 
@@ -365,7 +365,14 @@ router.post('/api/admin/enrollments/bulk-decision', ...adminOnly, asyncRoute(asy
     enrollment.decisionReason = reason
     enrollment.reviewedAt = new Date()
     enrollment.reviewedBy = req.auth.sub
-    if (decision === 'approved') { const invitation = await provisionLearnerAccount(enrollment); await bestEffortEmail(sendPaymentReceiptEmail(enrollment, invitation?.setupUrl), 'payment_receipt email') }
+    if (decision === 'approved') {
+      const invitation = await provisionLearnerAccount(enrollment)
+      await bestEffortEmail(sendPaymentReceiptEmail(enrollment, invitation?.setupUrl), 'payment_receipt email')
+    } else if (decision === 'rejected') {
+      const course = await courseForPathway(enrollment.applicant?.pathway)
+      const learner = await User.findOne({ email: enrollment.applicant?.email })
+      if (course && learner) await LearningProgress.deleteOne({ learnerId: learner._id, courseId: course._id })
+    }
     await enrollment.save()
     await saveAudit(`enrollment.${decision}`, 'Enrollment', enrollmentId, { reason, bulk: true }, req.auth.sub)
     results.push({ id: enrollmentId, ok: true })
@@ -378,6 +385,19 @@ router.post('/api/admin/enrollments/:id/archive', ...adminOnly, asyncRoute(async
   const { archived } = z.object({ archived: z.boolean() }).parse(req.body)
   const enrollment = await Enrollment.findByIdAndUpdate(req.params.id, { archivedAt: archived ? new Date() : null }, { new: true })
   if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
+  const course = await courseForPathway(enrollment.applicant?.pathway)
+  const learner = await User.findOne({ email: enrollment.applicant?.email })
+  if (course && learner) {
+    if (archived) {
+      await LearningProgress.deleteOne({ learnerId: learner._id, courseId: course._id })
+    } else if (enrollment.status === 'approved') {
+      await LearningProgress.findOneAndUpdate(
+        { learnerId: learner._id, courseId: course._id },
+        { $setOnInsert: { completedModuleIds: [] } },
+        { upsert: true, setDefaultsOnInsert: true }
+      )
+    }
+  }
   await saveAudit(archived ? 'enrollment.archived' : 'enrollment.unarchived', 'Enrollment', req.params.id, {}, req.auth.sub)
   res.json({ id: enrollment.id, archivedAt: enrollment.archivedAt ?? null })
 }))

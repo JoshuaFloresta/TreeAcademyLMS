@@ -10,6 +10,7 @@ import { z } from 'zod'
 import { config, isAllowedOrigin, isProduction } from './config.js'
 import { ensureDefaultEmailTemplates } from './email.js'
 import { isObjectStorage } from './storage.js'
+import { syncRemovedEnrollments } from './lib/enrollment-shared.js'
 import { dbState } from './state.js'
 import { router as uploadsStaticRouter } from './routes/uploads-static.js'
 import { router as authRouter } from './routes/auth.js'
@@ -89,6 +90,7 @@ async function boot() {
     await mongoose.connect(config.mongoUri)
     dbState.ready = true
     await ensureDefaultEmailTemplates()
+    await syncRemovedEnrollments()
     console.log('MongoDB connected')
   } else if (isProduction) {
     throw new Error('MONGODB_URI is required in production.')

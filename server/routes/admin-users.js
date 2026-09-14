@@ -2,12 +2,13 @@ import express from 'express'
 import mongoose from 'mongoose'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
-import { Course, LearningProgress, Presence, RefreshToken, StudentBadge, Submission, User } from '../models.js'
+import { Course, Enrollment, LearningProgress, Presence, RefreshToken, StudentBadge, Submission, User } from '../models.js'
 import { requireAdmin, requireAuth } from '../security.js'
 import { dbState } from '../state.js'
 import { asyncRoute, requireDb } from '../lib/http.js'
 import { saveAudit } from '../lib/audit.js'
 import { bestEffortEmail, issueAccountSetupUrl, sendCredentialsEmail } from '../lib/accounts.js'
+import { pathwayForCourseSlug } from '../lib/enrollment-shared.js'
 import { issueSession, sessionUser } from '../lib/session.js'
 import { avatarUpload, saveAvatarUpload } from '../lib/uploads.js'
 import { usernameField } from '../lib/zod-helpers.js'
@@ -138,6 +139,7 @@ router.delete('/api/admin/users/:id', ...adminOnly, asyncRoute(async (req, res) 
     Submission.deleteMany({ learnerId: user._id }),
     StudentBadge.deleteMany({ learnerId: user._id }),
     Presence.deleteMany({ userId: user._id }),
+    Enrollment.updateMany({ 'applicant.email': user.email, archivedAt: null }, { $set: { archivedAt: new Date() } }),
     user.deleteOne(),
   ])
   await saveAudit('user.deleted', 'User', req.params.id, { email: user.email, role: user.role }, req.auth.sub)
@@ -171,10 +173,22 @@ router.post('/api/admin/users/bulk-action', ...adminOnly, asyncRoute(async (req,
 router.post('/api/admin/users/bulk-enroll', ...adminOnly, asyncRoute(async (req, res) => {
   if (!dbState.ready) return requireDb(res, 'User management')
   const { ids, courseId } = bulkEnrollInput.parse(req.body)
-  if (!mongoose.isValidObjectId(courseId) || !(await Course.findById(courseId))) return res.status(404).json({ error: 'Course not found.' })
-  const learners = await User.find({ _id: { $in: ids }, role: 'learner' }).select('_id').lean()
+  if (!mongoose.isValidObjectId(courseId)) return res.status(404).json({ error: 'Course not found.' })
+  const course = await Course.findById(courseId).select('slug').lean()
+  if (!course) return res.status(404).json({ error: 'Course not found.' })
+  const learners = await User.find({ _id: { $in: ids }, role: 'learner' }).select('_id email').lean()
   await Promise.all(learners.map((learner) => LearningProgress.findOneAndUpdate(
     { learnerId: learner._id, courseId }, { $setOnInsert: { completedModuleIds: [] } }, { upsert: true, setDefaultsOnInsert: true })))
+  const pathway = pathwayForCourseSlug(course.slug)
+  if (pathway) {
+    const emails = learners.map((l) => l.email).filter(Boolean)
+    if (emails.length) {
+      await Enrollment.updateMany(
+        { 'applicant.email': { $in: emails }, 'applicant.pathway': pathway, archivedAt: { $ne: null } },
+        { $set: { archivedAt: null } }
+      )
+    }
+  }
   await saveAudit('user.bulk_enrolled', 'Course', courseId, { count: learners.length }, req.auth.sub)
   res.json({ enrolled: learners.length })
 }))
@@ -210,15 +224,47 @@ router.get('/api/admin/users/:id/courses', ...adminOnly, asyncRoute(async (req, 
 router.post('/api/admin/users/:id/courses', ...adminOnly, asyncRoute(async (req, res) => {
   if (!dbState.ready) return requireDb(res, 'User management')
   const { courseId } = z.object({ courseId: z.string().trim().min(1) }).parse(req.body)
-  if (!mongoose.isValidObjectId(courseId) || !(await Course.findById(courseId))) return res.status(404).json({ error: 'Course not found.' })
+  if (!mongoose.isValidObjectId(courseId)) return res.status(404).json({ error: 'Course not found.' })
+  const course = await Course.findById(courseId).select('slug').lean()
+  if (!course) return res.status(404).json({ error: 'Course not found.' })
+  const user = await User.findById(req.params.id).select('email').lean()
+  if (!user) return res.status(404).json({ error: 'User not found.' })
   await LearningProgress.findOneAndUpdate({ learnerId: req.params.id, courseId }, { $setOnInsert: { completedModuleIds: [] } }, { upsert: true, setDefaultsOnInsert: true })
+  const pathway = pathwayForCourseSlug(course.slug)
+  if (pathway) {
+    await Enrollment.updateMany(
+      { 'applicant.email': user.email, 'applicant.pathway': pathway, archivedAt: { $ne: null } },
+      { $set: { archivedAt: null } }
+    )
+  }
   await saveAudit('user.enrolled', 'Course', courseId, { learnerId: req.params.id }, req.auth.sub)
   res.status(201).json({ enrolled: true })
 }))
 
 router.delete('/api/admin/users/:id/courses/:courseId', ...adminOnly, asyncRoute(async (req, res) => {
   if (!dbState.ready) return requireDb(res, 'User management')
+  const user = await User.findById(req.params.id).select('email').lean()
+  const course = await Course.findById(req.params.courseId).select('slug').lean()
   await LearningProgress.deleteOne({ learnerId: req.params.id, courseId: req.params.courseId })
+  if (user && course) {
+    const pathway = pathwayForCourseSlug(course.slug)
+    if (pathway) {
+      const activeEnrollments = await Enrollment.find({
+        'applicant.email': user.email,
+        'applicant.pathway': pathway,
+        archivedAt: null,
+      }).select('_id')
+      if (activeEnrollments.length) {
+        await Enrollment.updateMany(
+          { _id: { $in: activeEnrollments.map((e) => e._id) } },
+          { $set: { archivedAt: new Date() } }
+        )
+        for (const row of activeEnrollments) {
+          await saveAudit('enrollment.archived', 'Enrollment', row._id, { reason: 'User unenrolled from course', courseId: req.params.courseId }, req.auth.sub)
+        }
+      }
+    }
+  }
   await saveAudit('user.unenrolled', 'Course', req.params.courseId, { learnerId: req.params.id }, req.auth.sub)
   res.status(204).end()
 }))

@@ -18,6 +18,7 @@
     "migrate:storage": "node server/migrate-storage.js",
     "migrate:rename-agent-pathway": "node server/migrate-rename-agent-to-appraiser.js",
     "migrate:vouchers": "node server/migrate-vouchers.js",
+    "migrate:sync-access": "node server/migrate-sync-enrollment-access.js",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
