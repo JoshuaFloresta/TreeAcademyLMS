@@ -12,9 +12,9 @@ export default function PublicHeader() {
       <Brand />
       <button className="mobile-menu" onClick={() => setOpen(!open)} aria-label="Toggle menu">{open ? <X /> : <Menu />}</button>
       <nav className={open ? 'open' : ''}>
-        <a href="#programs" onClick={() => setOpen(false)}>Programs</a>
-        <a href="#how-it-works" onClick={() => setOpen(false)}>How it works</a>
-        <a href="#faq" onClick={() => setOpen(false)}>FAQ</a>
+        <a href="/#programs" onClick={() => setOpen(false)}>Programs</a>
+        <a href="/#faq" onClick={() => setOpen(false)}>FAQ</a>
+        <Link to="/about" onClick={() => setOpen(false)}>About</Link>
         <Link to="/blog" onClick={() => setOpen(false)}>Blog</Link>
         <Link to="/auth" onClick={() => setOpen(false)}>Sign in</Link>
         <PrimaryButton to="/enroll" className="nav-cta" onClick={() => setOpen(false)}>Get all-access</PrimaryButton>

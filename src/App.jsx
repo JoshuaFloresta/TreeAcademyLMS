@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Route, Routes, useNavigate } from 'react-router-dom'
 import LmsLayout from './components/LmsLayout.jsx'
+import AboutPage from './pages/AboutPage.jsx'
 import AuthPage from './pages/AuthPage.jsx'
 import BlogPage from './pages/BlogPage.jsx'
 import BlogPostPage from './pages/BlogPostPage.jsx'
@@ -39,6 +40,7 @@ function App() {
 
   return <Routes>
     <Route path="/" element={<LandingPage />} />
+    <Route path="/about" element={<AboutPage />} />
     <Route path="/blog" element={<BlogPage />} />
     <Route path="/blog/:slug" element={<BlogPostPage />} />
     <Route path="/enroll" element={<EnrollmentPage />} />
