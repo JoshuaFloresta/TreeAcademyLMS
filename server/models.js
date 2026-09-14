@@ -698,6 +698,7 @@ const blogPostSchema = new Schema({
   // the listing never has to truncate long-form content mid-sentence.
   excerpt: { type: String, trim: true, maxlength: 300 },
   body: { type: String, required: true, trim: true, maxlength: 20000 },
+  authorName: { type: String, trim: true, maxlength: 120 },
   coverImageUrl: { type: String, trim: true, maxlength: 500 },
   category: { type: String, enum: ['program_updates', 'exam_tips', 'real_estate_news', 'company_news'], default: 'program_updates' },
   status: { type: String, enum: ['draft', 'published'], default: 'draft', index: true },

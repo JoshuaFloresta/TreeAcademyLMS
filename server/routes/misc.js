@@ -122,7 +122,7 @@ router.get('/api/public/blog/:slug', asyncRoute(async (req, res) => {
   if (!dbState.ready) return res.status(404).json({ error: 'Post not found.' })
   const post = await BlogPost.findOne({ slug: req.params.slug, status: 'published' }).populate('authorId', 'name').lean()
   if (!post) return res.status(404).json({ error: 'Post not found.' })
-  res.json({ ...blogListItem(post), body: post.body, authorName: post.authorId?.name ?? 'Tree Academy' })
+  res.json({ ...blogListItem(post), body: post.body, authorName: post.authorName ?? post.authorId?.name ?? 'Tree Academy' })
 }))
 
 // Per-IP, not per-account — this route is public/unauthenticated like the rest of the blog. The

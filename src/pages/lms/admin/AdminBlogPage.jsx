@@ -19,7 +19,7 @@ const formatDate = (value) => (value ? new Date(value).toLocaleDateString('en-PH
 function BlogForm({ post, onDone, onCancel }) {
   const [values, setValues] = useState({
     title: post?.title ?? '', slug: post?.slug ?? '', excerpt: post?.excerpt ?? '', body: post?.body ?? '',
-    category: post?.category ?? 'program_updates', coverImageUrl: post?.coverImageUrl ?? '',
+    authorName: post?.authorName ?? '', category: post?.category ?? 'program_updates', coverImageUrl: post?.coverImageUrl ?? '',
   })
   const [touchedSlug, setTouchedSlug] = useState(Boolean(post))
   const [error, setError] = useState('')
@@ -30,7 +30,8 @@ function BlogForm({ post, onDone, onCancel }) {
   const setTitle = (title) => setValues((v) => ({ ...v, title, slug: touchedSlug ? v.slug : slugify(title) }))
   const payload = (status) => ({
     title: values.title.trim(), slug: slugify(values.slug), excerpt: values.excerpt.trim() || undefined,
-    body: values.body.trim(), category: values.category, coverImageUrl: values.coverImageUrl || null, status,
+    body: values.body.trim(), authorName: values.authorName.trim() || undefined,
+    category: values.category, coverImageUrl: values.coverImageUrl || null, status,
   })
   const mutation = useMutation({ mutationFn: (status) => (post ? updateBlogPost(post.id, payload(status)) : createBlogPost(payload(status))) })
   const submit = async (status) => {
@@ -54,6 +55,7 @@ function BlogForm({ post, onDone, onCancel }) {
   return <form className="admin-blog-form" onSubmit={(event) => event.preventDefault()}>
     <input value={values.title} onChange={(e) => setTitle(e.target.value)} placeholder="Post title" aria-label="Title" />
     <div className="admin-course-slug-edit"><span>/blog/</span><input value={values.slug} onChange={(e) => { setTouchedSlug(true); setValues((v) => ({ ...v, slug: slugify(e.target.value) })) }} placeholder={slugify(values.title) || 'post-slug'} aria-label="Slug" /></div>
+    <input value={values.authorName} onChange={(e) => setValues((v) => ({ ...v, authorName: e.target.value }))} placeholder="Author name (defaults to the publishing admin)" aria-label="Author name" maxLength={120} />
     <textarea value={values.excerpt} onChange={(e) => setValues((v) => ({ ...v, excerpt: e.target.value }))} placeholder="Short excerpt for the listing page (optional)" rows={2} maxLength={300} />
     <textarea value={values.body} onChange={(e) => setValues((v) => ({ ...v, body: e.target.value }))} placeholder="Write the post…" rows={10} />
     <div className="builder-lesson-row">

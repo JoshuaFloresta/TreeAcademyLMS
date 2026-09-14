@@ -46,6 +46,7 @@ const blogInput = z.object({
   slug: z.string().trim().min(2).max(200).optional(),
   excerpt: z.string().trim().max(300).optional(),
   body: z.string().trim().min(2).max(20000),
+  authorName: z.string().trim().min(2).max(120).optional(),
   coverImageUrl: z.string().trim().max(500).nullable().optional(),
   category: z.enum(['program_updates', 'exam_tips', 'real_estate_news', 'company_news']).optional(),
   status: z.enum(['draft', 'published']).optional(),
@@ -232,6 +233,7 @@ router.post('/api/admin/webinars/cover', ...adminOnly, webinarCoverUpload.single
 router.get('/api/admin/blog', ...adminOnly, asyncRoute(async (_req, res) => {
   if (!dbState.ready) return requireDb(res, 'Blog')
   const posts = await BlogPost.find().sort({ createdAt: -1 }).populate('authorId', 'name').lean()
+  posts.forEach((post) => { post.authorId = { ...post.authorId, name: post.authorName ?? post.authorId?.name } })
   res.json(posts.map((post) => ({ ...post, id: String(post._id), authorName: post.authorId?.name ?? '—', authorId: undefined })))
 }))
 
