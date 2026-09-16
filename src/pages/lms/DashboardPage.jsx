@@ -104,7 +104,7 @@ function LearnerDashboard({ user }) {
       <section className="main-stack">
         {inProgressCourse && <article className="learning-card">
           <div className="learning-head"><div><p className="eyebrow">CONTINUE LEARNING</p><h2>{inProgressCourse.title}</h2></div><span className="module-count">{inProgressCourse.completedModuleCount} / {inProgressCourse.moduleCount} modules</span></div>
-          <div className="learning-body"><div className="lesson-symbol"><Play size={20} fill="currentColor" /></div><div><small>{inProgressCourse.progressPercent}% COMPLETE</small><h3>Pick up where you left off</h3><p>{inProgressCourse.moduleCount - inProgressCourse.completedModuleCount} module{inProgressCourse.moduleCount - inProgressCourse.completedModuleCount === 1 ? '' : 's'} remaining</p></div><Link to="/catalog" className="button button-primary">Resume <ArrowRight size={16} /></Link></div>
+          <div className="learning-body"><div className="lesson-symbol"><Play size={20} fill="currentColor" /></div><div><small>{inProgressCourse.progressPercent}% COMPLETE</small><h3>Pick up where you left off</h3><p>{inProgressCourse.moduleCount - inProgressCourse.completedModuleCount} module{inProgressCourse.moduleCount - inProgressCourse.completedModuleCount === 1 ? '' : 's'} remaining</p></div><Link to={`/catalog?course=${inProgressCourse._id}`} className="button button-primary">Resume <ArrowRight size={16} /></Link></div>
           <div className="progress long"><span style={{ width: `${inProgressCourse.progressPercent}%` }} /></div>
         </article>}
         <section className="assignments-card">
