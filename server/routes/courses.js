@@ -102,7 +102,11 @@ router.get('/api/courses/:id', requireAuth, asyncRoute(async (req, res) => {
 
   // Assignments are nested where the learner is actually reading: under their lesson, or under the
   // phase itself as a fallback when no specific lesson was chosen at creation time.
-  const assignments = await Assignment.find(isStaff ? { courseId: course._id } : { courseId: course._id, moduleId: { $in: moduleIds } }).sort({ dueAt: 1 }).lean()
+  const visibleLessonIds = lessons.map((lesson) => lesson._id)
+  const assignments = await Assignment.find(isStaff
+    ? { courseId: course._id }
+    : { courseId: course._id, moduleId: { $in: moduleIds }, isPublished: true, $or: [{ lessonId: null }, { lessonId: { $in: visibleLessonIds } }] },
+  ).sort({ dueAt: 1 }).lean()
   const submissionByAssignment = new Map()
   if (req.auth.role === 'learner') {
     const submissions = await Submission.find({ learnerId: req.auth.sub, assignmentId: { $in: assignments.map((assignment) => assignment._id) } }).lean()

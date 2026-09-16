@@ -17,6 +17,7 @@ function AssignmentFields({ course, assignment, initialModuleId, initialPosition
     lessonId: assignment?.lessonId ? String(assignment.lessonId) : '',
     dueAt: toLocalInput(assignment?.dueAt),
     maxPoints: assignment?.maxPoints ?? 100,
+    isPublished: Boolean(assignment?.isPublished),
     submissionType: assignment?.submissionType ?? 'both',
   })
   const [error, setError] = useState('')
@@ -28,6 +29,7 @@ function AssignmentFields({ course, assignment, initialModuleId, initialPosition
     instructionsUrl: values.instructionsUrl.trim() || null,
     moduleId: values.moduleId, lessonId: values.lessonId || null,
     dueAt: values.dueAt || undefined, maxPoints: Number(values.maxPoints) || 100,
+    isPublished: values.isPublished,
     submissionType: values.submissionType,
     position: assignment ? assignment.position : initialPosition,
   })
@@ -69,6 +71,7 @@ function AssignmentFields({ course, assignment, initialModuleId, initialPosition
           <option value="file">File upload only</option>
         </select>
       </label>
+      <label className="builder-publish-check" style={{ marginTop: 14 }}><input type="checkbox" checked={values.isPublished} onChange={(event) => setValues((prev) => ({ ...prev, isPublished: event.target.checked }))} /> Published (visible to learners)</label>
     </div>
 
     <div className="builder-lesson-actions"><button className="button button-primary button-compact" disabled={mutation.isPending || !modules.length}>{assignment ? 'Save changes' : 'Create assignment'}</button><button type="button" className="button button-ghost button-compact" onClick={onCancel}>Cancel</button></div>

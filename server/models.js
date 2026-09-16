@@ -150,6 +150,7 @@ const assignmentSchema = new Schema({
   instructionsUrl: String,
   dueAt: Date,
   maxPoints: { type: Number, default: 100 },
+  isPublished: { type: Boolean, default: false },
   // Lets an instructor restrict how learners may respond — a written response only, a file
   // upload only, or either — instead of always accepting both.
   submissionType: { type: String, enum: ['text', 'file', 'both'], default: 'both' },

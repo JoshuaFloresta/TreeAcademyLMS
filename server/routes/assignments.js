@@ -22,6 +22,7 @@ const assignmentInput = z.object({
   instructionsUrl: z.string().trim().url().max(500).nullable().optional(),
   dueAt: z.coerce.date().optional(),
   maxPoints: z.coerce.number().min(1).max(1000).optional(),
+  isPublished: z.boolean().optional(),
   submissionType: z.enum(['text', 'file', 'both']).optional(),
   position: z.coerce.number().int().min(0).optional(),
 })
@@ -36,7 +37,19 @@ router.get('/api/assignments', requireAuth, asyncRoute(async (req, res) => {
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
   const courses = await Course.find(isStaff ? {} : await learnerVisibleCourseFilter(req.auth.sub)).select('_id title').lean()
   const courseTitleById = new Map(courses.map((course) => [String(course._id), course.title]))
-  const assignments = await Assignment.find({ courseId: { $in: courses.map((course) => course._id) } }).sort({ dueAt: 1 }).lean()
+  const courseIds = courses.map((course) => course._id)
+  let assignmentFilter = { courseId: { $in: courseIds } }
+  if (!isStaff) {
+    // Work must be explicitly released and live inside learner-visible course content.
+    const modules = await Module.find({ courseId: { $in: courseIds }, isPublished: true }).select('_id').lean()
+    const moduleIds = modules.map((module) => module._id)
+    const lessons = await Lesson.find({ moduleId: { $in: moduleIds }, isPublished: true }).select('_id').lean()
+    assignmentFilter = {
+      courseId: { $in: courseIds }, moduleId: { $in: moduleIds }, isPublished: true,
+      $or: [{ lessonId: null }, { lessonId: { $in: lessons.map((lesson) => lesson._id) } }],
+    }
+  }
+  const assignments = await Assignment.find(assignmentFilter).sort({ dueAt: 1 }).lean()
   let submissionByAssignment = new Map()
   if (req.auth.role === 'learner') {
     const submissions = await Submission.find({ learnerId: req.auth.sub, assignmentId: { $in: assignments.map((assignment) => assignment._id) } }).lean()
@@ -52,7 +65,9 @@ router.get('/api/assignments/:id', requireAuth, asyncRoute(async (req, res) => {
   const isStaff = ['instructor', 'admin'].includes(req.auth.role)
   if (!isStaff) {
     const enrolled = await LearningProgress.exists({ learnerId: req.auth.sub, courseId: assignment.courseId })
-    if (!enrolled) return res.status(404).json({ error: 'Assignment not found.' })
+    const module = await Module.findOne({ _id: assignment.moduleId, isPublished: true }).select('_id').lean()
+    const lessonVisible = !assignment.lessonId || await Lesson.exists({ _id: assignment.lessonId, isPublished: true })
+    if (!assignment.isPublished || !enrolled || !module || !lessonVisible) return res.status(404).json({ error: 'Assignment not found.' })
   }
   const [course, module, lesson, submission] = await Promise.all([
     Course.findById(assignment.courseId).select('title').lean(),
@@ -102,6 +117,10 @@ router.post('/api/assignments/:id/submissions', requireAuth, submissionUpload.si
   if (req.auth.role !== 'learner') return res.status(403).json({ error: 'Only learners can submit assignments.' })
   const assignment = await Assignment.findById(req.params.id)
   if (!assignment) return res.status(404).json({ error: 'Assignment not found.' })
+  const enrolled = await LearningProgress.exists({ learnerId: req.auth.sub, courseId: assignment.courseId })
+  const module = await Module.exists({ _id: assignment.moduleId, isPublished: true })
+  const lessonVisible = !assignment.lessonId || await Lesson.exists({ _id: assignment.lessonId, isPublished: true })
+  if (!assignment.isPublished || !enrolled || !module || !lessonVisible) return res.status(404).json({ error: 'Assignment not found.' })
   const body = typeof req.body.body === 'string' ? req.body.body.trim() : ''
   const existing = await Submission.findOne({ assignmentId: assignment._id, learnerId: req.auth.sub })
   const submissionType = assignment.submissionType ?? 'both'
