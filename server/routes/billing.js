@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import express from 'express'
 import { z } from 'zod'
 import { Course, Enrollment, LearningProgress, Payment, PricingSettings, User } from '../models.js'
@@ -6,7 +7,8 @@ import { dbState } from '../state.js'
 import { asyncRoute, httpError } from '../lib/http.js'
 import { saveAudit } from '../lib/audit.js'
 import { getPricingSettings, paidByEnrollment, pathwayTitleById, totalAmountForPathway } from '../lib/pricing.js'
-import { pathwayForCourseSlug } from '../lib/enrollment-shared.js'
+import { courseForPathway, pathwayForCourseSlug } from '../lib/enrollment-shared.js'
+import { config, isProduction } from '../config.js'
 
 export const router = express.Router()
 
@@ -74,9 +76,13 @@ const billingPatchInput = z.object({
 // defaults to the pathway's current price so staff usually only pick the learner and the pathway.
 const manualBillingInput = z.object({
   learnerId: z.string().trim().min(1),
-  pathway: z.enum(['broker', 'consultant', 'appraiser']),
+  pathway: z.string().trim().min(1).optional(),
+  courseId: z.string().trim().min(1).optional(),
   amount: z.coerce.number().min(1).max(1_000_000).optional(),
   feeBreakdown: feeBreakdownInput.optional(),
+}).refine((data) => data.pathway || data.courseId, {
+  message: 'Please select a program or course to bill.',
+  path: ['pathway'],
 })
 // A breakdown that doesn't add up to the total would print a receipt whose lines contradict its
 // own sum, so it's rejected rather than silently stored.
@@ -146,7 +152,15 @@ const publicPayment = (row) => ({
 // One row per enrollment with its ledger total — the collections overview.
 router.get('/api/staff/billing', requireAuth, requireStaff, asyncRoute(async (req, res) => {
   if (!dbState.ready) return res.status(503).json({ error: 'Billing requires MongoDB.' })
-  const enrollments = await Enrollment.find({ archivedAt: null }).sort({ createdAt: -1 }).lean()
+  const [enrollments, courses] = await Promise.all([
+    Enrollment.find({ archivedAt: null }).sort({ createdAt: -1 }).lean(),
+    Course.find().select('_id title slug').lean(),
+  ])
+  const courseTitleBySlug = new Map(courses.map((c) => [c.slug, c.title]))
+  for (const c of courses) {
+    const p = pathwayForCourseSlug(c.slug)
+    if (p) courseTitleBySlug.set(p, c.title)
+  }
   const paid = await paidByEnrollment(enrollments.map((row) => row._id))
   const counts = new Map()
   for (const row of await Payment.find({ enrollmentId: { $in: enrollments.map((row) => row._id) }, voidedAt: null }).select('enrollmentId').lean()) {
@@ -160,7 +174,7 @@ router.get('/api/staff/billing', requireAuth, requireStaff, asyncRoute(async (re
       name: row.applicant?.name ?? '',
       email: row.applicant?.email ?? '',
       pathway: row.applicant?.pathway,
-      pathwayTitle: pathwayTitleById.get(row.applicant?.pathway) ?? row.applicant?.pathway,
+      pathwayTitle: pathwayTitleById.get(row.applicant?.pathway) ?? courseTitleBySlug.get(row.applicant?.pathway) ?? row.applicant?.pathway,
       status: row.status,
       origin: row.origin ?? 'enrollment',
       currency: row.currency,
@@ -183,13 +197,42 @@ router.post('/api/staff/billing/enrollments', requireAuth, requireStaff, asyncRo
   const values = manualBillingInput.parse(req.body)
   const learner = await User.findById(values.learnerId).select('name email phone').lean()
   if (!learner) return res.status(404).json({ error: 'Learner not found.' })
+
+  let targetCourse = null
+  let pathway = values.pathway
+
+  if (values.courseId) {
+    targetCourse = await Course.findById(values.courseId)
+    if (targetCourse) {
+      pathway = pathwayForCourseSlug(targetCourse.slug) ?? targetCourse.slug
+    }
+  }
+
+  if (!pathway && !targetCourse) {
+    return res.status(400).json({ error: 'Please choose a course or program to bill.' })
+  }
+
+  if (!targetCourse && pathway) {
+    targetCourse = (await courseForPathway(pathway)) ?? (await Course.findOne({ slug: `${pathway}-review` })) ?? (await Course.findOne({ slug: pathway }))
+  }
+
   const pricing = await getPricingSettings()
-  const amount = values.amount ?? totalAmountForPathway(pricing, values.pathway)
+  const isKnownPathway = ['broker', 'consultant', 'appraiser'].includes(pathway)
+  const defaultAmount = isKnownPathway ? totalAmountForPathway(pricing, pathway) : (pricing.totalBroker ?? 14900)
+  const amount = values.amount ?? defaultAmount
   assertBreakdownTotals(values.feeBreakdown, amount)
-  const existing = await Enrollment.findOne({ 'applicant.email': learner.email, 'applicant.pathway': values.pathway, archivedAt: null }).lean()
-  if (existing) return res.status(409).json({ error: 'This learner already has a billing record for that program.' })
+
+  const existing = await Enrollment.findOne({ 'applicant.email': learner.email, 'applicant.pathway': pathway, archivedAt: null }).lean()
+  if (existing) return res.status(409).json({ error: 'This learner already has an active billing record for that program.' })
+
   const enrollment = await Enrollment.create({
-    applicant: { name: learner.name, email: learner.email, phone: learner.phone, pathway: values.pathway },
+    applicant: {
+      name: learner.name,
+      email: learner.email,
+      phone: learner.phone,
+      pathway,
+      ...(targetCourse ? { courseId: targetCourse._id } : {}),
+    },
     amount,
     currency: pricing.currency,
     status: 'approved',
@@ -199,8 +242,18 @@ router.post('/api/staff/billing/enrollments', requireAuth, requireStaff, asyncRo
     reviewedBy: req.auth.sub,
     reviewedAt: new Date(),
   })
-  await saveAudit('billing.record_created', 'Enrollment', enrollment.id, { pathway: values.pathway, amount }, req.auth.sub)
-  res.status(201).json({ id: enrollment.id, amount, currency: pricing.currency })
+
+  // Ensure learner has course access so the record is never marked orphaned/unlinked
+  if (targetCourse) {
+    await LearningProgress.findOneAndUpdate(
+      { learnerId: learner._id, courseId: targetCourse._id },
+      { $setOnInsert: { completedModuleIds: [] } },
+      { upsert: true, setDefaultsOnInsert: true }
+    )
+  }
+
+  await saveAudit('billing.record_created', 'Enrollment', enrollment.id, { pathway, courseId: targetCourse?._id?.toString(), amount }, req.auth.sub)
+  res.status(201).json({ id: enrollment.id, amount, currency: pricing.currency, pathway, courseTitle: targetCourse?.title })
 }))
 
 // Total, itemisation, and the balance reminder. Not the payments — those have their own routes.
@@ -328,9 +381,17 @@ router.get('/api/billing/me', requireAuth, asyncRoute(async (req, res) => {
   // If course access was removed by staff, the enrollment must not appear on their Statement of Account.
   const progress = await LearningProgress.find({ learnerId: req.auth.sub }).select('courseId').lean()
   const activeCourses = progress.length
-    ? await Course.find({ _id: { $in: progress.map((p) => p.courseId) } }).select('slug').lean()
+    ? await Course.find({ _id: { $in: progress.map((p) => p.courseId) } }).select('slug title').lean()
     : []
-  const activePathways = new Set(activeCourses.map((c) => pathwayForCourseSlug(c.slug)).filter(Boolean))
+  const activePathways = new Set([
+    ...activeCourses.map((c) => c.slug),
+    ...activeCourses.map((c) => pathwayForCourseSlug(c.slug)).filter(Boolean),
+  ])
+  const courseTitleBySlug = new Map(activeCourses.map((c) => [c.slug, c.title]))
+  for (const c of activeCourses) {
+    const p = pathwayForCourseSlug(c.slug)
+    if (p) courseTitleBySlug.set(p, c.title)
+  }
 
   const unlinkedApprovedIds = []
   const validRows = rows.filter((row) => {
@@ -353,7 +414,7 @@ router.get('/api/billing/me', requireAuth, asyncRoute(async (req, res) => {
     return {
       id: String(row._id),
       pathway: row.applicant.pathway,
-      pathwayTitle: pathwayTitleById.get(row.applicant.pathway) ?? row.applicant.pathway,
+      pathwayTitle: pathwayTitleById.get(row.applicant.pathway) ?? courseTitleBySlug.get(row.applicant.pathway) ?? row.applicant.pathway,
       status: row.status,
       amount,
       currency: row.currency,
@@ -380,4 +441,135 @@ router.get('/api/billing/me', requireAuth, asyncRoute(async (req, res) => {
       installments: (row.payment?.installments ?? []).map((line) => ({ amount: line.amount, dueDate: line.dueDate, label: line.label })),
     }
   }).filter(Boolean))
+}))
+
+// Student payment gateway: initiate online checkout for remaining balance via PayMongo
+router.post('/api/billing/me/:id/payment-session', requireAuth, asyncRoute(async (req, res) => {
+  if (!dbState.ready) return res.status(503).json({ error: 'Billing requires MongoDB.' })
+  const enrollment = await Enrollment.findOne({ _id: req.params.id, 'applicant.email': req.auth.email, archivedAt: null })
+  if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
+
+  const payments = await Payment.find({ enrollmentId: enrollment._id, voidedAt: null }).lean()
+  const amountPaid = payments.reduce((sum, p) => sum + Number(p.amount ?? 0), 0)
+  const totalAmount = Number(enrollment.amount ?? 0)
+  const balance = Math.max(0, totalAmount - amountPaid)
+
+  if (balance <= 0) {
+    return res.status(400).json({ error: 'This enrollment has already been settled in full.' })
+  }
+
+  const { amount: requestedAmount } = z.object({
+    amount: z.coerce.number().min(100, 'Minimum payment is ₱100.').max(1_000_000).optional(),
+  }).parse(req.body ?? {})
+
+  const chargeAmount = Math.min(balance, requestedAmount ? Number(requestedAmount) : balance)
+  if (chargeAmount < 100) {
+    return res.status(400).json({ error: 'Minimum payable amount is ₱100.' })
+  }
+
+  const programTitle = pathwayTitleById.get(enrollment.applicant?.pathway) ?? enrollment.applicant?.pathway ?? 'Review Program'
+  const referenceNumber = `${enrollment._id}-bal-${Date.now()}`
+
+  if (!config.paymongo.secretKey) {
+    if (config.demoMode || !isProduction) {
+      return res.json({
+        checkoutUrl: `${config.clientUrl}/statement?payment=success&demo=true&enrollment=${enrollment.id}&amount=${chargeAmount}`,
+        mode: 'demo_checkout',
+        message: 'Demo mode payment session generated.',
+      })
+    }
+    return res.json({
+      checkoutUrl: config.paymongo.paymentLink,
+      mode: 'payment_link_fallback',
+      message: 'The PayMongo payment page is open.',
+    })
+  }
+
+  const payload = {
+    data: {
+      attributes: {
+        billing: {
+          name: enrollment.applicant.name,
+          email: enrollment.applicant.email,
+          phone: enrollment.applicant.phone,
+        },
+        line_items: [{
+          name: `${programTitle} — Balance payment`,
+          description: `Remaining balance payment for ${enrollment.applicant.name} (${programTitle})`,
+          amount: Math.round(chargeAmount * 100),
+          currency: enrollment.currency ?? 'PHP',
+          quantity: 1,
+        }],
+        payment_method_types: config.paymongo.paymentMethods,
+        send_email_receipt: true,
+        show_description: true,
+        show_line_items: true,
+        success_url: `${config.clientUrl}/statement?payment=success&enrollment=${enrollment.id}`,
+        cancel_url: `${config.clientUrl}/statement?payment=cancelled&enrollment=${enrollment.id}`,
+        reference_number: referenceNumber,
+        metadata: {
+          enrollment_id: String(enrollment._id),
+          payment_type: 'balance_payment',
+          charge_amount: String(chargeAmount),
+          learner_id: req.auth.sub,
+        },
+      },
+    },
+  }
+
+  const response = await fetch('https://api.paymongo.com/v2/checkout_sessions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${config.paymongo.secretKey}:`).toString('base64')}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': `treeacademy-bal-${referenceNumber}`,
+    },
+    body: JSON.stringify(payload),
+  })
+
+  const result = await response.json().catch(() => ({}))
+  if (!response.ok || !result?.data?.attributes?.checkout_url) {
+    console.error('PayMongo balance checkout error', response.status, result)
+    return res.status(502).json({ error: 'PayMongo could not start checkout. Please try again shortly.' })
+  }
+
+  await saveAudit('billing.balance_checkout_created', 'Enrollment', enrollment.id, {
+    checkoutId: result.data.id,
+    chargeAmount,
+  }, req.auth.sub)
+
+  res.json({ checkoutUrl: result.data.attributes.checkout_url, mode: 'checkout_session' })
+}))
+
+// Dev/demo-only: simulate balance payment completion so it can be verified on localhost
+router.post('/api/billing/me/:id/demo/pay-balance', requireAuth, asyncRoute(async (req, res) => {
+  if (isProduction && !config.demoMode) return res.status(404).end()
+  const enrollment = await Enrollment.findOne({ _id: req.params.id, 'applicant.email': req.auth.email, archivedAt: null })
+  if (!enrollment) return res.status(404).json({ error: 'Enrollment not found.' })
+
+  const payments = await Payment.find({ enrollmentId: enrollment._id, voidedAt: null }).lean()
+  const amountPaid = payments.reduce((sum, p) => sum + Number(p.amount ?? 0), 0)
+  const totalAmount = Number(enrollment.amount ?? 0)
+  const balance = Math.max(0, totalAmount - amountPaid)
+
+  if (balance <= 0) return res.status(400).json({ error: 'This enrollment has already been settled in full.' })
+
+  const { amount: requestedAmount } = z.object({
+    amount: z.coerce.number().min(1).max(1_000_000).optional(),
+  }).parse(req.body ?? {})
+
+  const chargeAmount = Math.min(balance, requestedAmount ? Number(requestedAmount) : balance)
+  const payment = await Payment.create({
+    enrollmentId: enrollment._id,
+    amount: chargeAmount,
+    currency: enrollment.currency ?? 'PHP',
+    method: 'paymongo',
+    kind: 'balance',
+    receivedAt: new Date(),
+    reference: `demo_${crypto.randomUUID()}`,
+    note: 'Demo balance payment via in-app gateway',
+  })
+
+  await saveAudit('billing.balance_demo_paid', 'Enrollment', enrollment.id, { amount: chargeAmount }, req.auth.sub)
+  res.json({ success: true, payment: publicPayment(payment.toObject()) })
 }))

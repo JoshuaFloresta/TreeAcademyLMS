@@ -81,6 +81,14 @@ router.post('/api/admin/users', ...adminOnly, asyncRoute(async (req, res) => {
   })
   if (user.role === 'instructor' && values.courseIds?.length) {
     await Course.updateMany({ _id: { $in: values.courseIds } }, { $addToSet: { assignedInstructorIds: user._id } })
+  } else if (user.role === 'learner' && values.courseIds?.length) {
+    await Promise.all(values.courseIds.map((courseId) =>
+      LearningProgress.findOneAndUpdate(
+        { learnerId: user._id, courseId },
+        { $setOnInsert: { completedModuleIds: [] } },
+        { upsert: true, setDefaultsOnInsert: true }
+      )
+    ))
   }
   const setupUrl = await issueAccountSetupUrl(user)
   const delivery = await bestEffortEmail(sendCredentialsEmail({ name: user.name, email: user.email, setupUrl }), 'enrollment_credentials email')

@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import express from 'express'
 import mongoose from 'mongoose'
 import { config } from '../config.js'
-import { Enrollment, WebhookEvent } from '../models.js'
+import { Enrollment, Payment, WebhookEvent } from '../models.js'
 import { verifyHmac, verifyPaymongoSignature } from '../security.js'
 import { dbState, memory } from '../state.js'
 import { asyncRoute } from '../lib/http.js'
@@ -37,25 +37,56 @@ router.post('/api/webhooks/paymongo', asyncRoute(async (req, res) => {
   if (eventType === 'checkout_session.payment.paid') {
     const referenceNumber = checkout?.attributes?.reference_number
     const checkoutId = checkout?.id
+    const metadata = checkout?.attributes?.metadata ?? {}
+    const enrollmentIdFromMeta = metadata?.enrollment_id
     let enrollment = null
     if (dbState.ready) {
-      if (referenceNumber && mongoose.isValidObjectId(referenceNumber)) enrollment = await Enrollment.findById(referenceNumber)
-      if (!enrollment && checkoutId) enrollment = await Enrollment.findOne({ 'payment.checkoutId': checkoutId })
-    } else if (referenceNumber) enrollment = memory.enrollments.get(referenceNumber)
+      if (enrollmentIdFromMeta && mongoose.isValidObjectId(enrollmentIdFromMeta)) {
+        enrollment = await Enrollment.findById(enrollmentIdFromMeta)
+      }
+      if (!enrollment && referenceNumber && mongoose.isValidObjectId(referenceNumber)) {
+        enrollment = await Enrollment.findById(referenceNumber)
+      }
+      if (!enrollment && checkoutId) {
+        enrollment = await Enrollment.findOne({ 'payment.checkoutId': checkoutId })
+      }
+    } else if (referenceNumber) {
+      enrollment = memory.enrollments.get(referenceNumber)
+    }
 
     if (enrollment) {
       const transactionId = checkout?.attributes?.payments?.[0]?.id ?? checkout?.attributes?.payment_intent?.id ?? checkoutId
-      // The account is provisioned immediately on confirmed payment — no staff review step. This
-      // still only runs from inside a signature-verified webhook event (see the check at the top
-      // of this handler), so a browser redirect alone still never grants access on its own.
-      const invitation = await markEnrollmentPaid(enrollment, {
-        provider: 'paymongo',
-        checkoutId,
-        transactionId,
-        referenceNumber: referenceNumber ?? enrollment.id,
-        paidAt: new Date(),
-      })
-      await saveAudit('payment.paid_auto_approved', 'Enrollment', enrollment._id?.toString() ?? enrollment.id, { checkoutId, transactionId, delivery: invitation?.delivery })
+      const isBalancePayment = metadata?.payment_type === 'balance_payment' || enrollment.status === 'approved'
+
+      if (isBalancePayment) {
+        const rawAmount = checkout?.attributes?.payments?.[0]?.attributes?.amount
+        const paidAmount = rawAmount ? Number(rawAmount) / 100 : Number(metadata?.charge_amount ?? 0)
+        if (paidAmount > 0 && dbState.ready) {
+          await Payment.create({
+            enrollmentId: enrollment._id,
+            amount: paidAmount,
+            currency: enrollment.currency ?? 'PHP',
+            method: 'paymongo',
+            kind: 'balance',
+            receivedAt: new Date(),
+            reference: transactionId,
+            note: 'Online balance payment via PayMongo',
+          })
+          await saveAudit('billing.balance_paid_webhook', 'Enrollment', enrollment.id, { transactionId, amount: paidAmount })
+        }
+      } else {
+        // The account is provisioned immediately on confirmed payment — no staff review step. This
+        // still only runs from inside a signature-verified webhook event (see the check at the top
+        // of this handler), so a browser redirect alone still never grants access on its own.
+        const invitation = await markEnrollmentPaid(enrollment, {
+          provider: 'paymongo',
+          checkoutId,
+          transactionId,
+          referenceNumber: referenceNumber ?? enrollment.id,
+          paidAt: new Date(),
+        })
+        await saveAudit('payment.paid_auto_approved', 'Enrollment', enrollment._id?.toString() ?? enrollment.id, { checkoutId, transactionId, delivery: invitation?.delivery })
+      }
     } else console.warn(`PayMongo payment ${eventId} could not be matched to an enrollment.`)
   }
   if (dbState.ready) await WebhookEvent.create({ provider: 'paymongo', eventId, eventType, processedAt: new Date() })

@@ -133,6 +133,8 @@ export const fetchMyAttendance = (eventId) => get(`/api/calendar-events/${eventI
 
 export const fetchNotifications = () => get('/api/notifications/me')
 export const fetchMyBilling = () => get('/api/billing/me')
+export const createBalancePaymentSession = (enrollmentId, payload) => post(`/api/billing/me/${enrollmentId}/payment-session`, payload)
+export const confirmDemoBalancePayment = (enrollmentId, payload) => post(`/api/billing/me/${enrollmentId}/demo/pay-balance`, payload)
 export const markNotificationRead = (id) => post(`/api/notifications/${id}/read`)
 export const markAllNotificationsRead = () => post('/api/notifications/read-all')
 
