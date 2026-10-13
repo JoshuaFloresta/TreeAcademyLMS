@@ -227,11 +227,19 @@ router.post('/api/staff/billing/enrollments', requireAuth, requireStaff, asyncRo
 
   const batch = values.batch?.trim() || 'REBLEx Batch 1'
   const emailRegex = new RegExp(`^${learner.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')
-  const existing = await Enrollment.findOne({
+  const existingApproved = await Enrollment.findOne({
     'applicant.email': emailRegex,
     'applicant.pathway': pathway,
+    status: 'approved',
     archivedAt: null,
   })
+  const existingDraft = await Enrollment.findOne({
+    'applicant.email': emailRegex,
+    'applicant.pathway': pathway,
+    status: { $ne: 'approved' },
+    archivedAt: null,
+  })
+  const existing = existingApproved ?? existingDraft
 
   if (existing) {
     const existingPayments = await Payment.find({ enrollmentId: existing._id, voidedAt: null }).lean()
@@ -257,6 +265,18 @@ router.post('/api/staff/billing/enrollments', requireAuth, requireStaff, asyncRo
       existing.reviewedAt = new Date()
       existing.decisionReason = 'Billing record updated by staff for manually onboarded learner.'
       await existing.save()
+
+      // Archive any lingering unapproved drafts for this learner and pathway
+      await Enrollment.updateMany(
+        {
+          'applicant.email': emailRegex,
+          'applicant.pathway': pathway,
+          status: { $ne: 'approved' },
+          archivedAt: null,
+          _id: { $ne: existing._id },
+        },
+        { $set: { archivedAt: new Date() } }
+      )
 
       if (targetCourse) {
         await LearningProgress.findOneAndUpdate(

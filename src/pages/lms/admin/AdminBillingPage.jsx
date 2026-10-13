@@ -66,20 +66,17 @@ export default function AdminBillingPage() {
     }
   }
 
+  const abandoned = (row) => Number(row.amountPaid ?? 0) === 0 && ['application_pending', 'documents_pending', 'payment_pending', 'contract_pending'].includes(row.status)
+  const collectible = useMemo(() => rows.filter((row) => row.status === 'approved' || Number(row.amountPaid ?? 0) > 0), [rows])
+  const billed = useMemo(() => collectible.reduce((sum, row) => sum + Number(row.amount ?? 0), 0), [collectible])
+  const collected = useMemo(() => collectible.reduce((sum, row) => sum + Number(row.amountPaid ?? 0), 0), [collectible])
+  const abandonedCount = rows.length - collectible.length
+
   const visible = useMemo(() => {
     const term = search.trim().toLowerCase()
-    if (!term) return rows
-    return rows.filter((row) => `${row.name} ${row.email}`.toLowerCase().includes(term))
-  }, [rows, search])
-
-  // Mirrors the rule /api/billing/me uses to hide a row from the learner: an enrollment abandoned
-  // before any payment isn't collectible debt. Those rows stay in the table below — staff still need
-  // to see them — but counting them would inflate "Outstanding" with signups nobody ever completed.
-  const abandoned = (row) => Number(row.amountPaid ?? 0) === 0 && ['application_pending', 'documents_pending'].includes(row.status)
-  const collectible = rows.filter((row) => !abandoned(row))
-  const billed = collectible.reduce((sum, row) => sum + Number(row.amount ?? 0), 0)
-  const collected = collectible.reduce((sum, row) => sum + Number(row.amountPaid ?? 0), 0)
-  const abandonedCount = rows.length - collectible.length
+    if (!term) return collectible
+    return collectible.filter((row) => `${row.name} ${row.email}`.toLowerCase().includes(term))
+  }, [collectible, search])
 
   return <>
     <div className="page-title-row">

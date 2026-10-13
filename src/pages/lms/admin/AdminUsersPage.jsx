@@ -386,11 +386,13 @@ export default function AdminUsersPage({ user }) {
   // Documents/payments/balance now live here per learner (see UserDetail's billing section) —
   // fetched in bulk once rather than per row, so expanding "Manage" never costs its own round trip.
   const { data: enrollments = [] } = useQuery({ queryKey: ['admin-enrollments', false], queryFn: () => fetchAdminEnrollments({}) })
-  // Show all active (non-archived) enrollments for this learner so any billing record or application is visible.
+  // Only show approved enrollments (approved paid or approved manual billing),
+  // hiding unfinished submissions and unapproved applications.
   const enrollmentsByEmail = useMemo(() => {
     const map = new Map()
     for (const row of enrollments) {
       if (row.archivedAt) continue
+      if (row.status !== 'approved') continue
       const email = row.applicant?.email?.toLowerCase()
       if (!email) continue
       if (!map.has(email)) map.set(email, [])
