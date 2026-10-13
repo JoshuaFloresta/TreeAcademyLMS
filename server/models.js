@@ -482,6 +482,7 @@ const attendanceSchema = new Schema({
   courseId: { type: Schema.Types.ObjectId, ref: 'Course', required: true, index: true },
   learnerId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   status: { type: String, enum: ['present', 'absent', 'excused', 'late'], default: 'absent' },
+  remarks: { type: String, trim: true, default: '' },
   markedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   markedAt: Date,
 }, { timestamps: true })

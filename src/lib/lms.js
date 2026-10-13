@@ -140,6 +140,10 @@ export const updateCalendarEvent = (id, payload) => patch(`/api/staff/calendar-e
 export const deleteCalendarEvent = (id) => del(`/api/staff/calendar-events/${id}`)
 export const fetchEventAttendance = (eventId) => get(`/api/staff/calendar-events/${eventId}/attendance`)
 export const saveEventAttendance = (eventId, records) => post(`/api/staff/calendar-events/${eventId}/attendance`, { records })
+export const saveEventAttendanceRecord = (eventId, payload) => post(`/api/staff/calendar-events/${eventId}/attendance/record`, payload)
+export const deleteEventAttendanceRecord = (eventId, learnerId) => del(`/api/staff/calendar-events/${eventId}/attendance/${learnerId}`)
+export const clearEventAttendance = (eventId) => del(`/api/staff/calendar-events/${eventId}/attendance`)
+export const fetchCourseAttendanceSummary = (courseId) => get(`/api/staff/courses/${courseId}/attendance-summary`)
 export const fetchMyAttendance = (eventId) => get(`/api/calendar-events/${eventId}/attendance/me`)
 
 export const fetchNotifications = () => get('/api/notifications/me')
