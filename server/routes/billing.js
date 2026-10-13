@@ -241,62 +241,63 @@ router.post('/api/staff/billing/enrollments', requireAuth, requireStaff, asyncRo
   })
   const existing = existingApproved ?? existingDraft
 
-  if (existing) {
+  if (existing && !values.allowAdditional) {
     const existingPayments = await Payment.find({ enrollmentId: existing._id, voidedAt: null }).lean()
     const paid = existingPayments.reduce((sum, p) => sum + Number(p.amount ?? 0), 0)
 
-    // If no money was received on the existing record (or it was a draft/pending application/manual record),
-    // update the terms and activate it instead of returning a 409 conflict error.
-    if (paid <= 0) {
-      existing.amount = amount
-      existing.currency = pricing.currency
-      existing.batch = batch
-      existing.status = 'approved'
-      existing.origin = 'manual'
-      existing.feeBreakdown = values.feeBreakdown ?? []
-      existing.applicant = {
-        name: learner.name,
-        email: learner.email.toLowerCase(),
-        phone: learner.phone,
-        pathway,
-        ...(targetCourse ? { courseId: targetCourse._id } : {}),
-      }
-      existing.reviewedBy = req.auth.sub
-      existing.reviewedAt = new Date()
-      existing.decisionReason = 'Billing record updated by staff for manually onboarded learner.'
-      await existing.save()
+    // Update the terms and activate/approve it, preserving any payments already made.
+    existing.amount = amount
+    existing.currency = pricing.currency
+    existing.batch = batch
+    existing.status = 'approved'
+    existing.origin = existing.origin || 'manual'
+    if (values.feeBreakdown?.length) existing.feeBreakdown = values.feeBreakdown
+    existing.applicant = {
+      ...(existing.applicant || {}),
+      name: learner.name || existing.applicant?.name,
+      email: learner.email.toLowerCase(),
+      phone: learner.phone || existing.applicant?.phone,
+      pathway,
+      ...(targetCourse ? { courseId: targetCourse._id } : {}),
+    }
+    existing.reviewedBy = req.auth.sub
+    existing.reviewedAt = new Date()
+    existing.decisionReason = paid > 0
+      ? 'Billing record updated and approved by staff (existing payments preserved).'
+      : 'Billing record updated by staff for manually onboarded learner.'
+    await existing.save()
 
-      // Archive any lingering unapproved drafts for this learner and pathway
-      await Enrollment.updateMany(
-        {
-          'applicant.email': emailRegex,
-          'applicant.pathway': pathway,
-          status: { $ne: 'approved' },
-          archivedAt: null,
-          _id: { $ne: existing._id },
-        },
-        { $set: { archivedAt: new Date() } }
+    // Archive any lingering unapproved drafts for this learner and pathway
+    await Enrollment.updateMany(
+      {
+        'applicant.email': emailRegex,
+        'applicant.pathway': pathway,
+        status: { $ne: 'approved' },
+        archivedAt: null,
+        _id: { $ne: existing._id },
+      },
+      { $set: { archivedAt: new Date() } }
+    )
+
+    if (targetCourse) {
+      await LearningProgress.findOneAndUpdate(
+        { learnerId: learner._id, courseId: targetCourse._id },
+        { $setOnInsert: { completedModuleIds: [] } },
+        { upsert: true, setDefaultsOnInsert: true }
       )
-
-      if (targetCourse) {
-        await LearningProgress.findOneAndUpdate(
-          { learnerId: learner._id, courseId: targetCourse._id },
-          { $setOnInsert: { completedModuleIds: [] } },
-          { upsert: true, setDefaultsOnInsert: true }
-        )
-      }
-
-      await saveAudit('billing.record_updated', 'Enrollment', existing.id, { pathway, courseId: targetCourse?._id?.toString(), amount, batch }, req.auth.sub)
-      return res.status(200).json({ id: existing.id, amount, currency: pricing.currency, pathway, courseTitle: targetCourse?.title, batch })
     }
 
-    // If money was already paid on this specific batch and pathway, require allowAdditional or different batch
-    if (existing.batch === batch && !values.allowAdditional) {
-      return res.status(409).json({
-        error: `This learner already has an active billing record for ${pathway} (₱${paid.toLocaleString()} paid). You can edit their billing in Payments or choose a different batch.`,
-        existingId: existing._id,
-      })
-    }
+    await saveAudit('billing.record_updated', 'Enrollment', existing.id, { pathway, courseId: targetCourse?._id?.toString(), amount, batch, paid }, req.auth.sub)
+    return res.status(200).json({
+      id: existing.id,
+      amount,
+      currency: pricing.currency,
+      pathway,
+      courseTitle: targetCourse?.title,
+      batch,
+      paid,
+      balance: Math.max(0, amount - paid),
+    })
   }
 
   const enrollment = await Enrollment.create({

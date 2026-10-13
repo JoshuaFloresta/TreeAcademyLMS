@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { BookOpen, CalendarClock, Camera, ChevronDown, Download, IdCard, KeyRound, LogIn, Receipt, RefreshCw, Save, Trash2, Upload, UserPlus, Wallet } from 'lucide-react'
+import { BookOpen, CalendarClock, Camera, Check, ChevronDown, Download, IdCard, KeyRound, LogIn, Receipt, RefreshCw, Save, Trash2, Upload, UserPlus, Wallet } from 'lucide-react'
 import StatusPill from '../../../components/StatusPill.jsx'
 import Modal from '../../../components/Modal.jsx'
 import ImageCropModal from '../../../components/ImageCropModal.jsx'
@@ -16,7 +16,7 @@ import { useConfirm } from '../../../lib/confirmContext.js'
 import { useToast } from '../../../lib/toastContext.js'
 import Loading from '../../../components/Loading.jsx'
 import {
-  bulkEnrollUsers, bulkUserAction, createAdminRole, createAdminUser, deleteAdminUser, deleteBillingRecord, enrollUserCourse, fetchAdminCourses, fetchAdminEnrollments,
+  bulkEnrollUsers, bulkUserAction, createAdminRole, createAdminUser, decideEnrollment, deleteAdminUser, deleteBillingRecord, enrollUserCourse, fetchAdminCourses, fetchAdminEnrollments,
   fetchAdminRoles, fetchAdminUsers, fetchInstructorTeachingCourses, fetchUserCourses, importUsers, resetAdminUserPassword, saveInstructorTeachingCourses, unenrollUserCourse, updateAdminUser, uploadAdminUserAvatar,
 } from '../../../lib/admin.js'
 
@@ -239,6 +239,23 @@ function UserDetail({ user, enrollments, onChanged, onBillingChanged }) {
     }
   }
 
+  const approveBilling = async (row) => {
+    const title = pathwayLabel[row.applicant?.pathway] ?? row.applicant?.pathway ?? 'this program'
+    if (!(await confirm({
+      title: 'Approve enrollment?',
+      message: `Approve ${user.name}'s enrollment for ${title}?`,
+      confirmLabel: 'Approve',
+      danger: false,
+    }))) return
+    try {
+      await decideEnrollment(enrollmentRowId(row), 'approved')
+      toast.success('Enrollment approved.')
+      onBillingChanged()
+    } catch (e) {
+      toast.error(e.message)
+    }
+  }
+
   return <div className="admin-user-detail">
     <div className="admin-detail-grid">
       <section>
@@ -327,6 +344,9 @@ function UserDetail({ user, enrollments, onChanged, onBillingChanged }) {
             {row.payment?.balanceDueDate && <>Due {formatDueDate(row.payment.balanceDueDate)}. </>}{row.payment?.balanceNote}
           </p>}
           <div className="admin-row-actions">
+            {row.status === 'paid_approval_pending' && (
+              <button type="button" className="button button-primary button-compact" onClick={() => approveBilling(row)}><Check size={14} /> Approve</button>
+            )}
             <button type="button" className="button button-ghost button-compact" onClick={() => setBillingRow(row)}><Receipt size={14} /> Payments</button>
             {row.status === 'approved' && Number(row.balance ?? 0) > 0 && <button type="button" className="button button-ghost button-compact" onClick={() => setDueDateRow(row)}><CalendarClock size={14} /> {row.payment?.balanceDueDate ? 'Edit due date' : 'Set due date'}</button>}
             <button type="button" className="button button-ghost button-compact button-danger" onClick={() => removeBilling(row)}><Trash2 size={14} /> Remove billing</button>
@@ -386,13 +406,14 @@ export default function AdminUsersPage({ user }) {
   // Documents/payments/balance now live here per learner (see UserDetail's billing section) —
   // fetched in bulk once rather than per row, so expanding "Manage" never costs its own round trip.
   const { data: enrollments = [] } = useQuery({ queryKey: ['admin-enrollments', false], queryFn: () => fetchAdminEnrollments({}) })
-  // Only show approved enrollments (approved paid or approved manual billing),
-  // hiding unfinished submissions and unapproved applications.
+  // Only show real billing records: approved enrollments, any enrollment where payments have been made,
+  // or manually created billing, hiding unfinished submissions and draft applications with ₱0 paid.
   const enrollmentsByEmail = useMemo(() => {
     const map = new Map()
     for (const row of enrollments) {
       if (row.archivedAt) continue
-      if (row.status !== 'approved') continue
+      const isReal = row.status === 'approved' || Number(row.amountPaid ?? 0) > 0 || row.origin === 'manual'
+      if (!isReal) continue
       const email = row.applicant?.email?.toLowerCase()
       if (!email) continue
       if (!map.has(email)) map.set(email, [])
