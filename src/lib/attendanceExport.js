@@ -98,17 +98,18 @@ export function exportSessionToCsv({ courseTitle, session, roster }) {
 /**
  * Exports the entire program's attendance matrix (all sessions x all students) to an Excel-compatible CSV.
  */
-export function exportMasterMatrixToCsv({ courseTitle, summary }) {
+export function exportMasterMatrixToCsv({ courseTitle, summary, dateRangeText }) {
   const { sessions = [], learners = [], analytics = {} } = summary
   const generatedOn = new Date().toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' })
 
   const lines = [
     '\uFEFF' + [escapeCsvCell('TREE ACADEMY LMS - MASTER ATTENDANCE REPORT')].join(','),
     [escapeCsvCell('Program / Course'), escapeCsvCell(courseTitle || 'Program')].join(','),
+    ...(dateRangeText ? [[escapeCsvCell('Date Filter / Period'), escapeCsvCell(dateRangeText)].join(',')] : []),
     [escapeCsvCell('Generated Date'), escapeCsvCell(generatedOn)].join(','),
-    [escapeCsvCell('Total Sessions Conducted'), escapeCsvCell(analytics.totalSessions ?? sessions.length)].join(','),
+    [escapeCsvCell('Total Sessions in Period'), escapeCsvCell(analytics.totalSessions ?? sessions.length)].join(','),
     [escapeCsvCell('Total Enrolled Students'), escapeCsvCell(analytics.totalLearners ?? learners.length)].join(','),
-    [escapeCsvCell('Overall Program Attendance Rate'), escapeCsvCell(`${analytics.overallAttendanceRate ?? 0}%`)].join(','),
+    [escapeCsvCell('Period Attendance Rate'), escapeCsvCell(`${analytics.overallAttendanceRate ?? 0}%`)].join(','),
     '',
   ]
 

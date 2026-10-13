@@ -1014,76 +1014,318 @@ function RollCall({ session, courseTitle, onSaved }) {
 }
 
 // Program Master Sheet Matrix Component
-function MasterAttendanceMatrix({ courseId, courseTitle, onOpenSession }) {
+function MasterAttendanceMatrix({ courses = [], activeCourseId, onCourseChange, onOpenSession }) {
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [standingFilter, setStandingFilter] = useState('all')
   const [selectedLearner, setSelectedLearner] = useState(null)
 
+  // Date range and session type filters for the sheet
+  const [datePreset, setDatePreset] = useState('all') // 'all', 'this_month', 'past_30', 'custom'
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [sessionTypeFilter, setSessionTypeFilter] = useState('all') // 'all', 'live_review', 'office_hours'
+
   const { data: summary, isLoading, isError, error } = useQuery({
-    queryKey: ['course-attendance-summary', courseId],
-    queryFn: () => fetchCourseAttendanceSummary(courseId),
-    enabled: Boolean(courseId),
+    queryKey: ['course-attendance-summary', activeCourseId],
+    queryFn: () => fetchCourseAttendanceSummary(activeCourseId),
+    enabled: Boolean(activeCourseId),
   })
 
   const learners = useMemo(() => summary?.learners || [], [summary?.learners])
   const sessions = useMemo(() => summary?.sessions || [], [summary?.sessions])
-  const analytics = useMemo(() => summary?.analytics || {}, [summary?.analytics])
+  const activeCourse = useMemo(() => courses.find((c) => c._id === activeCourseId), [courses, activeCourseId])
 
-  const filteredLearners = useMemo(() => {
-    let list = learners
+  // Handle preset date changes
+  const applyDatePreset = (preset) => {
+    setDatePreset(preset)
+    const today = new Date()
+    if (preset === 'all') {
+      setStartDate('')
+      setEndDate('')
+    } else if (preset === 'this_month') {
+      const year = today.getFullYear()
+      const month = String(today.getMonth() + 1).padStart(2, '0')
+      const lastDay = new Date(year, today.getMonth() + 1, 0).getDate()
+      setStartDate(`${year}-${month}-01`)
+      setEndDate(`${year}-${month}-${String(lastDay).padStart(2, '0')}`)
+    } else if (preset === 'past_30') {
+      const past = new Date()
+      past.setDate(today.getDate() - 30)
+      setStartDate(past.toISOString().slice(0, 10))
+      setEndDate(today.toISOString().slice(0, 10))
+    }
+  }
+
+  const handleCustomDateChange = (type, value) => {
+    setDatePreset('custom')
+    if (type === 'start') setStartDate(value)
+    if (type === 'end') setEndDate(value)
+  }
+
+  const resetAllFilters = () => {
+    setDatePreset('all')
+    setStartDate('')
+    setEndDate('')
+    setSessionTypeFilter('all')
+    setSearch('')
+    setStandingFilter('all')
+  }
+
+  const isAnyFilterActive = Boolean(
+    startDate || endDate || sessionTypeFilter !== 'all' || search.trim() || standingFilter !== 'all' || datePreset !== 'all'
+  )
+
+  // Filter sessions according to date range and session type
+  const filteredSessions = useMemo(() => {
+    return sessions.filter((s) => {
+      const sDate = localDateValue(s.startsAt)
+      if (startDate && sDate < startDate) return false
+      if (endDate && sDate > endDate) return false
+      if (sessionTypeFilter !== 'all' && s.eventType !== sessionTypeFilter) return false
+      return true
+    })
+  }, [sessions, startDate, endDate, sessionTypeFilter])
+
+  // Recompute student statistics over filtered sessions
+  const processedLearners = useMemo(() => {
+    const recordedFilteredSessionIds = new Set(
+      filteredSessions.filter((s) => s.recordedAt !== null).map((s) => s.id)
+    )
+
+    return learners.map((learner) => {
+      let present = 0
+      let late = 0
+      let excused = 0
+      let absent = 0
+      let unmarked = 0
+
+      filteredSessions.forEach((s) => {
+        const rec = learner.records?.[s.id]
+        if (rec) {
+          if (rec.status === 'present') present++
+          else if (rec.status === 'late') late++
+          else if (rec.status === 'excused') excused++
+          else if (rec.status === 'absent') absent++
+        } else if (recordedFilteredSessionIds.has(s.id)) {
+          unmarked++
+        }
+      })
+
+      const totalRecorded = recordedFilteredSessionIds.size
+      const attended = present + late
+      const attendanceRate = totalRecorded > 0 ? Math.round((attended / totalRecorded) * 100) : 100
+
+      let standing = 'good'
+      if (totalRecorded >= 2) {
+        if (attendanceRate < 60 || absent >= 3) standing = 'critical'
+        else if (attendanceRate < 80 || absent >= 2) standing = 'warning'
+      }
+
+      return {
+        ...learner,
+        stats: {
+          totalSessions: filteredSessions.length,
+          recordedSessions: totalRecorded,
+          present,
+          late,
+          excused,
+          absent,
+          unmarked,
+          attendedCount: attended,
+          attendanceRate,
+          standing,
+        },
+      }
+    })
+  }, [learners, filteredSessions])
+
+  // Recompute analytics for filtered sessions
+  const filteredAnalytics = useMemo(() => {
+    const recordedCount = filteredSessions.filter((s) => s.recordedAt !== null).length
+    const totalPossible = processedLearners.length * recordedCount
+    const totalAttended = processedLearners.reduce((acc, l) => acc + l.stats.attendedCount, 0)
+    const overallRate = totalPossible > 0 ? Math.round((totalAttended / totalPossible) * 100) : 100
+    const atRiskCount = processedLearners.filter((l) => l.stats.standing === 'critical' || l.stats.standing === 'warning').length
+    const perfectCount = processedLearners.filter((l) => recordedCount > 0 && l.stats.absent === 0 && l.stats.unmarked === 0).length
+
+    return {
+      totalSessions: filteredSessions.length,
+      recordedSessions: recordedCount,
+      totalLearners: processedLearners.length,
+      overallAttendanceRate: overallRate,
+      atRiskCount,
+      perfectAttendanceCount: perfectCount,
+    }
+  }, [filteredSessions, processedLearners])
+
+  // Apply student search and standing filter
+  const visibleLearners = useMemo(() => {
+    let list = processedLearners
     if (standingFilter !== 'all') {
       list = list.filter((l) => l.stats.standing === standingFilter)
     }
     const q = search.trim().toLowerCase()
     if (!q) return list
     return list.filter((l) => l.name.toLowerCase().includes(q) || l.email.toLowerCase().includes(q))
-  }, [learners, search, standingFilter])
+  }, [processedLearners, search, standingFilter])
+
+  const dateRangeDescription = useMemo(() => {
+    if (!startDate && !endDate) return 'All Sessions'
+    if (startDate && endDate) return `${startDate} to ${endDate}`
+    if (startDate) return `From ${startDate}`
+    return `Up to ${endDate}`
+  }, [startDate, endDate])
 
   if (isLoading) return <Loading block label="Generating master attendance spreadsheet…" />
   if (isError) return <p className="form-alert" role="alert">{error?.message || 'Could not load summary.'}</p>
-  if (!sessions.length) {
-    return (
-      <div className="empty-state">
-        <CalendarDays size={26} />
-        <strong>No sessions recorded yet</strong>
-        <p>Create class review sessions on the Roll Call tab to build your attendance matrix.</p>
-      </div>
-    )
-  }
 
   return (
     <>
-      {/* Program Summary Cards */}
-      <div className="attendance-kpi-grid">
-        <div className="attendance-kpi-card rate">
-          <span className="kpi-label">Program Attendance</span>
-          <span className="kpi-value">{analytics.overallAttendanceRate ?? 0}%</span>
-          <span className="kpi-sub">Across all {analytics.recordedSessions ?? 0} held sessions</span>
+      {/* 1. Primary Filter Bar at the beginning of the sheet */}
+      <div className="attendance-master-filter-card">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+          <div>
+            <strong style={{ color: 'var(--forest)', fontSize: '13px' }}>Master Sheet Filters &amp; Program Scope</strong>
+            <div style={{ fontSize: '11px', color: '#6b756b' }}>
+              Select a program and specify a date window to filter review sessions on the master spreadsheet.
+            </div>
+          </div>
+          {isAnyFilterActive && (
+            <button
+              type="button"
+              className="button button-ghost button-compact"
+              style={{ fontSize: '11px', padding: '4px 8px' }}
+              onClick={resetAllFilters}
+            >
+              <RotateCcw size={12} /> Reset Filters
+            </button>
+          )}
         </div>
-        <div className="attendance-kpi-card">
-          <span className="kpi-label">Sessions Held</span>
-          <span className="kpi-value">{analytics.recordedSessions ?? 0}</span>
-          <span className="kpi-sub">{analytics.totalSessions ?? 0} total scheduled</span>
+
+        <div className="attendance-master-filter-grid">
+          {/* Program Selector */}
+          <label className="builder-field">
+            <span>Program / Course</span>
+            <select
+              value={activeCourseId}
+              onChange={(e) => onCourseChange(e.target.value)}
+              disabled={!courses.length}
+            >
+              {courses.map((course) => (
+                <option key={course._id} value={course._id}>
+                  {course.title}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {/* Date Range Preset */}
+          <label className="builder-field">
+            <span>Date Range</span>
+            <select
+              value={datePreset}
+              onChange={(e) => applyDatePreset(e.target.value)}
+            >
+              <option value="all">All Dates / All Sessions</option>
+              <option value="this_month">This Month</option>
+              <option value="past_30">Past 30 Days</option>
+              <option value="custom">Custom Date Range</option>
+            </select>
+          </label>
+
+          {/* Start Date */}
+          <label className="builder-field">
+            <span>From Date</span>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => handleCustomDateChange('start', e.target.value)}
+            />
+          </label>
+
+          {/* End Date */}
+          <label className="builder-field">
+            <span>To Date</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => handleCustomDateChange('end', e.target.value)}
+            />
+          </label>
+
+          {/* Session Type */}
+          <label className="builder-field">
+            <span>Session Type</span>
+            <select
+              value={sessionTypeFilter}
+              onChange={(e) => setSessionTypeFilter(e.target.value)}
+            >
+              <option value="all">All Session Types</option>
+              <option value="live_review">Live Review</option>
+              <option value="office_hours">Office Hours</option>
+            </select>
+          </label>
         </div>
-        <div className="attendance-kpi-card">
-          <span className="kpi-label">Enrolled Learners</span>
-          <span className="kpi-value">{analytics.totalLearners ?? 0}</span>
-          <span className="kpi-sub">Active program roster</span>
-        </div>
-        <div className="attendance-kpi-card present">
-          <span className="kpi-label">Perfect Attendance</span>
-          <span className="kpi-value">{analytics.perfectAttendanceCount ?? 0}</span>
-          <span className="kpi-sub">0 absences recorded</span>
-        </div>
-        <div className="attendance-kpi-card absent">
-          <span className="kpi-label">At-Risk Learners</span>
-          <span className="kpi-value">{analytics.atRiskCount ?? 0}</span>
-          <span className="kpi-sub">&lt; 80% attendance rate</span>
+
+        {/* Filter status tag bar */}
+        <div className="attendance-filter-tag-bar">
+          <span>
+            Displaying <strong>{filteredSessions.length}</strong> of <strong>{sessions.length}</strong> sessions
+            {startDate || endDate ? ` (${startDate || 'start'} to ${endDate || 'end'})` : ' (All-time)'} ·{' '}
+            <strong>{processedLearners.length}</strong> enrolled students
+          </span>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              type="button"
+              className="button button-primary button-compact"
+              disabled={!filteredSessions.length}
+              onClick={() => exportMasterMatrixToCsv({
+                courseTitle: activeCourse?.title,
+                summary: {
+                  sessions: filteredSessions,
+                  learners: processedLearners,
+                  analytics: filteredAnalytics,
+                },
+                dateRangeText: dateRangeDescription,
+              })}
+            >
+              <Download size={13} /> Export Filtered Matrix (.csv)
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Matrix Toolbar */}
+      {/* 2. Program Summary Cards for Filtered Range */}
+      <div className="attendance-kpi-grid">
+        <div className="attendance-kpi-card rate">
+          <span className="kpi-label">Period Attendance</span>
+          <span className="kpi-value">{filteredAnalytics.overallAttendanceRate ?? 0}%</span>
+          <span className="kpi-sub">Across {filteredAnalytics.recordedSessions ?? 0} held sessions</span>
+        </div>
+        <div className="attendance-kpi-card">
+          <span className="kpi-label">Sessions in Scope</span>
+          <span className="kpi-value">{filteredAnalytics.recordedSessions ?? 0}</span>
+          <span className="kpi-sub">{filteredAnalytics.totalSessions ?? 0} total in filter</span>
+        </div>
+        <div className="attendance-kpi-card">
+          <span className="kpi-label">Enrolled Learners</span>
+          <span className="kpi-value">{filteredAnalytics.totalLearners ?? 0}</span>
+          <span className="kpi-sub">Active cohort roster</span>
+        </div>
+        <div className="attendance-kpi-card present">
+          <span className="kpi-label">Perfect Attendance</span>
+          <span className="kpi-value">{filteredAnalytics.perfectAttendanceCount ?? 0}</span>
+          <span className="kpi-sub">0 absences in period</span>
+        </div>
+        <div className="attendance-kpi-card absent">
+          <span className="kpi-label">At-Risk Learners</span>
+          <span className="kpi-value">{filteredAnalytics.atRiskCount ?? 0}</span>
+          <span className="kpi-sub">&lt; 80% in this period</span>
+        </div>
+      </div>
+
+      {/* 3. Secondary Toolbar: Search & Standing Filters */}
       <div className="attendance-toolbar" style={{ flexWrap: 'wrap', gap: '10px' }}>
         <label className="attendance-search" style={{ flex: '1 1 240px' }}>
           <Search size={15} />
@@ -1100,7 +1342,7 @@ function MasterAttendanceMatrix({ courseId, courseTitle, onOpenSession }) {
             className={`attendance-filter-pill ${standingFilter === 'all' ? 'active' : ''}`}
             onClick={() => setStandingFilter('all')}
           >
-            All Students ({learners.length})
+            All Students ({processedLearners.length})
           </button>
           <button
             type="button"
@@ -1124,110 +1366,117 @@ function MasterAttendanceMatrix({ courseId, courseTitle, onOpenSession }) {
             Critical (&lt;60%)
           </button>
         </div>
-
-        <button
-          type="button"
-          className="button button-primary button-compact"
-          onClick={() => exportMasterMatrixToCsv({ courseTitle, summary })}
-        >
-          <Download size={14} /> Export Master Matrix (.csv)
-        </button>
       </div>
 
-      {/* Spreadsheet Matrix Table */}
-      <div className="attendance-matrix-container">
-        <table className="attendance-matrix-table">
-          <thead>
-            <tr>
-              <th className="sticky-col">Student Name &amp; Email</th>
-              <th>Overall Rate</th>
-              <th>P</th>
-              <th>L</th>
-              <th>E</th>
-              <th>A</th>
-              {sessions.map((s) => {
-                const sDate = s.startsAt ? new Date(s.startsAt).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' }) : ''
-                return (
-                  <th
-                    key={s.id}
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => onOpenSession(s.id, localDateValue(s.startsAt))}
-                    title={`Click to open session roll call: ${s.title}`}
-                  >
-                    <div>{s.title}</div>
-                    <small style={{ fontWeight: 400, color: '#8a9088' }}>{sDate}</small>
-                  </th>
-                )
-              })}
-            </tr>
-          </thead>
-          <tbody>
-            {!filteredLearners.length ? (
+      {/* 4. Spreadsheet Matrix Table */}
+      {!filteredSessions.length ? (
+        <div className="empty-state" style={{ marginTop: '20px' }}>
+          <CalendarDays size={26} />
+          <strong>No sessions found for this filter</strong>
+          <p>There are no sessions recorded for {activeCourse?.title || 'this program'} within the selected date range ({dateRangeDescription}).</p>
+          <button
+            type="button"
+            className="button button-ghost button-compact"
+            onClick={resetAllFilters}
+          >
+            <RotateCcw size={13} /> Reset Date Filters
+          </button>
+        </div>
+      ) : (
+        <div className="attendance-matrix-container">
+          <table className="attendance-matrix-table">
+            <thead>
               <tr>
-                <td colSpan={6 + sessions.length} style={{ padding: '24px', textAlign: 'center', color: '#8a9088' }}>
-                  No students match the selected filter.
-                </td>
+                <th className="sticky-col">Student Name &amp; Email</th>
+                <th>Period Rate</th>
+                <th>P</th>
+                <th>L</th>
+                <th>E</th>
+                <th>A</th>
+                {filteredSessions.map((s) => {
+                  const sDate = s.startsAt ? new Date(s.startsAt).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' }) : ''
+                  return (
+                    <th
+                      key={s.id}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => onOpenSession(s.id, localDateValue(s.startsAt))}
+                      title={`Click to open session roll call: ${s.title}`}
+                    >
+                      <div>{s.title}</div>
+                      <small style={{ fontWeight: 400, color: '#8a9088' }}>{sDate}</small>
+                    </th>
+                  )
+                })}
               </tr>
-            ) : (
-              filteredLearners.map((learner) => (
-                <tr key={learner.learnerId}>
-                  <td
-                    className="sticky-col"
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => setSelectedLearner(learner)}
-                    title="Click to view learner attendance history"
-                  >
-                    <div style={{ fontWeight: 700, color: 'var(--forest)' }}>{learner.name}</div>
-                    <div style={{ fontSize: '11px', color: '#8a9088' }}>{learner.email}</div>
+            </thead>
+            <tbody>
+              {!visibleLearners.length ? (
+                <tr>
+                  <td colSpan={6 + filteredSessions.length} style={{ padding: '24px', textAlign: 'center', color: '#8a9088' }}>
+                    No students match the selected filter.
                   </td>
-                  <td>
-                    <span className={`attendance-standing-badge ${learner.stats.standing}`}>
-                      {learner.stats.attendanceRate}%
-                    </span>
-                  </td>
-                  <td style={{ color: '#2f6a41', fontWeight: 700 }}>{learner.stats.present}</td>
-                  <td style={{ color: '#8a6b26', fontWeight: 700 }}>{learner.stats.late}</td>
-                  <td style={{ color: '#3f5f80', fontWeight: 700 }}>{learner.stats.excused}</td>
-                  <td style={{ color: '#8a2e23', fontWeight: 700 }}>{learner.stats.absent}</td>
-                  {sessions.map((s) => {
-                    const rec = learner.records?.[s.id]
-                    const letter = !rec ? 'U' : rec.status === 'present' ? 'P' : rec.status === 'late' ? 'L' : rec.status === 'excused' ? 'E' : 'A'
-                    const tip = !rec
-                      ? 'Not marked'
-                      : `${statusLabel[rec.status]}${rec.remarks ? ` — Note: ${rec.remarks}` : ''}`
-                    return (
-                      <td key={s.id}>
-                        <span
-                          className={`attendance-matrix-cell ${letter}`}
-                          title={tip}
-                          onClick={() => setSelectedLearner(learner)}
-                        >
-                          {letter === 'U' ? '—' : letter}
-                        </span>
-                      </td>
-                    )
-                  })}
                 </tr>
-              ))
-            )}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td className="sticky-col">Turnout Rate</td>
-              <td>{analytics.overallAttendanceRate ?? 0}%</td>
-              <td>—</td>
-              <td>—</td>
-              <td>—</td>
-              <td>—</td>
-              {sessions.map((s) => (
-                <td key={s.id} style={{ fontWeight: 800, color: 'var(--forest)' }}>
-                  {s.attendanceRate !== null ? `${s.attendanceRate}%` : '—'}
-                </td>
-              ))}
-            </tr>
-          </tfoot>
-        </table>
-      </div>
+              ) : (
+                visibleLearners.map((learner) => (
+                  <tr key={learner.learnerId}>
+                    <td
+                      className="sticky-col"
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => setSelectedLearner(learner)}
+                      title="Click to view learner attendance history"
+                    >
+                      <div style={{ fontWeight: 700, color: 'var(--forest)' }}>{learner.name}</div>
+                      <div style={{ fontSize: '11px', color: '#8a9088' }}>{learner.email}</div>
+                    </td>
+                    <td>
+                      <span className={`attendance-standing-badge ${learner.stats.standing}`}>
+                        {learner.stats.attendanceRate}%
+                      </span>
+                    </td>
+                    <td style={{ color: '#2f6a41', fontWeight: 700 }}>{learner.stats.present}</td>
+                    <td style={{ color: '#8a6b26', fontWeight: 700 }}>{learner.stats.late}</td>
+                    <td style={{ color: '#3f5f80', fontWeight: 700 }}>{learner.stats.excused}</td>
+                    <td style={{ color: '#8a2e23', fontWeight: 700 }}>{learner.stats.absent}</td>
+                    {filteredSessions.map((s) => {
+                      const rec = learner.records?.[s.id]
+                      const letter = !rec ? 'U' : rec.status === 'present' ? 'P' : rec.status === 'late' ? 'L' : rec.status === 'excused' ? 'E' : 'A'
+                      const tip = !rec
+                        ? 'Not marked'
+                        : `${statusLabel[rec.status]}${rec.remarks ? ` — Note: ${rec.remarks}` : ''}`
+                      return (
+                        <td key={s.id}>
+                          <span
+                            className={`attendance-matrix-cell ${letter}`}
+                            title={tip}
+                            onClick={() => setSelectedLearner(learner)}
+                          >
+                            {letter === 'U' ? '—' : letter}
+                          </span>
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))
+              )}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td className="sticky-col">Turnout Rate</td>
+                <td>{filteredAnalytics.overallAttendanceRate ?? 0}%</td>
+                <td>—</td>
+                <td>—</td>
+                <td>—</td>
+                <td>—</td>
+                {filteredSessions.map((s) => (
+                  <td key={s.id} style={{ fontWeight: 800, color: 'var(--forest)' }}>
+                    {s.attendanceRate !== null ? `${s.attendanceRate}%` : '—'}
+                  </td>
+                ))}
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
 
       <StudentHistoryModal
         isOpen={Boolean(selectedLearner)}
@@ -1235,7 +1484,7 @@ function MasterAttendanceMatrix({ courseId, courseTitle, onOpenSession }) {
         learner={selectedLearner}
         sessions={sessions}
         onRecordUpdated={() => {
-          queryClient.invalidateQueries({ queryKey: ['course-attendance-summary', courseId] })
+          queryClient.invalidateQueries({ queryKey: ['course-attendance-summary', activeCourseId] })
         }}
       />
     </>
@@ -1760,10 +2009,6 @@ export default function AttendancePage({ role }) {
                     queryClient.invalidateQueries({ queryKey: ['calendar'] })
                     queryClient.invalidateQueries({ queryKey: ['course-attendance-summary'] })
                   }}
-                  onSessionChangeRequested={() => {
-                    setSessionToEdit(activeSession)
-                    setIsSessionModalOpen(true)
-                  }}
                 />
               )}
             </div>
@@ -1775,14 +2020,18 @@ export default function AttendancePage({ role }) {
         <div className="attendance-card" style={{ marginTop: '20px' }}>
           <div className="attendance-card-head">
             <div>
-              <p className="eyebrow">{activeCourse?.title || 'Program'} MATRIX</p>
+              <p className="eyebrow">ACADEMIC ROSTER &amp; MATRIX</p>
               <h2>Program Attendance Master Sheet</h2>
-              <small>Comprehensive attendance matrix across all review sessions for this cohort.</small>
+              <small>Comprehensive attendance matrix with date range and program filtering.</small>
             </div>
           </div>
           <MasterAttendanceMatrix
-            courseId={activeCourseId}
-            courseTitle={activeCourse?.title}
+            courses={courses}
+            activeCourseId={activeCourseId}
+            onCourseChange={(newCourseId) => {
+              setCourseId(newCourseId)
+              setSessionId('')
+            }}
             onOpenSession={handleOpenSessionFromMatrix}
           />
         </div>
@@ -1790,6 +2039,25 @@ export default function AttendancePage({ role }) {
 
       {activeTab === 'analytics' && (
         <div style={{ marginTop: '20px' }}>
+          <div className="attendance-card" style={{ marginBottom: '16px', padding: '16px 20px' }}>
+            <label className="builder-field" style={{ maxWidth: '360px' }}>
+              <span>Program / Course</span>
+              <select
+                value={activeCourseId}
+                onChange={(e) => {
+                  setCourseId(e.target.value)
+                  setSessionId('')
+                }}
+                disabled={!courses.length}
+              >
+                {courses.map((course) => (
+                  <option key={course._id} value={course._id}>
+                    {course.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <AttendanceAnalyticsView
             courseId={activeCourseId}
             onOpenStudent={(learner) => setAnalyticsSelectedStudent(learner)}
