@@ -2,7 +2,7 @@ import express from 'express'
 import mongoose from 'mongoose'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
-import { Course, Enrollment, LearningProgress, Presence, RefreshToken, StudentBadge, Submission, User } from '../models.js'
+import { Course, Enrollment, LearningProgress, Presence, RefreshToken, RolePermission, StudentBadge, Submission, User } from '../models.js'
 import { requireAdmin, requireAuth } from '../security.js'
 import { dbState } from '../state.js'
 import { asyncRoute, requireDb } from '../lib/http.js'
@@ -21,7 +21,8 @@ const adminUserCreateInput = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().trim().email().max(254),
   username: usernameField.optional(),
-  role: z.enum(['learner', 'instructor', 'admin']).optional(),
+  role: z.string().trim().min(2).max(50).optional(),
+  courseId: z.string().trim().min(1).optional(),
   courseIds: z.array(z.string().trim().min(1)).max(100).optional(),
 })
 const adminUserUpdateInput = z.object({
@@ -30,7 +31,7 @@ const adminUserUpdateInput = z.object({
   username: usernameField.nullable().optional(),
   // Uploaded avatars use API-relative paths; admins may also provide an absolute image URL.
   avatarUrl: z.string().trim().max(500).refine((value) => value.startsWith('/uploads/avatars/') || /^https?:\/\//.test(value), 'Use an uploaded avatar or an http(s) image URL.').nullable().optional(),
-  role: z.enum(['learner', 'instructor', 'admin']).optional(),
+  role: z.string().trim().min(2).max(50).optional(),
   status: z.enum(['invited', 'active', 'inactive', 'suspended']).optional(),
   mustChangePassword: z.boolean().optional(),
 })
@@ -79,10 +80,11 @@ router.post('/api/admin/users', ...adminOnly, asyncRoute(async (req, res) => {
   const user = await User.create({
     name: values.name, email: values.email, username: values.username, role: values.role ?? 'learner', status: 'active',
   })
-  if (user.role === 'instructor' && values.courseIds?.length) {
-    await Course.updateMany({ _id: { $in: values.courseIds } }, { $addToSet: { assignedInstructorIds: user._id } })
-  } else if (user.role === 'learner' && values.courseIds?.length) {
-    await Promise.all(values.courseIds.map((courseId) =>
+  const effectiveCourseIds = values.courseIds?.length ? values.courseIds : (values.courseId ? [values.courseId] : [])
+  if (user.role === 'instructor' && effectiveCourseIds.length) {
+    await Course.updateMany({ _id: { $in: effectiveCourseIds } }, { $addToSet: { assignedInstructorIds: user._id } })
+  } else if (effectiveCourseIds.length) {
+    await Promise.all(effectiveCourseIds.map((courseId) =>
       LearningProgress.findOneAndUpdate(
         { learnerId: user._id, courseId },
         { $setOnInsert: { completedModuleIds: [] } },
@@ -94,6 +96,41 @@ router.post('/api/admin/users', ...adminOnly, asyncRoute(async (req, res) => {
   const delivery = await bestEffortEmail(sendCredentialsEmail({ name: user.name, email: user.email, setupUrl }), 'enrollment_credentials email')
   await saveAudit('user.created', 'User', user.id, { role: user.role }, req.auth.sub)
   res.status(201).json({ user: adminUserView(user), setupUrl, delivery: delivery?.delivery ?? 'unknown' })
+}))
+
+router.get('/api/admin/roles', ...adminOnly, asyncRoute(async (_req, res) => {
+  if (!dbState.ready) return requireDb(res, 'User management')
+  const defaultRoles = [
+    { role: 'learner', label: 'Learner' },
+    { role: 'instructor', label: 'Instructor' },
+    { role: 'admin', label: 'Admin' },
+  ]
+  const [userRoles, customRoles] = await Promise.all([
+    User.distinct('role'),
+    RolePermission.find().select('role').lean(),
+  ])
+  const roleSet = new Set([...userRoles, ...customRoles.map((r) => r.role), 'learner', 'instructor', 'admin'].filter(Boolean))
+  const toLabel = (str) => str.charAt(0).toUpperCase() + str.slice(1).replace(/[_-]/g, ' ')
+  const list = [...roleSet].map((r) => {
+    const matched = defaultRoles.find((d) => d.role === r)
+    return matched ?? { role: r, label: toLabel(r) }
+  })
+  res.json(list)
+}))
+
+router.post('/api/admin/roles', ...adminOnly, asyncRoute(async (req, res) => {
+  if (!dbState.ready) return requireDb(res, 'User management')
+  const { name } = z.object({ name: z.string().trim().min(2).max(50) }).parse(req.body)
+  const roleSlug = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  if (!roleSlug) return res.status(400).json({ error: 'Invalid role name.' })
+
+  await RolePermission.findOneAndUpdate(
+    { role: roleSlug },
+    { $setOnInsert: { permissions: ['courses.view', 'support.submit'], updatedBy: req.auth.sub } },
+    { upsert: true, setDefaultsOnInsert: true }
+  )
+  await saveAudit('role.created', 'RolePermission', roleSlug, { name }, req.auth.sub)
+  res.status(201).json({ role: roleSlug, label: name })
 }))
 
 router.post('/api/admin/users/import', ...adminOnly, asyncRoute(async (req, res) => {

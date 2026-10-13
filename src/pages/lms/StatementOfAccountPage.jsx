@@ -75,7 +75,7 @@ function PayBalanceModal({ row, onClose, onSuccess }) {
       <p className="eyebrow">ONLINE PAYMENT</p>
       <h2 id="pay-balance-title">Pay Remaining Balance</h2>
       <p className="enrollment-sent-lead" style={{ margin: '4px 0 16px' }}>
-        {row?.pathwayTitle}
+        {row?.pathwayTitle} {row?.batch && `(${row.batch})`}
       </p>
 
       <div style={{ background: '#f4f7f4', borderRadius: 8, padding: '12px 16px', marginBottom: 16, fontSize: 13, textAlign: 'left' }}>
@@ -202,7 +202,13 @@ export default function StatementOfAccountPage() {
         const hasBalance = Number(row.balance ?? 0) > 0
         return <article className="statement-card" key={row.id}>
           <div className="statement-card-head">
-            <div><h2>{row.pathwayTitle}</h2><small>{paymentSummary(row)}</small></div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <h2>{row.pathwayTitle}</h2>
+                {row.batch && <small className="admin-billing-manual-tag">{row.batch}</small>}
+              </div>
+              <small>{paymentSummary(row)}</small>
+            </div>
             <StatusPill kind={meta.kind}>{meta.label}</StatusPill>
           </div>
           <div className="statement-figures">

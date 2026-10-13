@@ -16,11 +16,11 @@ import { useConfirm } from '../../../lib/confirmContext.js'
 import { useToast } from '../../../lib/toastContext.js'
 import Loading from '../../../components/Loading.jsx'
 import {
-  bulkEnrollUsers, bulkUserAction, createAdminUser, deleteAdminUser, enrollUserCourse, fetchAdminCourses, fetchAdminEnrollments,
-  fetchAdminUsers, fetchInstructorTeachingCourses, fetchUserCourses, importUsers, resetAdminUserPassword, saveInstructorTeachingCourses, unenrollUserCourse, updateAdminUser, uploadAdminUserAvatar,
+  bulkEnrollUsers, bulkUserAction, createAdminRole, createAdminUser, deleteAdminUser, deleteBillingRecord, enrollUserCourse, fetchAdminCourses, fetchAdminEnrollments,
+  fetchAdminRoles, fetchAdminUsers, fetchInstructorTeachingCourses, fetchUserCourses, importUsers, resetAdminUserPassword, saveInstructorTeachingCourses, unenrollUserCourse, updateAdminUser, uploadAdminUserAvatar,
 } from '../../../lib/admin.js'
 
-const roleLabels = { learner: 'Learner', instructor: 'Instructor', admin: 'Admin' }
+const defaultRoleLabels = { learner: 'Learner', instructor: 'Instructor', admin: 'Admin' }
 const statuses = ['active', 'inactive', 'suspended']
 const statusKind = { active: 'green', invited: 'gold', inactive: 'gold', suspended: 'red' }
 const formatDate = (value) => (value ? new Date(value).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' }) : 'Never')
@@ -95,6 +95,49 @@ function ResetPasswordModal({ user, onClose, onDone }) {
       <div className="confirm-actions"><button type="button" className="button button-ghost" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={mutation.isPending}>{mutation.isPending ? 'Saving…' : 'Set password'}</button></div>
     </form>
   </Modal>
+}
+
+function CreateRoleModal({ open, onClose, onCreated }) {
+  const [roleName, setRoleName] = useState('')
+  const [error, setError] = useState('')
+  const mutation = useMutation({ mutationFn: () => createAdminRole(roleName.trim()) })
+
+  const submit = async (event) => {
+    event.preventDefault()
+    const clean = roleName.trim()
+    if (!clean) return
+    setError('')
+    try {
+      const res = await mutation.mutateAsync()
+      setRoleName('')
+      onCreated(res.role || clean.toLowerCase().replace(/[^a-z0-9]+/g, '_'))
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={() => { setRoleName(''); setError(''); onClose() }} labelledBy="create-role-title" className="confirm-modal">
+      <p className="eyebrow">USER ROLES</p>
+      <h2 id="create-role-title">Create new role</h2>
+      <form className="webinar-register-form" onSubmit={submit} style={{ textAlign: 'left', marginTop: 16 }}>
+        <input
+          autoFocus
+          required
+          placeholder="Role name (e.g. Coordinator, Assistant)"
+          value={roleName}
+          onChange={(e) => setRoleName(e.target.value)}
+        />
+        {error && <p className="form-alert" role="alert" style={{ marginTop: 8 }}>{error}</p>}
+        <div className="confirm-actions" style={{ marginTop: 16 }}>
+          <button type="button" className="button button-ghost" onClick={() => { setRoleName(''); setError(''); onClose() }}>Cancel</button>
+          <button className="button button-primary" type="submit" disabled={mutation.isPending || !roleName.trim()}>
+            {mutation.isPending ? 'Creating…' : 'Create role'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  )
 }
 
 // Per-user drawer: full profile edit, status, security, impersonation, delete, course enrollment,
@@ -179,6 +222,23 @@ function UserDetail({ user, enrollments, onChanged, onBillingChanged }) {
     if (result?.avatarUrl) setProfile((current) => ({ ...current, avatarUrl: result.avatarUrl }))
   }
 
+  const removeBilling = async (row) => {
+    const title = pathwayLabel[row.applicant?.pathway] ?? row.applicant?.pathway ?? 'this program'
+    if (!(await confirm({
+      title: 'Remove billing record?',
+      message: `Are you sure you want to remove the billing record for ${title}? This will remove it from the learner's statement and billing records.`,
+      confirmLabel: 'Remove billing',
+      danger: true,
+    }))) return
+    try {
+      await deleteBillingRecord(enrollmentRowId(row))
+      toast.success('Billing record removed.')
+      onBillingChanged()
+    } catch (e) {
+      toast.error(e.message)
+    }
+  }
+
   return <div className="admin-user-detail">
     <div className="admin-detail-grid">
       <section>
@@ -238,19 +298,7 @@ function UserDetail({ user, enrollments, onChanged, onBillingChanged }) {
               <input type="checkbox" checked={course.enrolled} onChange={() => toggleCourse(course)} disabled={enrollMutation.isPending} />
               <span><strong>{course.title}</strong><small>{course.enrolled ? `${course.completedModules} modules complete${course.completedAt ? ' · finished' : ''}` : 'Not enrolled'}</small></span>
             </label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              {user.role === 'learner' && course.enrolled && (
-                <button
-                  type="button"
-                  className="button button-ghost button-compact"
-                  title={`Add manual billing for ${course.title}`}
-                  onClick={() => { setBillingCourseId(course.id); setManualBillingOpen(true) }}
-                >
-                  <Receipt size={13} /> Bill course
-                </button>
-              )}
-              <BookOpen size={15} />
-            </div>
+            <BookOpen size={15} />
           </div>)}
         </div>)}
     </section>
@@ -266,7 +314,12 @@ function UserDetail({ user, enrollments, onChanged, onBillingChanged }) {
       {!enrollments.length ? <p className="operations-note">No paid enrollment on record for this email — an admission form was never completed with payment, or is still in progress.</p>
         : enrollments.map((row) => <div className="admin-billing-row" key={enrollmentRowId(row)}>
           <div className="admin-billing-row-head">
-            <span><strong>{pathwayLabel[row.applicant?.pathway] ?? row.applicant?.pathway}</strong><StatusPill kind={enrollmentPillKind(row.status)}>{enrollmentStatusLabel[row.status] ?? row.status}</StatusPill>{row.origin === 'manual' && <small className="admin-billing-manual-tag">Manually billed</small>}</span>
+            <span>
+              <strong>{pathwayLabel[row.applicant?.pathway] ?? row.applicant?.pathway}</strong>
+              {row.batch && <small className="admin-billing-manual-tag" style={{ marginLeft: 6 }}>{row.batch}</small>}
+              <StatusPill kind={enrollmentPillKind(row.status)}>{enrollmentStatusLabel[row.status] ?? row.status}</StatusPill>
+              {row.origin === 'manual' && <small className="admin-billing-manual-tag">Manually billed</small>}
+            </span>
             <span className="admin-billing-figures">{peso(row.amount)} total · {peso(row.amountPaid)} paid{Number(row.balance ?? 0) > 0 && <b className="admin-billing-balance"> · {peso(row.balance)} due</b>}</span>
           </div>
           <EnrollmentDocumentLinks enrollmentId={enrollmentRowId(row)} applicantName={user.name} documents={row.documents} emptyLabel={row.origin === 'manual' ? null : undefined} />
@@ -276,6 +329,7 @@ function UserDetail({ user, enrollments, onChanged, onBillingChanged }) {
           <div className="admin-row-actions">
             <button type="button" className="button button-ghost button-compact" onClick={() => setBillingRow(row)}><Receipt size={14} /> Payments</button>
             {row.status === 'approved' && Number(row.balance ?? 0) > 0 && <button type="button" className="button button-ghost button-compact" onClick={() => setDueDateRow(row)}><CalendarClock size={14} /> {row.payment?.balanceDueDate ? 'Edit due date' : 'Set due date'}</button>}
+            <button type="button" className="button button-ghost button-compact button-danger" onClick={() => removeBilling(row)}><Trash2 size={14} /> Remove billing</button>
           </div>
         </div>)}
       {billingRow && <BillingDetailModal key={enrollmentRowId(billingRow)} enrollmentId={enrollmentRowId(billingRow)} name={user.name} email={user.email} pathwayTitle={pathwayLabel[billingRow.applicant?.pathway] ?? billingRow.applicant?.pathway} onClose={() => setBillingRow(null)} onChanged={onBillingChanged} />}
@@ -305,10 +359,22 @@ export default function AdminUsersPage({ user }) {
   const fileRef = useRef(null)
   const [filters, setFilters] = useState({ role: '', status: '', course: '', billing: '', search: '' })
   const [error, setError] = useState('')
-  const [form, setForm] = useState({ name: '', email: '', username: '', role: 'learner', courseIds: [] })
+  const [form, setForm] = useState({ name: '', email: '', username: '', role: 'learner', courseId: '' })
   const [selected, setSelected] = useState(() => new Set())
   const [expandedId, setExpandedId] = useState('')
   const [bulkCourse, setBulkCourse] = useState('')
+  const [newRoleModalOpen, setNewRoleModalOpen] = useState(false)
+
+  const { data: serverRoles = [] } = useQuery({ queryKey: ['admin-roles'], queryFn: fetchAdminRoles })
+  const roleOptions = useMemo(() => {
+    const map = { ...defaultRoleLabels }
+    if (Array.isArray(serverRoles)) {
+      for (const r of serverRoles) {
+        if (r?.role && r?.label) map[r.role] = r.label
+      }
+    }
+    return map
+  }, [serverRoles])
 
   const { data: allUsers = [], isLoading } = useQuery({ queryKey: ['admin-users', filters], queryFn: () => fetchAdminUsers(filters) })
   // The signed-in admin can't manage themselves here (self-edit is blocked server-side anyway,
@@ -320,17 +386,11 @@ export default function AdminUsersPage({ user }) {
   // Documents/payments/balance now live here per learner (see UserDetail's billing section) —
   // fetched in bulk once rather than per row, so expanding "Manage" never costs its own round trip.
   const { data: enrollments = [] } = useQuery({ queryKey: ['admin-enrollments', false], queryFn: () => fetchAdminEnrollments({}) })
-  // A learner can restart the admission form and land several Enrollment rows on the same email —
-  // most never get past documents_pending/payment_pending. Only the copy that actually collected
-  // money (amountPaid from the Payment ledger, same source of truth the rest of this page uses) is
-  // a real enrollment worth showing here; the rest are abandoned duplicates, not a second program.
-  // origin:'manual' is exempt from that check — it's a billing record staff created on purpose for
-  // someone onboarded outside the public flow, so it belongs here even before its first payment is
-  // recorded (otherwise a freshly created record would vanish before anyone could pay against it).
+  // Show all active (non-archived) enrollments for this learner so any billing record or application is visible.
   const enrollmentsByEmail = useMemo(() => {
     const map = new Map()
     for (const row of enrollments) {
-      if (Number(row.amountPaid ?? 0) <= 0 && row.origin !== 'manual') continue
+      if (row.archivedAt) continue
       const email = row.applicant?.email?.toLowerCase()
       if (!email) continue
       if (!map.has(email)) map.set(email, [])
@@ -365,16 +425,18 @@ export default function AdminUsersPage({ user }) {
       const result = await createMutation.mutateAsync({
         ...form,
         username: form.username.trim() || undefined,
-        courseIds: isInstructorOrLearner && form.courseIds?.length ? form.courseIds : undefined,
+        courseId: isInstructorOrLearner && form.courseId ? form.courseId : undefined,
+        courseIds: isInstructorOrLearner && form.courseId ? [form.courseId] : undefined,
       })
       toast.success(`${result.user.name} created.${result.delivery === 'sent' ? ' A password-setup email was sent.' : ` Share this setup link securely: ${result.setupUrl}`}`, { duration: 9000 })
-      setForm({ name: '', email: '', username: '', role: 'learner', courseIds: [] })
+      setForm({ name: '', email: '', username: '', role: 'learner', courseId: '' })
       invalidate()
       invalidateEnrollments()
     } catch (createError) { setError(createError.message) }
   }
   const quickUpdate = async (row, updates) => {
-    if (updates.role && !(await confirm({ title: 'Change this member\'s role?', message: `${row.name} will become ${roleLabels[updates.role].toLowerCase()} — this changes what they can access across the platform.`, confirmLabel: 'Change role', danger: false }))) return
+    const targetLabel = updates.role ? (roleOptions[updates.role] ?? updates.role) : ''
+    if (updates.role && !(await confirm({ title: 'Change this member\'s role?', message: `${row.name} will become ${targetLabel.toLowerCase()} — this changes what they can access across the platform.`, confirmLabel: 'Change role', danger: false }))) return
     if (updates.status && updates.status !== 'active' && !(await confirm({ title: `${updates.status === 'suspended' ? 'Suspend' : 'Deactivate'} this account?`, message: `${row.name} will immediately lose access and be signed out.`, confirmLabel: updates.status === 'suspended' ? 'Suspend' : 'Deactivate' }))) return
     try { await updateMutation.mutateAsync({ id: row.id, updates }); toast.success('Updated.'); invalidate() } catch (e) { toast.error(e.message) }
   }
@@ -421,15 +483,46 @@ export default function AdminUsersPage({ user }) {
       <input required placeholder="Full name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
       <input required type="email" placeholder="Email address" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
       <input placeholder="Username (optional)" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-      <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value, courseIds: (e.target.value === 'instructor' || e.target.value === 'learner') ? form.courseIds : [] })}>{Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-      {(form.role === 'instructor' || form.role === 'learner') && <select multiple value={form.courseIds} onChange={(e) => setForm({ ...form, courseIds: [...e.target.selectedOptions].map((option) => option.value) })} aria-label={form.role === 'instructor' ? 'Assign courses to instructor' : 'Assign courses to learner'} title={form.role === 'instructor' ? 'Assign courses to teach (Ctrl+click to multi-select)' : 'Enroll learner in course(s) (Ctrl+click to multi-select)'}>{courses.map((course) => <option key={course.id ?? course._id} value={course.id ?? course._id}>{course.title}</option>)}</select>}
+      <select
+        value={form.role}
+        onChange={(e) => {
+          if (e.target.value === '__new_role__') {
+            setNewRoleModalOpen(true)
+            return
+          }
+          setForm({
+            ...form,
+            role: e.target.value,
+            courseId: (e.target.value === 'instructor' || e.target.value === 'learner') ? form.courseId : '',
+          })
+        }}
+      >
+        {Object.entries(roleOptions).map(([value, label]) => (
+          <option key={value} value={value}>{label}</option>
+        ))}
+        <option value="__new_role__">+ Create new role...</option>
+      </select>
+      {(form.role === 'instructor' || form.role === 'learner') && (
+        <select
+          value={form.courseId}
+          onChange={(e) => setForm({ ...form, courseId: e.target.value })}
+          aria-label={form.role === 'instructor' ? 'Assign teaching course' : 'Assign course'}
+        >
+          <option value="">{form.role === 'instructor' ? 'Assign teaching course (optional)' : 'Assign course (optional)'}</option>
+          {courses.map((course) => (
+            <option key={course.id ?? course._id} value={course.id ?? course._id}>
+              {course.title}
+            </option>
+          ))}
+        </select>
+      )}
       <button className="button button-primary button-compact" type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? 'Creating…' : 'Create user'}</button>
     </form>
 
     {error && <p className="form-alert" role="alert">{error}</p>}
 
     <div className="admin-toolbar">
-      <select value={filters.role} onChange={(e) => setFilter('role', e.target.value)}><option value="">All roles</option>{Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+      <select value={filters.role} onChange={(e) => setFilter('role', e.target.value)}><option value="">All roles</option>{Object.entries(roleOptions).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
       <select value={filters.status} onChange={(e) => setFilter('status', e.target.value)}><option value="">All statuses</option>{['active', 'inactive', 'suspended', 'invited'].map((value) => <option key={value} value={value}>{value}</option>)}</select>
       <select value={filters.course} onChange={(e) => setFilter('course', e.target.value)}><option value="">All courses</option>{courses.map((course) => <option key={course.id} value={course.id}>{course.title}</option>)}</select>
       <select value={filters.billing} onChange={(e) => setFilter('billing', e.target.value)}><option value="">All billing</option><option value="due">Balance due</option><option value="settled">Fully settled</option><option value="none">No paid enrollment</option></select>
@@ -453,7 +546,7 @@ export default function AdminUsersPage({ user }) {
           <div className={`admin-table-row ${expandedId === row.id ? 'expanded' : ''}`}>
             <span><input type="checkbox" checked={selected.has(row.id)} onChange={() => toggle(row.id)} aria-label={`Select ${row.name}`} /></span>
             <span><strong>{row.name}</strong><small>{row.email}{row.username ? ` · @${row.username}` : ''}</small></span>
-            <span><select value={row.role} onChange={(e) => quickUpdate(row, { role: e.target.value })}>{Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></span>
+            <span><select value={row.role} onChange={(e) => quickUpdate(row, { role: e.target.value })}>{Object.entries(roleOptions).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></span>
             <span><StatusPill kind={statusKind[row.status] ?? 'green'}>{row.status}</StatusPill></span>
             {/* Rolled up from every enrollment on this email — surfaced here so an admin can spot
                 who owes money without opening "Manage" first. */}
@@ -475,5 +568,16 @@ export default function AdminUsersPage({ user }) {
           {expandedId === row.id && <UserDetail user={row} enrollments={enrollmentsFor(row)} onChanged={invalidate} onBillingChanged={invalidateEnrollments} />}
         </div> })}
     </div>
+
+    <CreateRoleModal
+      open={newRoleModalOpen}
+      onClose={() => setNewRoleModalOpen(false)}
+      onCreated={(newRole) => {
+        setNewRoleModalOpen(false)
+        queryClient.invalidateQueries({ queryKey: ['admin-roles'] })
+        setForm((prev) => ({ ...prev, role: newRole }))
+        toast.success(`Role "${newRole}" created.`)
+      }}
+    />
   </>
 }

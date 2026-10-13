@@ -14,7 +14,7 @@ const userSchema = new Schema({
   name: { type: String, trim: true, required: true },
   email: { type: String, trim: true, lowercase: true, unique: true, required: true },
   username: { type: String, trim: true, lowercase: true, unique: true, sparse: true },
-  role: { type: String, enum: ['learner', 'instructor', 'admin'], default: 'learner' },
+  role: { type: String, default: 'learner' },
   status: { type: String, enum: ['invited', 'active', 'inactive', 'suspended'], default: 'invited' },
   passwordHash: String,
   mustChangePassword: { type: Boolean, default: false },
@@ -264,6 +264,7 @@ const enrollmentSchema = new Schema({
     courseId: { type: Schema.Types.ObjectId, ref: 'Course' },
   },
   amount: { type: Number, required: true },
+  batch: { type: String, trim: true, default: 'REBLEx Batch 1' },
   currency: { type: String, default: 'PHP' },
   // Optional itemisation of `amount` (Tuition, Materials, Exam fee…) for a breakdown receipt. Empty
   // means one implicit line for the full amount, so an ordinary enrollment needs nothing filled in.
@@ -471,6 +472,7 @@ const calendarEventSchema = new Schema({
   // Where the session actually happens — Zoom/Meet/Teams. Shown to learners as a "Join" button on
   // the event, so they don't have to hunt for the link in an announcement or an email.
   meetingUrl: String,
+  batch: { type: String, trim: true, default: 'REBLEx Batch 1' },
 }, { timestamps: true })
 
 // Roll-call for a single calendar session (live_review/office_hours) tied to a course — one row
@@ -720,7 +722,7 @@ const emailTemplateSchema = new Schema({
 }, { timestamps: true })
 
 const rolePermissionSchema = new Schema({
-  role: { type: String, enum: ['learner', 'instructor', 'admin'], unique: true, required: true },
+  role: { type: String, unique: true, required: true },
   permissions: { type: [String], default: [] },
   updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true })

@@ -78,6 +78,8 @@ const manualBillingInput = z.object({
   learnerId: z.string().trim().min(1),
   pathway: z.string().trim().min(1).optional(),
   courseId: z.string().trim().min(1).optional(),
+  batch: z.string().trim().max(100).optional(),
+  allowAdditional: z.boolean().optional(),
   amount: z.coerce.number().min(1).max(1_000_000).optional(),
   feeBreakdown: feeBreakdownInput.optional(),
 }).refine((data) => data.pathway || data.courseId, {
@@ -177,6 +179,7 @@ router.get('/api/staff/billing', requireAuth, requireStaff, asyncRoute(async (re
       pathwayTitle: pathwayTitleById.get(row.applicant?.pathway) ?? courseTitleBySlug.get(row.applicant?.pathway) ?? row.applicant?.pathway,
       status: row.status,
       origin: row.origin ?? 'enrollment',
+      batch: row.batch ?? 'REBLEx Batch 1',
       currency: row.currency,
       amount,
       amountPaid,
@@ -222,19 +225,71 @@ router.post('/api/staff/billing/enrollments', requireAuth, requireStaff, asyncRo
   const amount = values.amount ?? defaultAmount
   assertBreakdownTotals(values.feeBreakdown, amount)
 
-  const existing = await Enrollment.findOne({ 'applicant.email': learner.email, 'applicant.pathway': pathway, archivedAt: null }).lean()
-  if (existing) return res.status(409).json({ error: 'This learner already has an active billing record for that program.' })
+  const batch = values.batch?.trim() || 'REBLEx Batch 1'
+  const emailRegex = new RegExp(`^${learner.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')
+  const existing = await Enrollment.findOne({
+    'applicant.email': emailRegex,
+    'applicant.pathway': pathway,
+    archivedAt: null,
+  })
+
+  if (existing) {
+    const existingPayments = await Payment.find({ enrollmentId: existing._id, voidedAt: null }).lean()
+    const paid = existingPayments.reduce((sum, p) => sum + Number(p.amount ?? 0), 0)
+
+    // If no money was received on the existing record (or it was a draft/pending application/manual record),
+    // update the terms and activate it instead of returning a 409 conflict error.
+    if (paid <= 0) {
+      existing.amount = amount
+      existing.currency = pricing.currency
+      existing.batch = batch
+      existing.status = 'approved'
+      existing.origin = 'manual'
+      existing.feeBreakdown = values.feeBreakdown ?? []
+      existing.applicant = {
+        name: learner.name,
+        email: learner.email.toLowerCase(),
+        phone: learner.phone,
+        pathway,
+        ...(targetCourse ? { courseId: targetCourse._id } : {}),
+      }
+      existing.reviewedBy = req.auth.sub
+      existing.reviewedAt = new Date()
+      existing.decisionReason = 'Billing record updated by staff for manually onboarded learner.'
+      await existing.save()
+
+      if (targetCourse) {
+        await LearningProgress.findOneAndUpdate(
+          { learnerId: learner._id, courseId: targetCourse._id },
+          { $setOnInsert: { completedModuleIds: [] } },
+          { upsert: true, setDefaultsOnInsert: true }
+        )
+      }
+
+      await saveAudit('billing.record_updated', 'Enrollment', existing.id, { pathway, courseId: targetCourse?._id?.toString(), amount, batch }, req.auth.sub)
+      return res.status(200).json({ id: existing.id, amount, currency: pricing.currency, pathway, courseTitle: targetCourse?.title, batch })
+    }
+
+    // If money was already paid on this specific batch and pathway, require allowAdditional or different batch
+    if (existing.batch === batch && !values.allowAdditional) {
+      return res.status(409).json({
+        error: `This learner already has an active billing record for ${pathway} (₱${paid.toLocaleString()} paid). You can edit their billing in Payments or choose a different batch.`,
+        existingId: existing._id,
+      })
+    }
+  }
 
   const enrollment = await Enrollment.create({
     applicant: {
       name: learner.name,
-      email: learner.email,
+      email: learner.email.toLowerCase(),
       phone: learner.phone,
       pathway,
       ...(targetCourse ? { courseId: targetCourse._id } : {}),
     },
     amount,
     currency: pricing.currency,
+    batch,
     status: 'approved',
     origin: 'manual',
     feeBreakdown: values.feeBreakdown ?? [],
@@ -252,8 +307,8 @@ router.post('/api/staff/billing/enrollments', requireAuth, requireStaff, asyncRo
     )
   }
 
-  await saveAudit('billing.record_created', 'Enrollment', enrollment.id, { pathway, courseId: targetCourse?._id?.toString(), amount }, req.auth.sub)
-  res.status(201).json({ id: enrollment.id, amount, currency: pricing.currency, pathway, courseTitle: targetCourse?.title })
+  await saveAudit('billing.record_created', 'Enrollment', enrollment.id, { pathway, courseId: targetCourse?._id?.toString(), amount, batch }, req.auth.sub)
+  res.status(201).json({ id: enrollment.id, amount, currency: pricing.currency, pathway, courseTitle: targetCourse?.title, batch })
 }))
 
 // Total, itemisation, and the balance reminder. Not the payments — those have their own routes.
@@ -272,6 +327,24 @@ router.patch('/api/staff/enrollments/:id/billing', requireAuth, requireStaff, as
   await enrollment.save()
   await saveAudit('billing.record_updated', 'Enrollment', enrollment.id, { amount: enrollment.amount }, req.auth.sub)
   res.json({ id: enrollment.id, amount: enrollment.amount, feeBreakdown: enrollment.feeBreakdown ?? [] })
+}))
+
+// Remove a billing record (archives the enrollment and clears it from active billing/statements)
+router.delete('/api/staff/billing/enrollments/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!dbState.ready) return res.status(503).json({ error: 'Billing requires MongoDB.' })
+  const enrollment = await Enrollment.findById(req.params.id)
+  if (!enrollment) return res.status(404).json({ error: 'Billing record not found.' })
+
+  enrollment.archivedAt = new Date()
+  await enrollment.save()
+
+  await saveAudit('billing.record_removed', 'Enrollment', enrollment.id, {
+    applicantEmail: enrollment.applicant?.email,
+    pathway: enrollment.applicant?.pathway,
+    batch: enrollment.batch,
+  }, req.auth.sub)
+
+  res.json({ ok: true, message: 'Billing record removed.' })
 }))
 
 router.get('/api/staff/enrollments/:id/payments', requireAuth, requireStaff, asyncRoute(async (req, res) => {
@@ -415,6 +488,7 @@ router.get('/api/billing/me', requireAuth, asyncRoute(async (req, res) => {
       id: String(row._id),
       pathway: row.applicant.pathway,
       pathwayTitle: pathwayTitleById.get(row.applicant.pathway) ?? courseTitleBySlug.get(row.applicant.pathway) ?? row.applicant.pathway,
+      batch: row.batch ?? 'REBLEx Batch 1',
       status: row.status,
       amount,
       currency: row.currency,

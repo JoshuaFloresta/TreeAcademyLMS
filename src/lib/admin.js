@@ -77,9 +77,14 @@ export const archiveEnrollment = (id, archived) => post(`/api/admin/enrollments/
 // upfront only" plan — purely informational, not an in-app payment collector.
 export const setEnrollmentBalanceDue = (id, body) => patch(`/api/staff/enrollments/${id}/balance-due`, body)
 
-// Billing — the Payment ledger. A payment is never deleted, only voided, so there is no del() here.
+// User roles
+export const fetchAdminRoles = () => get('/api/admin/roles')
+export const createAdminRole = (name) => post('/api/admin/roles', { name })
+
+// Billing — the Payment ledger.
 export const fetchStaffBilling = () => get('/api/staff/billing')
 export const createBillingRecord = (body) => post('/api/staff/billing/enrollments', body)
+export const deleteBillingRecord = (id) => del(`/api/staff/billing/enrollments/${id}`)
 export const updateEnrollmentBilling = (id, body) => patch(`/api/staff/enrollments/${id}/billing`, body)
 export const fetchEnrollmentPayments = (id) => get(`/api/staff/enrollments/${id}/payments`)
 export const recordPayment = (id, body) => post(`/api/staff/enrollments/${id}/payments`, body)

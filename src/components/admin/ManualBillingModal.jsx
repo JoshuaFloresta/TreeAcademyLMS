@@ -46,6 +46,7 @@ export default function ManualBillingModal({ open, learnerId, learnerName, cours
 
   const [userSelectedId, setUserSelectedId] = useState(null)
   const [customAmount, setCustomAmount] = useState(null)
+  const [batch, setBatch] = useState('REBLEx Batch 1')
   const [error, setError] = useState('')
 
   const selectedId = userSelectedId
@@ -73,6 +74,7 @@ export default function ManualBillingModal({ open, learnerId, learnerName, cours
   const handleClose = () => {
     setUserSelectedId(null)
     setCustomAmount(null)
+    setBatch('REBLEx Batch 1')
     setError('')
     onClose()
   }
@@ -93,6 +95,7 @@ export default function ManualBillingModal({ open, learnerId, learnerName, cours
         learnerId,
         courseId: selectedItem.courseId,
         pathway: selectedItem.pathway,
+        batch: batch.trim() || 'REBLEx Batch 1',
         amount: amount ? Number(amount) : undefined,
       })
       toast.success(`Billing record created for ${selectedItem.title}.`)
@@ -138,6 +141,16 @@ export default function ManualBillingModal({ open, learnerId, learnerName, cours
               ))}
             </optgroup>
           </select>
+        </label>
+        <label className="builder-field">
+          <span>Batch / Current Session</span>
+          <input
+            type="text"
+            required
+            value={batch}
+            onChange={(e) => setBatch(e.target.value)}
+            placeholder="e.g. REBLEx Batch 1"
+          />
         </label>
         <label className="builder-field">
           <span>Billing amount (₱)</span>
