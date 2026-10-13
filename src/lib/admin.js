@@ -87,6 +87,7 @@ export const setEnrollmentBalanceDue = (id, body) => patch(`/api/staff/enrollmen
 // User roles
 export const fetchAdminRoles = () => get('/api/admin/roles')
 export const createAdminRole = (name) => post('/api/admin/roles', { name })
+export const deleteAdminRole = (role) => del(`/api/admin/roles/${encodeURIComponent(role)}`)
 
 // Billing — the Payment ledger.
 export const fetchStaffBilling = () => get('/api/staff/billing')
@@ -187,26 +188,177 @@ export const fetchEmailTemplates = () => get('/api/admin/email-templates')
 export const sendTestEmail = (key, to) => post(`/api/admin/email-templates/${key}/test`, { to: to || undefined })
 export const updateEmailTemplate = (key, body) => patch(`/api/admin/email-templates/${key}`, body)
 
-// Permission catalogue shown in the Roles & Permissions matrix.
+// Permission catalogue shown in the Roles & Permissions matrix, organized by system module.
+export const PERMISSION_MODULES = [
+  'General & Platform',
+  'User Management',
+  'Courses & Builder',
+  'Assignments & Quizzes',
+  'Classroom & Roster',
+  'Enrollments & Admissions',
+  'Billing & Finance',
+  'Community & Discussions',
+  'Certificates & Badges',
+  'Webinars & Special Courses',
+  'Content & Marketing',
+  'Support & Governance',
+]
+
 export const PERMISSION_CATALOG = [
-  { key: 'courses.view', label: 'View courses' },
-  { key: 'courses.manage', label: 'Create & edit courses' },
-  { key: 'assignments.submit', label: 'Submit assignments' },
-  { key: 'assignments.grade', label: 'Grade assignments' },
-  { key: 'quizzes.attempt', label: 'Attempt quizzes' },
-  { key: 'quizzes.manage', label: 'Manage quizzes' },
-  { key: 'certificates.view', label: 'View certificates' },
-  { key: 'enrollments.review', label: 'Review enrollments' },
-  { key: 'enrollments.manage', label: 'Manage enrollments' },
-  { key: 'recognition.award', label: 'Award recognition' },
-  { key: 'support.submit', label: 'Submit support tickets' },
-  { key: 'support.manage', label: 'Manage support tickets' },
-  { key: 'reports.submit', label: 'Submit reports' },
-  { key: 'reports.manage', label: 'Manage reports' },
-  { key: 'users.manage', label: 'Manage users' },
-  { key: 'catalog.manage', label: 'Moderate catalog' },
-  { key: 'roles.manage', label: 'Manage roles & permissions' },
-  { key: 'audit.view', label: 'View audit logs' },
-  { key: 'content.manage', label: 'Manage content library' },
-  { key: 'analytics.view', label: 'View global analytics' },
+  // General & Platform
+  { key: 'dashboard.view', label: 'View LMS Dashboard', module: 'General & Platform' },
+  { key: 'settings.manage', label: 'Manage Platform & Account Settings', module: 'General & Platform' },
+
+  // User Management
+  { key: 'users.view', label: 'View user directory & profiles', module: 'User Management' },
+  { key: 'users.manage', label: 'Create, edit & manage users', module: 'User Management' },
+  { key: 'roles.manage', label: 'Manage roles & permissions matrix', module: 'User Management' },
+
+  // Courses & Builder
+  { key: 'courses.view', label: 'View courses & curriculum', module: 'Courses & Builder' },
+  { key: 'courses.manage', label: 'Create & edit courses & modules', module: 'Courses & Builder' },
+  { key: 'catalog.manage', label: 'Moderate & price public catalog', module: 'Courses & Builder' },
+
+  // Assignments & Quizzes
+  { key: 'assignments.submit', label: 'Submit student assignments', module: 'Assignments & Quizzes' },
+  { key: 'assignments.grade', label: 'Grade assignments & feedback', module: 'Assignments & Quizzes' },
+  { key: 'quizzes.attempt', label: 'Attempt quizzes & examinations', module: 'Assignments & Quizzes' },
+  { key: 'quizzes.manage', label: 'Author quizzes, questions & passing scores', module: 'Assignments & Quizzes' },
+  { key: 'submissions.view', label: 'View submissions queue', module: 'Assignments & Quizzes' },
+  { key: 'submissions.grade', label: 'Grade submissions and mark completion', module: 'Assignments & Quizzes' },
+
+  // Classroom & Roster
+  { key: 'roster.view', label: 'View student class rosters', module: 'Classroom & Roster' },
+  { key: 'roster.manage', label: 'Manage class roster enrollments', module: 'Classroom & Roster' },
+  { key: 'attendance.view', label: 'View course attendance records', module: 'Classroom & Roster' },
+  { key: 'attendance.manage', label: 'Take & update student attendance', module: 'Classroom & Roster' },
+
+  // Enrollments & Admissions
+  { key: 'enrollments.review', label: 'Review & approve/reject applications', module: 'Enrollments & Admissions' },
+  { key: 'enrollments.manage', label: 'Manage student enrollments & pathways', module: 'Enrollments & Admissions' },
+  { key: 'enrollments.documents', label: 'View & download enrollment agreements & IDs', module: 'Enrollments & Admissions' },
+
+  // Billing & Finance
+  { key: 'billing.view', label: 'View billing ledger & balances', module: 'Billing & Finance' },
+  { key: 'billing.manage', label: 'Create billing, record & void payments', module: 'Billing & Finance' },
+  { key: 'statement.view', label: 'View Statement of Account', module: 'Billing & Finance' },
+  { key: 'vouchers.manage', label: 'Create & manage discount vouchers', module: 'Billing & Finance' },
+
+  // Community & Discussions
+  { key: 'announcements.view', label: 'View academy announcements', module: 'Community & Discussions' },
+  { key: 'announcements.create', label: 'Create & broadcast announcements', module: 'Community & Discussions' },
+  { key: 'forums.participate', label: 'Participate in forums & discussions', module: 'Community & Discussions' },
+  { key: 'forums.moderate', label: 'Moderate discussion topics & replies', module: 'Community & Discussions' },
+  { key: 'calendar.view', label: 'View learning calendar & events', module: 'Community & Discussions' },
+  { key: 'calendar.manage', label: 'Schedule & modify calendar events', module: 'Community & Discussions' },
+
+  // Certificates & Badges
+  { key: 'certificates.view', label: 'View earned completion certificates', module: 'Certificates & Badges' },
+  { key: 'certificates.issue', label: 'Issue & revoke course certificates', module: 'Certificates & Badges' },
+  { key: 'recognition.view', label: 'View student badges & honors', module: 'Certificates & Badges' },
+  { key: 'recognition.award', label: 'Award student badges & recognition', module: 'Certificates & Badges' },
+
+  // Webinars & Special Courses
+  { key: 'webinars.view', label: 'View special courses & webinars', module: 'Webinars & Special Courses' },
+  { key: 'webinars.manage', label: 'Create & manage webinars & registrations', module: 'Webinars & Special Courses' },
+
+  // Content & Marketing
+  { key: 'blog.view', label: 'Read blog posts', module: 'Content & Marketing' },
+  { key: 'blog.manage', label: 'Publish & manage academy blog articles', module: 'Content & Marketing' },
+  { key: 'email_automation.manage', label: 'Configure email automation templates', module: 'Content & Marketing' },
+  { key: 'content.view', label: 'Browse shared content library', module: 'Content & Marketing' },
+  { key: 'content.manage', label: 'Upload & manage content assets', module: 'Content & Marketing' },
+
+  // Support & Governance
+  { key: 'support.submit', label: 'Submit support tickets', module: 'Support & Governance' },
+  { key: 'support.manage', label: 'Manage & resolve helpdesk tickets', module: 'Support & Governance' },
+  { key: 'reports.submit', label: 'Submit incident & flag reports', module: 'Support & Governance' },
+  { key: 'reports.manage', label: 'Review & resolve submitted reports', module: 'Support & Governance' },
+  { key: 'analytics.view', label: 'View global analytics & metrics', module: 'Support & Governance' },
+  { key: 'audit.view', label: 'View security audit logs', module: 'Support & Governance' },
+]
+
+export const ROLE_PRESETS = [
+  {
+    id: 'superadmin',
+    name: 'Full Administrator (All Access)',
+    description: 'Unrestricted access to all modules, financial ledgers, system settings, and user management.',
+    permissions: PERMISSION_CATALOG.map((p) => p.key),
+  },
+  {
+    id: 'instructor',
+    name: 'Academic Instructor / Teacher',
+    description: 'Course authoring, grading submissions, student roster, attendance, forums, and badges.',
+    permissions: [
+      'courses.view', 'courses.manage', 'assignments.grade', 'quizzes.manage',
+      'submissions.view', 'submissions.grade', 'roster.view', 'attendance.view', 'attendance.manage',
+      'enrollments.review', 'recognition.view', 'recognition.award', 'announcements.view',
+      'announcements.create', 'forums.participate', 'calendar.view', 'calendar.manage',
+      'support.submit', 'reports.submit', 'content.view',
+    ],
+  },
+  {
+    id: 'registrar',
+    name: 'Registrar / Admissions Officer',
+    description: 'Student admissions, enrollment paperwork review, pathway approval, and user records.',
+    permissions: [
+      'dashboard.view', 'users.view', 'courses.view', 'roster.view',
+      'enrollments.review', 'enrollments.manage', 'enrollments.documents',
+      'vouchers.manage', 'announcements.view', 'support.submit', 'reports.submit',
+    ],
+  },
+  {
+    id: 'finance',
+    name: 'Finance / Billing Officer',
+    description: 'Payment collection, statement of accounts, billing management, vouchers, and audit inspection.',
+    permissions: [
+      'dashboard.view', 'users.view', 'billing.view', 'billing.manage', 'statement.view',
+      'vouchers.manage', 'enrollments.documents', 'audit.view', 'support.submit',
+    ],
+  },
+  {
+    id: 'content_manager',
+    name: 'Content & Community Manager',
+    description: 'Course catalog publication, resource library, blog publications, webinars, and forum moderation.',
+    permissions: [
+      'courses.view', 'catalog.manage', 'webinars.view', 'webinars.manage',
+      'blog.view', 'blog.manage', 'email_automation.manage', 'content.view', 'content.manage',
+      'forums.participate', 'forums.moderate', 'announcements.view', 'announcements.create',
+      'support.submit', 'reports.submit',
+    ],
+  },
+  {
+    id: 'support_agent',
+    name: 'Support & Helpdesk Agent',
+    description: 'Customer inquiries, support ticket resolution, user profiles, and incident reporting.',
+    permissions: [
+      'dashboard.view', 'users.view', 'courses.view', 'support.submit', 'support.manage',
+      'reports.submit', 'reports.manage', 'announcements.view',
+    ],
+  },
+  {
+    id: 'learner',
+    name: 'Learner / Student',
+    description: 'Standard student access to coursework, quizzes, assignments, certificate viewing, and discussions.',
+    permissions: [
+      'courses.view', 'assignments.submit', 'quizzes.attempt', 'certificates.view',
+      'statement.view', 'forums.participate', 'announcements.view', 'calendar.view',
+      'recognition.view', 'support.submit', 'reports.submit',
+    ],
+  },
+  {
+    id: 'auditor',
+    name: 'Auditor / Observer (Read-Only)',
+    description: 'Read-only access to audit logs, analytics, course catalog, and reports without edit rights.',
+    permissions: [
+      'dashboard.view', 'users.view', 'courses.view', 'audit.view',
+      'analytics.view', 'reports.manage', 'content.view',
+    ],
+  },
+  {
+    id: 'clear',
+    name: 'Clear All (Clean Slate)',
+    description: 'Removes all permissions for this role so you can configure it from scratch.',
+    permissions: [],
+  },
 ]

@@ -64,11 +64,7 @@ const emailTemplateUpdateInput = z.object({
 const testEmailInput = z.object({
   to: z.string().trim().max(254).refine((value) => value === '' || z.string().email().safeParse(value).success, 'Enter a valid email address.').optional(),
 })
-const permissionsInput = z.object({
-  learner: z.array(z.string().trim().max(60)).max(60),
-  instructor: z.array(z.string().trim().max(60)).max(60),
-  admin: z.array(z.string().trim().max(60)).max(60),
-})
+const permissionsInput = z.record(z.string().trim().min(1).max(60), z.array(z.string().trim().max(60)).max(150))
 const contentAssetInput = z.object({
   title: z.string().trim().min(2).max(160),
   description: z.string().trim().max(1000).optional(),
@@ -102,19 +98,48 @@ const bulkDecisionInput = z.object({
 })
 
 const DEFAULT_PERMISSIONS = {
-  learner: ['courses.view', 'assignments.submit', 'quizzes.attempt', 'certificates.view', 'support.submit', 'reports.submit'],
-  instructor: ['courses.view', 'courses.manage', 'assignments.grade', 'quizzes.manage', 'enrollments.review', 'recognition.award', 'support.submit', 'reports.submit'],
-  admin: ['users.manage', 'catalog.manage', 'roles.manage', 'enrollments.manage', 'audit.view', 'content.manage', 'support.manage', 'analytics.view', 'reports.manage'],
+  learner: [
+    'courses.view', 'assignments.submit', 'quizzes.attempt', 'certificates.view',
+    'statement.view', 'forums.participate', 'announcements.view', 'calendar.view',
+    'support.submit', 'reports.submit',
+  ],
+  instructor: [
+    'courses.view', 'courses.manage', 'assignments.grade', 'quizzes.manage',
+    'submissions.view', 'submissions.grade', 'attendance.view', 'attendance.manage',
+    'roster.view', 'enrollments.review', 'recognition.award', 'forums.participate',
+    'announcements.view', 'calendar.view', 'support.submit', 'reports.submit',
+  ],
+  admin: [
+    'dashboard.view', 'users.view', 'users.manage', 'roles.manage',
+    'courses.view', 'courses.manage', 'catalog.manage',
+    'assignments.submit', 'assignments.grade', 'quizzes.attempt', 'quizzes.manage',
+    'submissions.view', 'submissions.grade',
+    'roster.view', 'roster.manage', 'attendance.view', 'attendance.manage',
+    'enrollments.review', 'enrollments.manage', 'enrollments.documents',
+    'billing.view', 'billing.manage', 'statement.view', 'vouchers.manage',
+    'announcements.view', 'announcements.create', 'forums.participate', 'forums.moderate',
+    'calendar.view', 'calendar.manage',
+    'certificates.view', 'certificates.issue', 'recognition.view', 'recognition.award',
+    'webinars.view', 'webinars.manage', 'blog.view', 'blog.manage',
+    'email_automation.manage', 'content.view', 'content.manage',
+    'support.submit', 'support.manage', 'reports.submit', 'reports.manage',
+    'analytics.view', 'audit.view', 'settings.manage',
+  ],
 }
 
 async function loadPermissions() {
-  const saved = await RolePermission.find().lean()
+  const [saved, distinctRoles] = await Promise.all([
+    RolePermission.find().lean(),
+    User.distinct('role'),
+  ])
   const byRole = Object.fromEntries(saved.map((row) => [row.role, row.permissions]))
-  return {
-    learner: byRole.learner ?? DEFAULT_PERMISSIONS.learner,
-    instructor: byRole.instructor ?? DEFAULT_PERMISSIONS.instructor,
-    admin: byRole.admin ?? DEFAULT_PERMISSIONS.admin,
+  const allRoles = new Set(['learner', 'instructor', 'admin', ...distinctRoles, ...saved.map((s) => s.role)].filter(Boolean))
+
+  const result = {}
+  for (const role of allRoles) {
+    result[role] = byRole[role] ?? DEFAULT_PERMISSIONS[role] ?? ['courses.view', 'support.submit']
   }
+  return result
 }
 
 router.get('/api/admin/courses', ...adminOnly, asyncRoute(async (_req, res) => {

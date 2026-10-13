@@ -119,6 +119,21 @@ router.get('/api/admin/roles', ...adminOnly, asyncRoute(async (_req, res) => {
   res.json(list)
 }))
 
+router.delete('/api/admin/roles/:role', ...adminOnly, asyncRoute(async (req, res) => {
+  if (!dbState.ready) return requireDb(res, 'User management')
+  const { role } = req.params
+  if (['learner', 'instructor', 'admin'].includes(role)) {
+    return res.status(400).json({ error: 'System core roles (learner, instructor, admin) cannot be deleted.' })
+  }
+  const usersWithRole = await User.countDocuments({ role })
+  if (usersWithRole > 0) {
+    return res.status(400).json({ error: `Cannot delete role "${role}" because it is currently assigned to ${usersWithRole} user(s). Reassign them first.` })
+  }
+  await RolePermission.deleteOne({ role })
+  await saveAudit('role.deleted', 'RolePermission', role, {}, req.auth.sub)
+  res.status(200).json({ deleted: true, role })
+}))
+
 router.post('/api/admin/roles', ...adminOnly, asyncRoute(async (req, res) => {
   if (!dbState.ready) return requireDb(res, 'User management')
   const { name } = z.object({ name: z.string().trim().min(2).max(50) }).parse(req.body)
