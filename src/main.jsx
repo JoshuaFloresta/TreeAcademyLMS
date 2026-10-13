@@ -7,7 +7,17 @@ import { ConfirmProvider } from './components/ConfirmProvider.jsx'
 import './index.css'
 import App from './App.jsx'
 
-const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } })
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: (failureCount, error) => {
+        if (error?.status === 401 || error?.status === 403) return false
+        return failureCount < 1
+      },
+      refetchOnWindowFocus: false,
+    },
+  },
+})
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

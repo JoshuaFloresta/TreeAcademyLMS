@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CreditCard, Plus, Receipt, Trash2, Wallet } from 'lucide-react'
+import { CreditCard, Plus, Receipt, RefreshCw, Trash2, Wallet } from 'lucide-react'
 import StatusPill from '../../../components/StatusPill.jsx'
 import Modal from '../../../components/Modal.jsx'
 import Loading from '../../../components/Loading.jsx'
@@ -46,7 +46,7 @@ export default function AdminBillingPage() {
   const [search, setSearch] = useState('')
   const [detailRow, setDetailRow] = useState(null)
   const [newOpen, setNewOpen] = useState(false)
-  const { data: rows = [], isLoading, isFetching, refetch } = useQuery({ queryKey: ['staff-billing'], queryFn: fetchStaffBilling })
+  const { data: rows = [], isLoading, isError, error, isFetching, refetch } = useQuery({ queryKey: ['staff-billing'], queryFn: fetchStaffBilling })
   const invalidate = () => { queryClient.invalidateQueries({ queryKey: ['staff-billing'] }); queryClient.invalidateQueries({ queryKey: ['staff-payments'] }) }
 
   const removeBilling = async (row) => {
@@ -101,6 +101,10 @@ export default function AdminBillingPage() {
     <div className="admin-table admin-table-billing">
       <div className="admin-table-head"><span>LEARNER</span><span>PROGRAM</span><span>TOTAL</span><span>PAID</span><span>BALANCE</span><span>ACTIONS</span></div>
       {isLoading ? <Loading label="Loading billing…" />
+        : isError ? <div className="operations-note" style={{ color: '#c0392b', display: 'flex', alignItems: 'center', gap: 10, padding: '16px 0' }}>
+            <span>Failed to load billing: {error?.message || 'Server error.'}</span>
+            <button type="button" className="button button-ghost button-compact" onClick={() => refetch()}><RefreshCw size={12} /> Retry</button>
+          </div>
         : !visible.length ? <p className="operations-note">{search ? 'No learner matches that search.' : 'No billing records yet.'}</p>
         : visible.map((row) => <div className="admin-table-row" key={row.id}>
           <span><strong>{row.name}</strong><small>{row.email}</small></span>

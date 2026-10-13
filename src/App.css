@@ -1161,7 +1161,9 @@ a.task-row:hover { background: #f7f8f5; }
 .webinar-card-actions { display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: center; margin-top: auto; padding-top: 4px; }
 .webinar-card-actions .button { flex: 0 0 auto; }
 .webinar-register-form { display: grid; gap: 10px; }
-.webinar-register-form input { width: 100%; min-height: 42px; padding: 9px 11px; color: #183b29; background: #fff; border: 1px solid #cdd7cc; border-radius: 4px; outline-color: var(--gold); font: inherit; font-size: 13px; }
+.webinar-register-form input:not([type="radio"]):not([type="checkbox"]) { width: 100%; min-height: 42px; padding: 9px 11px; color: #183b29; background: #fff; border: 1px solid #cdd7cc; border-radius: 4px; outline-color: var(--gold); font: inherit; font-size: 13px; }
+.webinar-register-form input[type="radio"],
+.webinar-register-form input[type="checkbox"] { width: 16px; height: 16px; min-height: 0; margin: 0; cursor: pointer; accent-color: var(--forest, #183b29); }
 
 /* About page */
 .about-hero { padding-bottom: 0; }

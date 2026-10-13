@@ -70,83 +70,246 @@ function PayBalanceModal({ row, onClose, onSuccess }) {
     }
   }
 
+  // Quick preset shortcuts for partial payments
+  const presets = [
+    { label: '₱1,000', val: 1000 },
+    { label: '₱2,500', val: 2500 },
+    { label: '₱5,000', val: 5000 },
+    { label: '50% Balance', val: Math.round(balance / 2) },
+  ].filter((p) => p.val < balance && p.val >= minAmount)
+
   return (
     <Modal open={Boolean(row)} onClose={onClose} labelledBy="pay-balance-title" className="confirm-modal">
       <p className="eyebrow">ONLINE PAYMENT</p>
       <h2 id="pay-balance-title">Pay Remaining Balance</h2>
-      <p className="enrollment-sent-lead" style={{ margin: '4px 0 16px' }}>
-        {row?.pathwayTitle} {row?.batch && `(${row.batch})`}
+      <p className="enrollment-sent-lead" style={{ margin: '4px 0 16px', color: '#556357' }}>
+        {row?.pathwayTitle} {row?.batch && <span style={{ fontWeight: 600 }}>({row.batch})</span>}
       </p>
 
-      <div style={{ background: '#f4f7f4', borderRadius: 8, padding: '12px 16px', marginBottom: 16, fontSize: 13, textAlign: 'left' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-          <span style={{ color: '#657367' }}>Total course fee:</span>
+      {/* Financial Summary Card */}
+      <div style={{
+        background: '#f6f8f6',
+        border: '1px solid #e1e7e1',
+        borderRadius: 8,
+        padding: '14px 16px',
+        marginBottom: 18,
+        fontSize: 13,
+        textAlign: 'left',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+          <span style={{ color: '#657367' }}>Total course fee</span>
           <strong>{peso(row?.amount)}</strong>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-          <span style={{ color: '#657367' }}>Amount already paid:</span>
-          <span style={{ color: '#1b432e', fontWeight: 600 }}>{peso(row?.amountPaid)}</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+          <span style={{ color: '#657367' }}>Amount already paid</span>
+          <span style={{ color: '#1b432e', fontWeight: 600 }}>
+            {peso(row?.amountPaid)} <small style={{ color: '#23633a', background: '#e5f3e7', padding: '1px 6px', borderRadius: 4, fontSize: 10, marginLeft: 4 }}>PAID</small>
+          </span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #dde3dc', paddingTop: 6 }}>
-          <span style={{ fontWeight: 700, color: '#334035' }}>Remaining balance:</span>
-          <strong style={{ color: '#a83f32', fontSize: 15 }}>{peso(balance)}</strong>
+        <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #dde3dc', paddingTop: 8, marginTop: 2 }}>
+          <span style={{ fontWeight: 700, color: '#1b432e' }}>Remaining balance</span>
+          <strong style={{ color: '#a83f32', fontSize: 16 }}>{peso(balance)}</strong>
         </div>
       </div>
 
-      <form className="webinar-register-form" onSubmit={handleSubmit} style={{ textAlign: 'left' }}>
+      <form onSubmit={handleSubmit} style={{ textAlign: 'left' }}>
+        {/* Payment Mode Selection Cards */}
         <div style={{ display: 'grid', gap: 10, marginBottom: 16 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 500 }}>
-            <input
-              type="radio"
-              name="payType"
-              checked={payType === 'full'}
-              onChange={() => setPayType('full')}
-            />
-            <span>Pay full balance: <strong>{peso(balance)}</strong></span>
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 500 }}>
-            <input
-              type="radio"
-              name="payType"
-              checked={payType === 'custom'}
-              onChange={() => setPayType('custom')}
-            />
-            <span>Pay partial / custom amount</span>
-          </label>
+          {/* Option 1: Full Balance */}
+          <div
+            onClick={() => setPayType('full')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') setPayType('full') }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '12px 14px',
+              borderRadius: 8,
+              border: payType === 'full' ? '2px solid #1b432e' : '1px solid #d4ded4',
+              background: payType === 'full' ? '#f2f7f2' : '#ffffff',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              boxShadow: payType === 'full' ? '0 1px 4px rgba(27,67,46,0.08)' : 'none',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{
+                width: 18,
+                height: 18,
+                borderRadius: '50%',
+                border: payType === 'full' ? '5px solid #1b432e' : '2px solid #aeb8ae',
+                background: '#ffffff',
+                display: 'inline-block',
+                flexShrink: 0,
+                boxSizing: 'border-box',
+                transition: 'border 0.15s ease',
+              }} />
+              <div>
+                <strong style={{ display: 'block', fontSize: 13, color: '#1b432e' }}>Pay Full Balance</strong>
+                <small style={{ color: '#657367', fontSize: 11 }}>Settle all remaining tuition</small>
+              </div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <strong style={{ fontSize: 15, color: '#1b432e', display: 'block' }}>{peso(balance)}</strong>
+              <small style={{ fontSize: 10, fontWeight: 700, color: '#b39255', textTransform: 'uppercase', letterSpacing: 0.5 }}>Recommended</small>
+            </div>
+          </div>
+
+          {/* Option 2: Partial Amount */}
+          <div
+            onClick={() => setPayType('custom')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') setPayType('custom') }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '12px 14px',
+              borderRadius: 8,
+              border: payType === 'custom' ? '2px solid #1b432e' : '1px solid #d4ded4',
+              background: payType === 'custom' ? '#f2f7f2' : '#ffffff',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              boxShadow: payType === 'custom' ? '0 1px 4px rgba(27,67,46,0.08)' : 'none',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{
+                width: 18,
+                height: 18,
+                borderRadius: '50%',
+                border: payType === 'custom' ? '5px solid #1b432e' : '2px solid #aeb8ae',
+                background: '#ffffff',
+                display: 'inline-block',
+                flexShrink: 0,
+                boxSizing: 'border-box',
+                transition: 'border 0.15s ease',
+              }} />
+              <div>
+                <strong style={{ display: 'block', fontSize: 13, color: '#1b432e' }}>Pay Partial Amount</strong>
+                <small style={{ color: '#657367', fontSize: 11 }}>Choose an installment or custom amount</small>
+              </div>
+            </div>
+            <span style={{ fontSize: 11, background: '#eaf0ea', color: '#1b432e', padding: '3px 8px', borderRadius: 4, fontWeight: 600 }}>
+              Flexible
+            </span>
+          </div>
         </div>
 
+        {/* Custom Amount Sub-form */}
         {payType === 'custom' && (
-          <label className="builder-field" style={{ marginBottom: 14 }}>
-            <span>Payment amount (₱)</span>
-            <input
-              type="number"
-              min={minAmount}
-              max={balance}
-              step={1}
-              required
-              value={customAmount}
-              onChange={(e) => setCustomAmount(e.target.value)}
-              placeholder={`Min ${minAmount}, up to ${balance}`}
-            />
-            <small style={{ color: '#7a857b', fontSize: 11, marginTop: 4 }}>
-              Minimum payment is ₱{minAmount.toLocaleString('en-PH')} up to remaining balance of {peso(balance)}.
+          <div style={{
+            background: '#ffffff',
+            border: '1px solid #e1e7e1',
+            borderRadius: 8,
+            padding: '12px 14px',
+            marginBottom: 16,
+          }}>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#334035', marginBottom: 6 }}>
+              Enter payment amount (₱)
+            </label>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <span style={{
+                position: 'absolute',
+                left: 12,
+                fontWeight: 700,
+                color: '#657367',
+                fontSize: 14,
+                pointerEvents: 'none',
+              }}>₱</span>
+              <input
+                type="number"
+                min={minAmount}
+                max={balance}
+                step={1}
+                required
+                autoFocus
+                value={customAmount}
+                onChange={(e) => setCustomAmount(e.target.value)}
+                placeholder={`Min ${minAmount}, up to ${balance}`}
+                style={{
+                  width: '100%',
+                  paddingLeft: 28,
+                  paddingRight: 12,
+                  height: 40,
+                  fontSize: 14,
+                  fontWeight: 600,
+                  color: '#1b432e',
+                  border: '1px solid #cdd7cc',
+                  borderRadius: 6,
+                  outlineColor: '#b39255',
+                }}
+              />
+            </div>
+
+            {presets.length > 0 && (
+              <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <span style={{ fontSize: 11, color: '#657367' }}>Quick select:</span>
+                {presets.map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => setCustomAmount(String(preset.val))}
+                    style={{
+                      border: Number(customAmount) === preset.val ? '1px solid #1b432e' : '1px solid #d4ded4',
+                      background: Number(customAmount) === preset.val ? '#1b432e' : '#ffffff',
+                      color: Number(customAmount) === preset.val ? '#ffffff' : '#334035',
+                      borderRadius: 4,
+                      padding: '3px 8px',
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <small style={{ color: '#657367', fontSize: 11, display: 'block', marginTop: 8 }}>
+              Accepted range: ₱{minAmount.toLocaleString('en-PH')} to {peso(balance)}.
             </small>
-          </label>
+          </div>
         )}
 
-        <div style={{ background: '#fcfbf7', border: '1px solid #ece8db', borderRadius: 6, padding: '10px 12px', marginBottom: 16, fontSize: 11, color: '#6e685a', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <ShieldCheck size={18} style={{ color: '#2d6a4f', flexShrink: 0 }} />
-          <span>PayMongo Gateway: Accepts GCash, Maya, QR Ph, &amp; Credit/Debit cards.</span>
+        {/* Trust & PayMongo Channel Banner */}
+        <div style={{
+          background: '#fcfbf7',
+          border: '1px solid #ece8db',
+          borderRadius: 8,
+          padding: '10px 14px',
+          marginBottom: 18,
+          fontSize: 12,
+          color: '#524b3c',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+        }}>
+          <ShieldCheck size={20} style={{ color: '#2d6a4f', flexShrink: 0 }} />
+          <div style={{ lineHeight: 1.4 }}>
+            <strong style={{ display: 'block', color: '#1b432e', fontSize: 12 }}>PayMongo Secure Payment Gateway</strong>
+            <span style={{ color: '#6e685a', fontSize: 11 }}>Accepts GCash, Maya, QR Ph, &amp; Credit/Debit cards with instant confirmation.</span>
+          </div>
         </div>
 
-        {error && <p className="form-alert" role="alert">{error}</p>}
+        {error && <p className="form-alert" role="alert" style={{ marginBottom: 14 }}>{error}</p>}
 
         <div className="confirm-actions">
           <button type="button" className="button button-ghost" onClick={onClose} disabled={loading}>
             Cancel
           </button>
-          <button type="submit" className="button button-primary" disabled={loading || !isValidAmount}>
-            <CreditCard size={14} /> {loading ? 'Preparing payment…' : `Pay ${peso(targetAmount)}`}
+          <button
+            type="submit"
+            className="button button-primary"
+            style={{ minWidth: 160, justifyContent: 'center' }}
+            disabled={loading || !isValidAmount}
+          >
+            <CreditCard size={15} /> {loading ? 'Preparing payment…' : `Pay ${peso(targetAmount)}`}
           </button>
         </div>
       </form>

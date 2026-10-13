@@ -6,6 +6,7 @@ import CourseBuilderPage from '../pages/lms/instructor/CourseBuilderPage.jsx'
 import AssignmentEditorPage from '../pages/lms/instructor/AssignmentEditorPage.jsx'
 import QuizEditorPage from '../pages/lms/instructor/QuizEditorPage.jsx'
 import SubmissionReviewPage from '../pages/lms/instructor/SubmissionReviewPage.jsx'
+import AccessDenied from './AccessDenied.jsx'
 import { getLmsPage } from '../lib/lmsPages.js'
 
 const assignmentDetailPattern = /^\/assignments\/([^/]+)$/
@@ -19,6 +20,17 @@ const builderQuizPattern = /^\/builder\/quizzes\/([^/]+)$/
 const forumThreadPattern = /^\/forums\/([^/]+)$/
 
 export default function LmsPageContent({ page, pathname, role, user, onUserUpdate }) {
+  // Admin-only route guard
+  if (pathname.startsWith('/admin') && role !== 'admin') {
+    return <AccessDenied role={role} requiredRoles={['Admin']} />
+  }
+
+  // Instructor/Admin teaching tools route guard
+  const isTeachingPath = pathname === '/builder' || pathname.startsWith('/builder/') || pathname === '/submissions' || pathname.startsWith('/submissions/')
+  if (isTeachingPath && !['instructor', 'admin'].includes(role)) {
+    return <AccessDenied role={role} requiredRoles={['Instructor', 'Admin']} />
+  }
+
   const assignmentMatch = pathname.match(assignmentDetailPattern)
   if (assignmentMatch) return <AssignmentDetailPage role={role} assignmentId={assignmentMatch[1]} />
 
@@ -40,6 +52,10 @@ export default function LmsPageContent({ page, pathname, role, user, onUserUpdat
   if (forumThreadMatch) return <ForumsPage role={role} user={user} initialThreadId={forumThreadMatch[1]} />
 
   const currentPage = getLmsPage(pathname)
+  if (currentPage?.roles && !currentPage.roles.includes(role)) {
+    return <AccessDenied role={role} requiredRoles={currentPage.roles} />
+  }
+
   const Page = currentPage?.component
 
   if (Page) return <Page role={role} page={page} user={user} onUserUpdate={onUserUpdate} />

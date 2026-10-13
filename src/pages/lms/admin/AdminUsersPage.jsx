@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { BookOpen, CalendarClock, Camera, Check, ChevronDown, Download, IdCard, KeyRound, LogIn, Receipt, RefreshCw, Save, Trash2, Upload, UserPlus, Wallet } from 'lucide-react'
+import { BookOpen, CalendarClock, Camera, Check, ChevronDown, Copy, Download, IdCard, KeyRound, LogIn, Mail, Receipt, RefreshCw, Save, Trash2, Upload, UserPlus, Wallet } from 'lucide-react'
 import StatusPill from '../../../components/StatusPill.jsx'
 import Modal from '../../../components/Modal.jsx'
 import ImageCropModal from '../../../components/ImageCropModal.jsx'
@@ -16,8 +16,8 @@ import { useConfirm } from '../../../lib/confirmContext.js'
 import { useToast } from '../../../lib/toastContext.js'
 import Loading from '../../../components/Loading.jsx'
 import {
-  bulkEnrollUsers, bulkUserAction, createAdminRole, createAdminUser, decideEnrollment, deleteAdminUser, deleteBillingRecord, enrollUserCourse, fetchAdminCourses, fetchAdminEnrollments,
-  fetchAdminRoles, fetchAdminUsers, fetchInstructorTeachingCourses, fetchUserCourses, importUsers, resetAdminUserPassword, saveInstructorTeachingCourses, unenrollUserCourse, updateAdminUser, uploadAdminUserAvatar,
+  bulkEnrollUsers, bulkSendUserSetupEmail, bulkUserAction, createAdminRole, createAdminUser, decideEnrollment, deleteAdminUser, deleteBillingRecord, enrollUserCourse, fetchAdminCourses, fetchAdminEnrollments,
+  fetchAdminRoles, fetchAdminUsers, fetchInstructorTeachingCourses, fetchUserCourses, fetchUserSetupEmailPreview, importUsers, resetAdminUserPassword, saveInstructorTeachingCourses, sendUserSetupEmail, unenrollUserCourse, updateAdminUser, uploadAdminUserAvatar,
 } from '../../../lib/admin.js'
 
 const defaultRoleLabels = { learner: 'Learner', instructor: 'Instructor', admin: 'Admin' }
@@ -140,10 +140,401 @@ function CreateRoleModal({ open, onClose, onCreated }) {
   )
 }
 
+function SendSetupEmailModal({ user, roleOptions, onClose, onSent }) {
+  const [customNote, setCustomNote] = useState('')
+  const [copied, setCopied] = useState(false)
+  const [sentResult, setSentResult] = useState(null)
+  const [error, setError] = useState('')
+
+  const roleLabel = roleOptions?.[user?.role] || user?.role || 'Learner'
+
+  const { data: preview, isLoading: previewLoading } = useQuery({
+    queryKey: ['setup-email-preview', user?.id, customNote],
+    queryFn: () => fetchUserSetupEmailPreview(user.id, customNote),
+    enabled: Boolean(user?.id),
+  })
+
+  const mutation = useMutation({
+    mutationFn: () => sendUserSetupEmail(user.id, { customNote: customNote.trim() || undefined }),
+  })
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setError('')
+    try {
+      const res = await mutation.mutateAsync()
+      setSentResult(res)
+      if (onSent) onSent(res)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const defaultEyebrow = user?.role === 'instructor' ? 'Faculty & Instructor Portal' : user?.role === 'admin' ? 'Administrator Workspace' : 'Real Estate Review Center'
+  const defaultHeadline = `Welcome to TREE Academy, ${user?.name}!`
+  const defaultMessage = user?.role === 'instructor'
+    ? 'You have been appointed as an instructor on the TREE Academy platform. Through the faculty portal, you can manage your assigned courses, review student submissions, conduct live review sessions, and track cohort progress.'
+    : user?.role === 'admin'
+      ? 'You have been granted Administrator privileges for the TREE Academy Management System. With this role, you have full access to manage users, courses, billings, and platform operations.'
+      : 'Your learner account has been provisioned. You can now access your review courses, modules, mock exams, and learning dashboard.'
+  const defaultAction = user?.role === 'admin'
+    ? 'For security, please create a strong password for your administrator account using the secure link below. This link expires in 72 hours.'
+    : user?.role === 'instructor'
+      ? 'Please activate your faculty account by creating your personal password using the button below. This link is valid for 72 hours.'
+      : 'To finish setting up your account and begin your review journey, please create a new password using the button below. This link is valid for 72 hours.'
+  const defaultButton = user?.role === 'admin' ? 'Set Up Admin Password' : user?.role === 'instructor' ? 'Set Up Instructor Password' : 'Create My Password'
+
+  return (
+    <Modal
+      open={Boolean(user)}
+      onClose={() => {
+        setCustomNote('')
+        setSentResult(null)
+        setError('')
+        setCopied(false)
+        onClose()
+      }}
+      labelledBy="send-setup-email-title"
+      className="confirm-modal"
+    >
+      <p className="eyebrow">PASSWORD SETUP INVITATION</p>
+      <h2 id="send-setup-email-title">Send setup email to {user?.name}</h2>
+      <p className="enrollment-sent-lead">
+        Sends an email with a secure link (valid for 72 hours) asking them to set their password, customized for their role as <strong>{roleLabel}</strong>.
+      </p>
+
+      {!sentResult ? (
+        <form onSubmit={submit} style={{ textAlign: 'left', marginTop: 14 }}>
+          {/* Recipient summary */}
+          <div style={{
+            background: '#F9F9F7',
+            border: '1px solid #EAEAEA',
+            borderRadius: 6,
+            padding: '10px 14px',
+            marginBottom: 12,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}>
+            <div>
+              <strong style={{ display: 'block', color: '#1B432E' }}>{user?.name}</strong>
+              <small style={{ color: '#718096' }}>{user?.email}</small>
+            </div>
+            <span className="admin-billing-chip settled" style={{ textTransform: 'capitalize' }}>
+              {roleLabel}
+            </span>
+          </div>
+
+          {/* Email Preview Card */}
+          <div style={{
+            border: '1px solid #E2E8F0',
+            borderRadius: 8,
+            overflow: 'hidden',
+            marginBottom: 14,
+            background: '#FFFFFF',
+          }}>
+            <div style={{
+              background: '#1B432E',
+              color: '#F9F9F7',
+              padding: '10px 14px',
+              textAlign: 'center',
+            }}>
+              <strong style={{ letterSpacing: 1.5, fontSize: 13, display: 'block' }}>TREE ACADEMY</strong>
+              <small style={{ color: '#B39255', textTransform: 'uppercase', letterSpacing: 1, fontSize: 10 }}>
+                {preview?.eyebrow ?? defaultEyebrow}
+              </small>
+            </div>
+            <div style={{ height: 3, background: '#B39255' }} />
+            <div style={{ padding: '14px', fontSize: 13 }}>
+              <div style={{ fontSize: 11, color: '#718096', marginBottom: 4 }}>
+                <strong>Subject:</strong> {preview?.subject ?? `Welcome to TREE Academy — Set up your ${roleLabel.toLowerCase()} account`}
+              </div>
+              <hr style={{ border: 'none', borderTop: '1px solid #EDF2F7', margin: '8px 0' }} />
+              <strong style={{ color: '#1B432E', fontSize: 14, display: 'block', marginBottom: 6 }}>
+                {preview?.headline ?? defaultHeadline}
+              </strong>
+              <p style={{ color: '#4A5568', margin: '0 0 10px 0', lineHeight: 1.5 }}>
+                {preview?.mainMessage ?? defaultMessage}
+              </p>
+              {customNote.trim() && (
+                <div style={{ background: '#FFF9E6', borderLeft: '3px solid #B39255', padding: '8px 12px', margin: '10px 0', borderRadius: 4 }}>
+                  <strong style={{ fontSize: 11, color: '#8C6D23', textTransform: 'uppercase', display: 'block', marginBottom: 2 }}>Note from Admin:</strong>
+                  <span style={{ color: '#4A3A0E', fontSize: 12 }}>{customNote}</span>
+                </div>
+              )}
+              <div style={{ background: '#F9F9F7', borderLeft: '3px solid #B39255', padding: '8px 12px', margin: '10px 0', borderRadius: 4, fontSize: 12 }}>
+                <span style={{ color: '#718096', display: 'block', fontSize: 11, marginBottom: 2 }}>Access Details:</span>
+                <div><strong>Portal:</strong> treeacademy.net</div>
+                <div><strong>Email:</strong> {user?.email}</div>
+                <div><strong>Role:</strong> <span style={{ color: '#B39255', fontWeight: 600 }}>{preview?.roleLabel ?? roleLabel}</span></div>
+              </div>
+              <p style={{ color: '#718096', fontSize: 11, margin: '8px 0', fontStyle: 'italic' }}>
+                {preview?.actionInstructions ?? defaultAction}
+              </p>
+              <div style={{ textAlign: 'center', margin: '10px 0 4px 0' }}>
+                <span style={{
+                  display: 'inline-block',
+                  background: '#1B432E',
+                  color: '#F9F9F7',
+                  padding: '7px 18px',
+                  borderRadius: 6,
+                  fontWeight: 600,
+                  fontSize: 12,
+                }}>
+                  {preview?.buttonLabel ?? defaultButton}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <label className="builder-field" style={{ marginBottom: 12 }}>
+            <span>Personal note to recipient (optional)</span>
+            <textarea
+              rows={2}
+              maxLength={300}
+              placeholder="e.g. Welcome to Batch 1! Please set your password before our orientation."
+              value={customNote}
+              onChange={(e) => setCustomNote(e.target.value)}
+            />
+          </label>
+
+          {error && <p className="form-alert" role="alert">{error}</p>}
+
+          <div className="confirm-actions">
+            <button
+              type="button"
+              className="button button-ghost"
+              onClick={() => {
+                setCustomNote('')
+                setError('')
+                onClose()
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              className="button button-primary"
+              type="submit"
+              disabled={mutation.isPending || previewLoading}
+            >
+              <Mail size={14} /> {mutation.isPending ? 'Sending email…' : 'Send setup email'}
+            </button>
+          </div>
+        </form>
+      ) : (
+        <div style={{ textAlign: 'left', marginTop: 14 }}>
+          <div style={{
+            padding: 14,
+            borderRadius: 8,
+            background: sentResult.delivery === 'sent' ? '#F0FFF4' : '#FFFDF5',
+            border: `1px solid ${sentResult.delivery === 'sent' ? '#C6F6D5' : '#FEEBC8'}`,
+            marginBottom: 16,
+          }}>
+            <p style={{ fontWeight: 600, color: sentResult.delivery === 'sent' ? '#22543D' : '#744210', margin: '0 0 6px 0', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Check size={16} /> {sentResult.delivery === 'sent' ? 'Password setup email sent!' : 'Setup link generated!'}
+            </p>
+            <p style={{ fontSize: 13, color: sentResult.delivery === 'sent' ? '#2F855A' : '#975A16', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+              {sentResult.delivery === 'sent'
+                ? `An email customized for a ${roleLabel} was dispatched to ${user?.email}. They can click the link in their inbox to set their password.`
+                : 'Email service is not configured on this server (missing Resend API key). The one-time password setup link has been generated below so you can send it to them directly:'}
+            </p>
+            {sentResult.setupUrl && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  readOnly
+                  value={sentResult.setupUrl}
+                  style={{ fontSize: 12, fontFamily: 'monospace', flex: 1, padding: '7px 10px', background: '#FFFFFF', border: '1px solid #CBD5E0', borderRadius: 4 }}
+                />
+                <button
+                  type="button"
+                  className="button button-ghost button-compact"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(sentResult.setupUrl)
+                    setCopied(true)
+                    setTimeout(() => setCopied(false), 3000)
+                  }}
+                >
+                  <Copy size={13} /> {copied ? 'Copied!' : 'Copy link'}
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="confirm-actions">
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={() => {
+                setCustomNote('')
+                setSentResult(null)
+                setCopied(false)
+                onClose()
+              }}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+function BulkSendSetupModal({ open, selectedUsers, roleOptions, onClose, onSent }) {
+  const [customNote, setCustomNote] = useState('')
+  const [results, setResults] = useState(null)
+  const [error, setError] = useState('')
+  const mutation = useMutation({
+    mutationFn: () => bulkSendUserSetupEmail({
+      ids: selectedUsers.map((u) => u.id),
+      customNote: customNote.trim() || undefined,
+    }),
+  })
+
+  const roleCounts = useMemo(() => {
+    const counts = {}
+    for (const u of selectedUsers) {
+      const label = roleOptions?.[u.role] || u.role
+      counts[label] = (counts[label] ?? 0) + 1
+    }
+    return counts
+  }, [selectedUsers, roleOptions])
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setError('')
+    try {
+      const res = await mutation.mutateAsync()
+      setResults(res)
+      if (onSent) onSent(res)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={() => {
+        setCustomNote('')
+        setResults(null)
+        setError('')
+        onClose()
+      }}
+      labelledBy="bulk-setup-email-title"
+      className="confirm-modal"
+    >
+      <p className="eyebrow">BULK INVITATIONS</p>
+      <h2 id="bulk-setup-email-title">Send password setup emails</h2>
+      <p className="enrollment-sent-lead">
+        Send password creation links to <strong>{selectedUsers.length} selected user{selectedUsers.length === 1 ? '' : 's'}</strong>.
+        Each recipient will automatically receive an email tailored to their role.
+      </p>
+
+      {!results ? (
+        <form onSubmit={submit} style={{ textAlign: 'left', marginTop: 14 }}>
+          {/* Role breakdown chips */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+            {Object.entries(roleCounts).map(([role, count]) => (
+              <span key={role} className="admin-billing-chip settled" style={{ textTransform: 'capitalize' }}>
+                {count} {role}{count === 1 ? '' : 's'}
+              </span>
+            ))}
+          </div>
+
+          {/* List of recipients */}
+          <div style={{
+            maxHeight: 140,
+            overflowY: 'auto',
+            border: '1px solid #EAEAEA',
+            borderRadius: 6,
+            background: '#F9F9F7',
+            padding: '8px 12px',
+            marginBottom: 14,
+            fontSize: 12,
+          }}>
+            {selectedUsers.map((u) => (
+              <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #EEEEEE' }}>
+                <span><strong>{u.name}</strong> <small style={{ color: '#718096' }}>({u.email})</small></span>
+                <span style={{ color: '#B39255', fontWeight: 600 }}>{roleOptions?.[u.role] || u.role}</span>
+              </div>
+            ))}
+          </div>
+
+          <label className="builder-field" style={{ marginBottom: 12 }}>
+            <span>Personal note to all recipients (optional)</span>
+            <textarea
+              rows={2}
+              maxLength={300}
+              placeholder="e.g. Welcome to Tree Academy! Please set up your account before our upcoming orientation."
+              value={customNote}
+              onChange={(e) => setCustomNote(e.target.value)}
+            />
+          </label>
+
+          {error && <p className="form-alert" role="alert">{error}</p>}
+
+          <div className="confirm-actions">
+            <button
+              type="button"
+              className="button button-ghost"
+              onClick={() => {
+                setCustomNote('')
+                setError('')
+                onClose()
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              className="button button-primary"
+              type="submit"
+              disabled={mutation.isPending || !selectedUsers.length}
+            >
+              <Mail size={14} /> {mutation.isPending ? 'Sending emails…' : `Send to ${selectedUsers.length} user${selectedUsers.length === 1 ? '' : 's'}`}
+            </button>
+          </div>
+        </form>
+      ) : (
+        <div style={{ textAlign: 'left', marginTop: 14 }}>
+          <div style={{
+            padding: 14,
+            borderRadius: 8,
+            background: '#F0FFF4',
+            border: '1px solid #C6F6D5',
+            marginBottom: 16,
+          }}>
+            <p style={{ fontWeight: 600, color: '#22543D', margin: '0 0 6px 0', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Check size={16} /> Processed {results.processed} password setup invitation{results.processed === 1 ? '' : 's'}!
+            </p>
+            <p style={{ fontSize: 13, color: '#2F855A', margin: 0 }}>
+              Role-customized password setup emails have been generated and dispatched to all selected recipients.
+            </p>
+          </div>
+
+          <div className="confirm-actions">
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={() => {
+                setCustomNote('')
+                setResults(null)
+                onClose()
+              }}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
 // Per-user drawer: full profile edit, status, security, impersonation, delete, course enrollment,
 // and (for learners) enrollment paperwork and billing. `enrollments` is this learner's slice of the
 // page-level bulk fetch (see AdminUsersPage) — matched by email, since Enrollment has no learnerId.
-function UserDetail({ user, enrollments, onChanged, onBillingChanged }) {
+function UserDetail({ user, enrollments, roleOptions, onChanged, onBillingChanged }) {
   const queryClient = useQueryClient()
   const [billingRow, setBillingRow] = useState(null)
   const [dueDateRow, setDueDateRow] = useState(null)
@@ -153,6 +544,7 @@ function UserDetail({ user, enrollments, onChanged, onBillingChanged }) {
   const confirm = useConfirm()
   const avatarFileRef = useRef(null)
   const [resetting, setResetting] = useState(false)
+  const [setupModalOpen, setSetupModalOpen] = useState(false)
   const [profile, setProfile] = useState({ name: user.name, email: user.email, username: user.username ?? '', avatarUrl: user.avatarUrl ?? '' })
   const saveMutation = useMutation({ mutationFn: (updates) => updateAdminUser(user.id, updates) })
   const avatarMutation = useMutation({ mutationFn: (file) => uploadAdminUserAvatar(user.id, file) })
@@ -293,12 +685,14 @@ function UserDetail({ user, enrollments, onChanged, onBillingChanged }) {
           <div><span>Must change password</span><strong>{user.mustChangePassword ? 'Yes' : 'No'}</strong></div>
         </div>
         <div className="admin-row-actions">
+          <button type="button" className="button button-primary button-compact" onClick={() => setSetupModalOpen(true)}><Mail size={14} /> Send setup email</button>
           <button className="button button-ghost button-compact" onClick={() => setResetting(true)}><KeyRound size={14} /> Reset password</button>
           <button className="button button-ghost button-compact" onClick={forceReset}><RefreshCw size={14} /> Force reset</button>
           <button className="button button-ghost button-compact" onClick={impersonate}><LogIn size={14} /> Impersonate</button>
           <button className="button button-ghost button-compact button-danger" onClick={remove}><Trash2 size={14} /> Delete</button>
         </div>
         <ResetPasswordModal user={resetting ? user : null} onClose={() => setResetting(false)} onDone={() => { setResetting(false); toast.success('Temporary password set — they must change it at next sign-in.') }} />
+        <SendSetupEmailModal user={setupModalOpen ? user : null} roleOptions={roleOptions} onClose={() => setSetupModalOpen(false)} onSent={() => { toast.success(`Password setup email sent to ${user.name}.`) }} />
       </section>
     </div>
 
@@ -384,6 +778,8 @@ export default function AdminUsersPage({ user }) {
   const [expandedId, setExpandedId] = useState('')
   const [bulkCourse, setBulkCourse] = useState('')
   const [newRoleModalOpen, setNewRoleModalOpen] = useState(false)
+  const [setupEmailUser, setSetupEmailUser] = useState(null)
+  const [bulkSetupOpen, setBulkSetupOpen] = useState(false)
 
   const { data: serverRoles = [] } = useQuery({ queryKey: ['admin-roles'], queryFn: fetchAdminRoles })
   const roleOptions = useMemo(() => {
@@ -396,7 +792,7 @@ export default function AdminUsersPage({ user }) {
     return map
   }, [serverRoles])
 
-  const { data: allUsers = [], isLoading } = useQuery({ queryKey: ['admin-users', filters], queryFn: () => fetchAdminUsers(filters) })
+  const { data: allUsers = [], isLoading, isError, error: usersError, refetch } = useQuery({ queryKey: ['admin-users', filters], queryFn: () => fetchAdminUsers(filters) })
   // The signed-in admin can't manage themselves here (self-edit is blocked server-side anyway,
   // and self-delete/impersonate would be nonsensical) — drop that row entirely to declutter.
   const usersExcludingSelf = allUsers.filter((row) => row.id !== user.id)
@@ -554,6 +950,7 @@ export default function AdminUsersPage({ user }) {
 
     {selected.size > 0 && <div className="admin-bulkbar">
       <span>{selected.size} selected</span>
+      <button className="button button-ghost button-compact" onClick={() => setBulkSetupOpen(true)}><Mail size={14} /> Send setup email ({selected.size})</button>
       <button className="button button-ghost button-compact" onClick={() => runBulk('activate')} disabled={bulkMutation.isPending}>Activate</button>
       <button className="button button-ghost button-compact" onClick={() => runBulk('deactivate')} disabled={bulkMutation.isPending}>Deactivate</button>
       <button className="button button-ghost button-compact" onClick={() => runBulk('suspend')} disabled={bulkMutation.isPending}>Suspend</button>
@@ -564,6 +961,10 @@ export default function AdminUsersPage({ user }) {
     <div className="admin-table admin-table-users">
       <div className="admin-table-head"><span>{allIds.length > 0 && <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all" />}</span><span>MEMBER</span><span>ROLE</span><span>STATUS</span><span>BILLING</span><span>LAST ACTIVE</span><span>ACTIONS</span></div>
       {isLoading ? <Loading label="Loading users…" />
+        : isError ? <div className="operations-note" style={{ color: '#c0392b', display: 'flex', alignItems: 'center', gap: 10, padding: '16px 0' }}>
+            <span>Failed to load users: {usersError?.message || 'Server error.'}</span>
+            <button type="button" className="button button-ghost button-compact" onClick={() => refetch()}><RefreshCw size={12} /> Retry</button>
+          </div>
         : !users.length ? <p className="operations-note">No users match those filters.</p>
         : users.map((row) => { const billing = billingSummary(enrollmentsFor(row)); return <div key={row.id}>
           <div className={`admin-table-row ${expandedId === row.id ? 'expanded' : ''}`}>
@@ -579,6 +980,7 @@ export default function AdminUsersPage({ user }) {
               : <span className="admin-billing-chip none">—</span>}</span>
             <span>{formatDate(row.lastSeenAt)}</span>
             <span className="admin-row-actions">
+              <button type="button" className="button button-ghost button-compact" title="Send password setup email" onClick={() => setSetupEmailUser(row)}><Mail size={14} /> Setup email</button>
               {row.status === 'active'
                 ? <button className="button button-ghost button-compact" onClick={() => quickUpdate(row, { status: 'inactive' })}>Deactivate</button>
                 : <button className="button button-ghost button-compact" onClick={() => quickUpdate(row, { status: 'active' })}>Activate</button>}
@@ -588,7 +990,7 @@ export default function AdminUsersPage({ user }) {
               <button className="button button-ghost button-compact" onClick={() => setExpandedId(expandedId === row.id ? '' : row.id)} aria-expanded={expandedId === row.id}>Manage <ChevronDown size={14} className={expandedId === row.id ? 'rotate' : ''} /></button>
             </span>
           </div>
-          {expandedId === row.id && <UserDetail user={row} enrollments={enrollmentsFor(row)} onChanged={invalidate} onBillingChanged={invalidateEnrollments} />}
+          {expandedId === row.id && <UserDetail user={row} enrollments={enrollmentsFor(row)} roleOptions={roleOptions} onChanged={invalidate} onBillingChanged={invalidateEnrollments} />}
         </div> })}
     </div>
 
@@ -600,6 +1002,24 @@ export default function AdminUsersPage({ user }) {
         queryClient.invalidateQueries({ queryKey: ['admin-roles'] })
         setForm((prev) => ({ ...prev, role: newRole }))
         toast.success(`Role "${newRole}" created.`)
+      }}
+    />
+
+    <SendSetupEmailModal
+      user={setupEmailUser}
+      roleOptions={roleOptions}
+      onClose={() => setSetupEmailUser(null)}
+      onSent={() => toast.success(`Password setup email sent to ${setupEmailUser?.name}.`)}
+    />
+
+    <BulkSendSetupModal
+      open={bulkSetupOpen}
+      selectedUsers={users.filter((u) => selected.has(u.id))}
+      roleOptions={roleOptions}
+      onClose={() => setBulkSetupOpen(false)}
+      onSent={(res) => {
+        toast.success(`Processed password setup emails for ${res.processed} user${res.processed === 1 ? '' : 's'}.`)
+        setSelected(new Set())
       }}
     />
   </>

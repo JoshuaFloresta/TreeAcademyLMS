@@ -2,14 +2,25 @@ import { authedFetch } from './auth.js'
 
 async function json(response) {
   const data = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(data.error ?? 'That request could not be completed. Please try again.')
+  if (!response.ok) {
+    const error = new Error(data.error ?? 'That request could not be completed. Please try again.')
+    error.status = response.status
+    throw error
+  }
   return data
 }
 
 const get = (path) => authedFetch(path).then(json)
 const post = (path, body) => authedFetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) }).then(json)
 const patch = (path, body) => authedFetch(path, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) }).then(json)
-const del = (path) => authedFetch(path, { method: 'DELETE' }).then(async (response) => { if (!response.ok && response.status !== 204) throw new Error((await response.json().catch(() => ({}))).error ?? 'That request could not be completed.'); return true })
+const del = (path) => authedFetch(path, { method: 'DELETE' }).then(async (response) => {
+  if (!response.ok && response.status !== 204) {
+    const error = new Error((await response.json().catch(() => ({}))).error ?? 'That request could not be completed.')
+    error.status = response.status
+    throw error
+  }
+  return true
+})
 
 export const fetchCourses = () => get('/api/courses')
 export const fetchCourse = (id) => get(`/api/courses/${id}`)

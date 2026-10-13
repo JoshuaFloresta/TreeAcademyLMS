@@ -22,6 +22,9 @@ export default function AuthPage({ onAuthenticated }) {
   // chose actually works. Read fresh from the URL every render (not stored state) since navigating
   // here from the activation form re-renders this same component instance rather than remounting it.
   const isActivated = params.get('state') === 'activated'
+  const redirect = params.get('redirect')
+  const reason = params.get('reason')
+
   const [loginError, setLoginError] = useState('')
   const [activationError, setActivationError] = useState('')
   const [loginPending, setLoginPending] = useState(false)
@@ -42,7 +45,17 @@ export default function AuthPage({ onAuthenticated }) {
     try {
       const user = await loginRequest(values.email, values.password)
       onAuthenticated(user)
-      navigate('/dashboard')
+
+      // Validate redirect destination: ensure it's a safe relative path and authorized for user's role
+      let destination = user.role === 'admin' ? '/admin/dashboard' : '/dashboard'
+      if (redirect && redirect.startsWith('/') && !redirect.startsWith('//') && !redirect.startsWith('/auth')) {
+        const isRestrictedAdmin = redirect.startsWith('/admin') && user.role !== 'admin'
+        const isRestrictedTeaching = (redirect.startsWith('/builder') || redirect.startsWith('/submissions')) && !['instructor', 'admin'].includes(user.role)
+        if (!isRestrictedAdmin && !isRestrictedTeaching) {
+          destination = redirect
+        }
+      }
+      navigate(destination, { replace: true })
     } catch (error) {
       setLoginError(error.message || 'We could not complete that request. Please try again.')
       setLoginPending(false)
@@ -94,7 +107,13 @@ export default function AuthPage({ onAuthenticated }) {
 
   const pendingContent = <div className="pending-state"><span className="big-status"><Clock3 /></span><p className="eyebrow">ENROLLMENT RECEIVED</p><h2>We’re reviewing your<br /><em>enrollment.</em></h2><p>Once the academy confirms your signed agreement and payment, we’ll send your account-setup link by email.</p><Link to="/" className="button button-primary">Return home <ArrowRight size={17} /></Link></div>
 
-  const loginContent = <><p className="eyebrow">WELCOME BACK</p><h2>Sign in to your<br /><em>learning space.</em></h2><p className="auth-intro">Use the email connected to your approved Tree Academy enrollment.</p>{isActivated && <p className="auth-notice">Your password has been set. Sign in below to continue.</p>}<form onSubmit={form.handleSubmit(login)} className="auth-form"><FormField label="Email address"><input type="email" placeholder="you@email.com" {...form.register('email', { required: true })} /></FormField><FormField label="Password"><PasswordInput placeholder="••••••••" {...form.register('password', { required: true })} /></FormField>{loginError && <p className="auth-error" role="alert">{loginError}</p>}<button type="button" className="forgot" onClick={openReset}>Forgot password?</button><PrimaryButton type="submit" loading={loginPending}>{loginPending ? 'Signing in…' : 'Sign in'}</PrimaryButton></form><p className="signup-note">New to Tree Academy? <Link to="/enroll">Begin enrollment</Link></p></>
+  const sessionMessage =
+    reason === 'expired' ? { text: 'Your session has expired. Please sign in again.', kind: 'error' }
+    : reason === 'logged_out' ? { text: 'You have been logged out. Please sign in again.', kind: 'notice' }
+    : reason === 'unauthorized' ? { text: 'Please sign in to access that page.', kind: 'notice' }
+    : null
+
+  const loginContent = <><p className="eyebrow">WELCOME BACK</p><h2>Sign in to your<br /><em>learning space.</em></h2><p className="auth-intro">Use the email connected to your approved Tree Academy enrollment.</p>{isActivated && <p className="auth-notice">Your password has been set. Sign in below to continue.</p>}{sessionMessage && (sessionMessage.kind === 'error' ? <p className="auth-error" role="alert" style={{ marginTop: 17, marginBottom: 0 }}>{sessionMessage.text}</p> : <p className="auth-notice" role="status" style={{ marginTop: 17, marginBottom: 0 }}>{sessionMessage.text}</p>)}<form onSubmit={form.handleSubmit(login)} className="auth-form"><FormField label="Email address"><input type="email" placeholder="you@email.com" {...form.register('email', { required: true })} /></FormField><FormField label="Password"><PasswordInput placeholder="••••••••" {...form.register('password', { required: true })} /></FormField>{loginError && <p className="auth-error" role="alert">{loginError}</p>}<button type="button" className="forgot" onClick={openReset}>Forgot password?</button><PrimaryButton type="submit" loading={loginPending}>{loginPending ? 'Signing in…' : 'Sign in'}</PrimaryButton></form><p className="signup-note">New to Tree Academy? <Link to="/enroll">Begin enrollment</Link></p></>
 
   return <div className="auth-page"><div className="auth-art"><Brand light /><div className="auth-art-content"><StatusPill kind="gold">Your learning space</StatusPill><h1>A more confident<br /><em>way forward.</em></h1><p>One focused place for your course work, instructors, and professional momentum.</p><div className="auth-quote">“The structure made it easier to stay consistent while still handling my clients.”<span>— Marco T., Tree Academy learner</span></div></div></div><main className="auth-panel"><Link to="/" className="auth-back"><ArrowRight size={16} /> Back to home</Link>{activationToken ? activationContent : isPending ? pendingContent : resetMode ? resetContent : loginContent}</main></div>
 }

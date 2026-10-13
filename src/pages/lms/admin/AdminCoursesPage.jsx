@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, ArchiveRestore, Check, ChevronUp, Eye, EyeOff, FileText, Link2, Pencil, Plus, Save, Trash2, Upload, Users, X } from 'lucide-react'
+import { Archive, ArchiveRestore, Check, ChevronUp, Eye, EyeOff, FileText, Link2, Pencil, Plus, RefreshCw, Save, Trash2, Upload, Users, X } from 'lucide-react'
 import CourseBanner from '../../../components/lms/CourseBanner.jsx'
 import StatusPill from '../../../components/StatusPill.jsx'
 import Modal from '../../../components/Modal.jsx'
@@ -378,7 +378,7 @@ export default function AdminCoursesPage() {
   const toast = useToast()
   const confirm = useConfirm()
   const [creating, setCreating] = useState(false)
-  const { data: courses = [], isLoading } = useQuery({ queryKey: ['admin-courses'], queryFn: fetchAdminCourses })
+  const { data: courses = [], isLoading, isError, error: coursesError, refetch: refetchCourses } = useQuery({ queryKey: ['admin-courses'], queryFn: fetchAdminCourses })
   const { data: pricing } = useQuery({ queryKey: ['admin-pricing'], queryFn: fetchAdminPricing })
   const invalidateCourses = () => queryClient.invalidateQueries({ queryKey: ['admin-courses'] })
   const moderateMutation = useMutation({ mutationFn: ({ id, updates }) => moderateCourse(id, updates) })
@@ -445,6 +445,10 @@ export default function AdminCoursesPage() {
 
     <div className="catalog-grid admin-course-grid">
       {isLoading ? <Loading label="Loading catalog…" />
+        : isError ? <div className="operations-note" style={{ color: '#c0392b', display: 'flex', alignItems: 'center', gap: 10, padding: '16px 0' }}>
+            <span>Failed to load courses: {coursesError?.message || 'Server error.'}</span>
+            <button type="button" className="button button-ghost button-compact" onClick={() => refetchCourses()}><RefreshCw size={12} /> Retry</button>
+          </div>
         : !courses.length ? <p className="operations-note">No courses have been created yet.</p>
         : courses.map((course, index) => <CourseCard key={course.id} course={course} index={index} pricing={pricing} onAct={act} onUnpublish={unpublish} onArchive={archive} onReview={review} onRemove={remove} onSavePrice={savePrice} onRenamed={invalidateCourses} />)}
     </div>

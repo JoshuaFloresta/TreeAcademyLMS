@@ -536,3 +536,187 @@ export async function sendEnrollmentDocumentsEmail({ enrollmentId, applicant, do
   if (!response.ok) throw await emailProviderError('enrollment documents', response)
   return { delivery: 'sent' }
 }
+
+export function getRolePasswordSetupDetails(role, { name, email, setupUrl, customNote } = {}) {
+  const safeName = name || 'there'
+  const safeEmail = email || ''
+  const loginUrl = `${config.clientUrl}/auth`
+  const targetUrl = setupUrl || loginUrl
+
+  const normalized = (role || 'learner').toLowerCase().trim()
+  let eyebrow = 'Real Estate Review Center'
+  let roleLabel = 'Learner / Student'
+  let subject = 'Welcome to TREE Academy — Set up your learner account'
+  let headline = `Welcome to TREE Academy, ${safeName}!`
+  let mainMessage = 'Your learner account has been provisioned. You can now access your review courses, modules, mock exams, and learning dashboard.'
+  let actionInstructions = 'To finish setting up your account and begin your review journey, please create a new password using the button below. This link is valid for 72 hours.'
+  let buttonLabel = 'Create My Password'
+
+  if (normalized === 'instructor') {
+    eyebrow = 'Faculty & Instructor Portal'
+    roleLabel = 'Instructor / Faculty'
+    subject = 'Welcome to TREE Academy — Set up your instructor account'
+    headline = `Welcome to the TREE Academy Faculty, ${safeName}!`
+    mainMessage = 'You have been appointed as an instructor on the TREE Academy platform. Through the faculty portal, you can manage your assigned courses, review student submissions, conduct live review sessions, and track cohort progress.'
+    actionInstructions = 'Please activate your faculty account by creating your personal password using the button below. This link is valid for 72 hours.'
+    buttonLabel = 'Set Up Instructor Password'
+  } else if (normalized === 'admin') {
+    eyebrow = 'Administrator Workspace'
+    roleLabel = 'Platform Administrator'
+    subject = 'TREE Academy Admin Access — Set up your administrator account'
+    headline = `Administrator Access Granted, ${safeName}`
+    mainMessage = 'You have been granted Administrator privileges for the TREE Academy Management System. With this role, you have full access to manage users, courses, billings, and platform operations.'
+    actionInstructions = 'For security, please create a strong password for your administrator account using the secure link below. This link is valid for 72 hours.'
+    buttonLabel = 'Set Up Admin Password'
+  } else if (normalized !== 'learner') {
+    const formatted = normalized.charAt(0).toUpperCase() + normalized.slice(1).replace(/[_-]/g, ' ')
+    eyebrow = 'Staff & Operations Portal'
+    roleLabel = formatted
+    subject = `Welcome to TREE Academy — Set up your ${formatted} account`
+    headline = `Welcome to TREE Academy, ${safeName}!`
+    mainMessage = `Your TREE Academy account with the role of ${formatted} is now active. You have been granted access to your designated tools and workspaces.`
+    actionInstructions = 'Please create your password using the secure link below to activate your account. This link is valid for 72 hours.'
+    buttonLabel = 'Set Up My Password'
+  }
+
+  const customNoteHtml = customNote ? `
+            <div style="background-color: #FFF9E6; border-left: 4px solid #B39255; padding: 14px 18px; border-radius: 0 6px 6px 0; margin: 20px 0;">
+                <p style="font-size: 12px; font-weight: 700; color: #8C6D23; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 6px 0;">Note from Administration</p>
+                <p style="font-size: 14px; color: #4A3A0E; margin: 0; line-height: 1.5;">${escapeHtml(customNote)}</p>
+            </div>` : ''
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${escapeHtml(subject)}</title>
+    <style>${baseEmailStyle}
+        .credentials-box {
+            background-color: #F9F9F7;
+            border-left: 4px solid #B39255;
+            padding: 20px;
+            border-radius: 0 6px 6px 0;
+            margin: 28px 0;
+        }
+        .credentials-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: #1B432E;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+        .credential-item {
+            font-size: 15px;
+            color: #1B432E;
+            margin-bottom: 8px;
+        }
+        .credential-item:last-child {
+            margin-bottom: 0;
+        }
+        .credential-label {
+            font-weight: 600;
+            color: #555555;
+            width: 90px;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="header">
+            <h1>TREE ACADEMY</h1>
+            <p>${escapeHtml(eyebrow)}</p>
+        </div>
+
+        <div class="accent-bar"></div>
+
+        <div class="content">
+            <p class="welcome-text">${escapeHtml(headline)}</p>
+
+            <p class="body-text">
+                ${escapeHtml(mainMessage)}
+            </p>
+${customNoteHtml}
+            <div class="credentials-box">
+                <div class="credentials-title">Your Access Details</div>
+                <div class="credential-item">
+                    <span class="credential-label">Portal:</span>
+                    <a href="${loginUrl}" style="color: #1B432E; font-weight: 600;">treeacademy.net</a>
+                </div>
+                <div class="credential-item">
+                    <span class="credential-label">Email:</span>
+                    <strong>${escapeHtml(safeEmail)}</strong>
+                </div>
+                <div class="credential-item">
+                    <span class="credential-label">Role:</span>
+                    <strong style="color: #B39255;">${escapeHtml(roleLabel)}</strong>
+                </div>
+            </div>
+
+            <p class="body-text">
+                ${escapeHtml(actionInstructions)}
+            </p>
+
+            <div class="button-wrapper">
+                <a href="${targetUrl}" class="btn">${escapeHtml(buttonLabel)}</a>
+            </div>
+
+            <p class="body-text" style="font-size: 13px; color: #718096; text-align: center;">
+                If the button above doesn't work, copy and paste <strong>${targetUrl}</strong> into your web browser.
+            </p>
+        </div>
+
+        <div class="footer">
+            <p>Need assistance? Contact our support team at <a href="mailto:support@treeacademy.net">support@treeacademy.net</a></p>
+            <p>&copy; 2026 TREE Academy. All rights reserved.</p>
+        </div>
+    </div>
+
+</body>
+</html>`
+
+  return {
+    subject,
+    eyebrow,
+    roleLabel,
+    headline,
+    mainMessage,
+    actionInstructions,
+    buttonLabel,
+    loginUrl,
+    setupUrl: targetUrl,
+    html,
+  }
+}
+
+export async function sendRolePasswordSetupEmail({ user, setupUrl, customNote = '' }) {
+  const details = getRolePasswordSetupDetails(user.role, {
+    name: user.name,
+    email: user.email,
+    setupUrl,
+    customNote,
+  })
+
+  if (!config.email.resendApiKey || !config.email.from) {
+    console.warn(`Role password setup email for ${user.email} (${user.role}) is queued but email is not configured. Setup URL: ${setupUrl}`)
+    return { delivery: 'configuration_required', setupUrl, details }
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${config.email.resendApiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: config.email.from,
+      to: [user.email],
+      subject: details.subject,
+      html: details.html,
+    }),
+  })
+
+  if (!response.ok) throw await emailProviderError('role password setup email', response)
+  return { delivery: 'sent', setupUrl, details }
+}
+

@@ -6,8 +6,9 @@ import { Course, Enrollment, LearningProgress, Presence, RefreshToken, RolePermi
 import { requireAdmin, requireAuth } from '../security.js'
 import { dbState } from '../state.js'
 import { asyncRoute, requireDb } from '../lib/http.js'
+import { config } from '../config.js'
 import { saveAudit } from '../lib/audit.js'
-import { bestEffortEmail, issueAccountSetupUrl, sendCredentialsEmail } from '../lib/accounts.js'
+import { bestEffortEmail, getRolePasswordSetupDetails, issueAccountSetupUrl, sendRolePasswordSetupEmail } from '../lib/accounts.js'
 import { pathwayForCourseSlug } from '../lib/enrollment-shared.js'
 import { issueSession, sessionUser } from '../lib/session.js'
 import { avatarUpload, saveAvatarUpload } from '../lib/uploads.js'
@@ -93,7 +94,7 @@ router.post('/api/admin/users', ...adminOnly, asyncRoute(async (req, res) => {
     ))
   }
   const setupUrl = await issueAccountSetupUrl(user)
-  const delivery = await bestEffortEmail(sendCredentialsEmail({ name: user.name, email: user.email, setupUrl }), 'enrollment_credentials email')
+  const delivery = await bestEffortEmail(sendRolePasswordSetupEmail({ user, setupUrl }), 'role_password_setup email')
   await saveAudit('user.created', 'User', user.id, { role: user.role }, req.auth.sub)
   res.status(201).json({ user: adminUserView(user), setupUrl, delivery: delivery?.delivery ?? 'unknown' })
 }))
@@ -143,7 +144,7 @@ router.post('/api/admin/users/import', ...adminOnly, asyncRoute(async (req, res)
     if (await User.findOne({ email })) { skipped.push({ email, reason: 'already exists' }); continue }
     const user = await User.create({ name: row.name, email, role: row.role ?? 'learner', status: 'active' })
     const setupUrl = await issueAccountSetupUrl(user)
-    await bestEffortEmail(sendCredentialsEmail({ name: user.name, email: user.email, setupUrl }), 'enrollment_credentials email')
+    await bestEffortEmail(sendRolePasswordSetupEmail({ user, setupUrl }), 'role_password_setup email')
     created.push({ email: user.email, setupUrl })
   }
   await saveAudit('user.imported', 'User', 'bulk', { created: created.length, skipped: skipped.length }, req.auth.sub)
@@ -249,6 +250,88 @@ router.post('/api/admin/users/:id/password', ...adminOnly, asyncRoute(async (req
   await RefreshToken.deleteMany({ userId: user._id })
   await saveAudit('user.password_reset', 'User', user.id, {}, req.auth.sub)
   res.status(204).end()
+}))
+
+// Sends a role-specific password setup email to the person, asking them to set their password.
+router.post('/api/admin/users/:id/send-setup-email', ...adminOnly, asyncRoute(async (req, res) => {
+  if (!dbState.ready) return requireDb(res, 'User management')
+  const { customNote } = z.object({ customNote: z.string().trim().max(500).optional() }).parse(req.body ?? {})
+  const user = await User.findById(req.params.id)
+  if (!user) return res.status(404).json({ error: 'User not found.' })
+
+  const setupUrl = await issueAccountSetupUrl(user)
+  const sendResult = await bestEffortEmail(
+    sendRolePasswordSetupEmail({ user, setupUrl, customNote }),
+    'role_password_setup email'
+  )
+
+  await saveAudit('user.password_setup_email_sent', 'User', user.id, {
+    email: user.email,
+    role: user.role,
+    delivery: sendResult?.delivery ?? 'unknown',
+    hasCustomNote: Boolean(customNote),
+  }, req.auth.sub)
+
+  res.json({
+    success: true,
+    delivery: sendResult?.delivery ?? 'unknown',
+    setupUrl,
+    role: user.role,
+    email: user.email,
+    name: user.name,
+    user: adminUserView(user),
+  })
+}))
+
+// Returns live preview details for the role-specific email before sending.
+router.get('/api/admin/users/:id/setup-email-preview', ...adminOnly, asyncRoute(async (req, res) => {
+  if (!dbState.ready) return requireDb(res, 'User management')
+  const user = await User.findById(req.params.id).select('name email role')
+  if (!user) return res.status(404).json({ error: 'User not found.' })
+
+  const preview = getRolePasswordSetupDetails(user.role, {
+    name: user.name,
+    email: user.email,
+    setupUrl: `${config.clientUrl}/auth?mode=activate&token=preview-token-only`,
+    customNote: req.query.customNote ? String(req.query.customNote).slice(0, 500) : '',
+  })
+
+  res.json(preview)
+}))
+
+// Bulk-sends role-specific password setup emails to multiple selected users.
+router.post('/api/admin/users/bulk-send-setup-email', ...adminOnly, asyncRoute(async (req, res) => {
+  if (!dbState.ready) return requireDb(res, 'User management')
+  const { ids, customNote } = z.object({
+    ids: z.array(z.string().trim().min(1)).min(1).max(200),
+    customNote: z.string().trim().max(500).optional(),
+  }).parse(req.body)
+
+  const users = await User.find({ _id: { $in: ids } })
+  const results = []
+
+  for (const user of users) {
+    const setupUrl = await issueAccountSetupUrl(user)
+    const sendResult = await bestEffortEmail(
+      sendRolePasswordSetupEmail({ user, setupUrl, customNote }),
+      'role_password_setup email'
+    )
+    results.push({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      delivery: sendResult?.delivery ?? 'unknown',
+      setupUrl,
+    })
+  }
+
+  await saveAudit('user.bulk_password_setup_email_sent', 'User', 'bulk', {
+    count: results.length,
+    roles: results.map((r) => r.role),
+  }, req.auth.sub)
+
+  res.json({ processed: results.length, results })
 }))
 
 router.get('/api/admin/users/:id/courses', ...adminOnly, asyncRoute(async (req, res) => {

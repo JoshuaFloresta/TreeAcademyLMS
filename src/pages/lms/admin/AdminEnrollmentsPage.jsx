@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, ArchiveRestore, Check, CreditCard, Wallet, X } from 'lucide-react'
+import { Archive, ArchiveRestore, Check, CreditCard, RefreshCw, Wallet, X } from 'lucide-react'
 import StatusPill from '../../../components/StatusPill.jsx'
 import { useConfirm } from '../../../lib/confirmContext.js'
 import { useToast } from '../../../lib/toastContext.js'
@@ -26,7 +26,7 @@ export default function AdminEnrollmentsPage() {
   const [error, setError] = useState('')
   const [selected, setSelected] = useState(() => new Set())
   const [showArchived, setShowArchived] = useState(false)
-  const { data: enrollments = [], isLoading, isFetching, refetch } = useQuery({ queryKey: ['admin-enrollments', showArchived], queryFn: () => fetchAdminEnrollments({ archived: showArchived ? 'only' : undefined }) })
+  const { data: enrollments = [], isLoading, isError, error: enrollmentsError, isFetching, refetch } = useQuery({ queryKey: ['admin-enrollments', showArchived], queryFn: () => fetchAdminEnrollments({ archived: showArchived ? 'only' : undefined }) })
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin-enrollments'] })
 
   const decideMutation = useMutation({ mutationFn: ({ id, decision, reason }) => decideEnrollment(id, decision, reason) })
@@ -108,6 +108,10 @@ export default function AdminEnrollmentsPage() {
     <div className="admin-table admin-table-enrollments-compact">
       <div className="admin-table-head"><span>{selectablePendingIds.length > 0 && <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all pending" />}</span><span>APPLICANT</span><span>PATHWAY</span><span>STATUS</span><span>SUBMITTED</span><span>ACTIONS</span></div>
       {isLoading ? <Loading label="Loading enrollments…" />
+        : isError ? <div className="operations-note" style={{ color: '#c0392b', display: 'flex', alignItems: 'center', gap: 10, padding: '16px 0' }}>
+            <span>Failed to load enrollments: {enrollmentsError?.message || 'Server error.'}</span>
+            <button type="button" className="button button-ghost button-compact" onClick={() => refetch()}><RefreshCw size={12} /> Retry</button>
+          </div>
         : !enrollments.length ? <p className="operations-note">{showArchived ? 'No archived enrollments.' : 'No active enrollments.'}</p>
         : enrollments.map((row) => { const isPending = !showArchived && row.status === 'paid_approval_pending'; return <div className="admin-table-row" key={rowId(row)}>
           <span>{isPending && <input type="checkbox" checked={selected.has(rowId(row))} onChange={() => toggle(rowId(row))} aria-label={`Select ${row.applicant?.name}`} />}</span>

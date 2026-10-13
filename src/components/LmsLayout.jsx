@@ -100,9 +100,9 @@ function useNavBadges(user) {
       const rows = await response.json()
       return rows.filter((row) => row.status === 'paid_approval_pending').length
     },
-    enabled: user?.role === 'admin',
+    enabled: Boolean(user && user.role === 'admin'),
   })
-  const { data: overview } = useQuery({ queryKey: ['staff-overview'], queryFn: fetchStaffOverview, enabled: isStaff })
+  const { data: overview } = useQuery({ queryKey: ['staff-overview'], queryFn: fetchStaffOverview, enabled: Boolean(user && isStaff) })
   return {
     notifications: notifications.filter((notification) => !notification.readAt).length,
     operations: pendingEnrollments,
@@ -174,7 +174,7 @@ export default function LmsLayout({ user, authReady, onSignOut, onUserUpdate }) 
   const badges = useNavBadges(user)
   // Learner access is pathway-scoped (see learnerVisibleCourseFilter) — the course(s) /api/courses
   // returns for a learner *are* the program(s) they're enrolled in, so no separate lookup is needed.
-  const { data: learnerCourses = [] } = useQuery({ queryKey: ['courses'], queryFn: fetchCourses, enabled: user?.role === 'learner' })
+  const { data: learnerCourses = [] } = useQuery({ queryKey: ['courses'], queryFn: fetchCourses, enabled: Boolean(user && user.role === 'learner') })
   // If navigation lands directly on a page that lives behind the "More" toggle (a deep link,
   // browser back/forward, the header search), auto-expand once so the highlighted link isn't
   // hidden. Adjusted here during render (React's documented pattern for "state derived from a prop
@@ -189,7 +189,10 @@ export default function LmsLayout({ user, authReady, onSignOut, onUserUpdate }) 
   const showAllAdminItems = adminNavExpanded
 
   if (!authReady) return <div className="lms-auth-loading"><span className="spinner" /></div>
-  if (!user) return <Navigate to="/auth" replace />
+  if (!user) {
+    const target = location.pathname + location.search
+    return <Navigate to={`/auth?redirect=${encodeURIComponent(target)}&reason=logged_out`} replace state={{ from: location }} />
+  }
 
   const role = user.role
   const initials = initialsOf(user.name)

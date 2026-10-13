@@ -1,6 +1,8 @@
 import { config } from '../config.js'
 import { createToken, hashToken } from '../security.js'
-import { sendTemplatedEmail } from '../email.js'
+import { getRolePasswordSetupDetails, sendRolePasswordSetupEmail, sendTemplatedEmail } from '../email.js'
+
+export { getRolePasswordSetupDetails, sendRolePasswordSetupEmail }
 
 const ACCOUNT_SETUP_WINDOW_MS = 72 * 60 * 60 * 1000
 

@@ -5,12 +5,26 @@ import { API_URL } from './api.js'
 let accessToken = null
 let currentUser = null
 
+const authListeners = new Set()
+
+export function subscribeAuth(listener) {
+  authListeners.add(listener)
+  return () => authListeners.delete(listener)
+}
+
+function notifyAuth(user, reason = null) {
+  for (const listener of authListeners) {
+    try { listener(user, reason) } catch (err) { console.error('Auth listener error:', err) }
+  }
+}
+
 export function getAccessToken() { return accessToken }
 export function getCurrentUser() { return currentUser }
 
 function setSession(result) {
   accessToken = result?.accessToken ?? null
   currentUser = result?.user ?? null
+  notifyAuth(currentUser)
   return currentUser
 }
 
@@ -44,11 +58,21 @@ export async function requestPasswordReset(email) {
 
 export async function refreshSession() {
   try {
-    const response = await fetch(`${API_URL}/api/auth/refresh`, { method: 'POST', credentials: 'include' })
-    if (!response.ok) { accessToken = null; currentUser = null; return null }
+    const response = await fetch(`${API_URL}/api/auth/refresh`, {
+      method: 'POST',
+      credentials: 'include',
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!response.ok) {
+      accessToken = null
+      currentUser = null
+      return null
+    }
     return setSession(await response.json().catch(() => ({})))
   } catch {
-    accessToken = null; currentUser = null; return null
+    accessToken = null
+    currentUser = null
+    return null
   }
 }
 
@@ -69,9 +93,16 @@ export async function stopImpersonation() {
 }
 
 export async function logout() {
-  try { await fetch(`${API_URL}/api/auth/logout`, { method: 'POST', credentials: 'include' }) } catch { /* ignore */ }
+  try {
+    await fetch(`${API_URL}/api/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+      signal: AbortSignal.timeout(5000),
+    })
+  } catch { /* ignore */ }
   accessToken = null
   currentUser = null
+  notifyAuth(null, 'logged_out')
 }
 
 // fetch wrapper that attaches the bearer token and transparently refreshes once on a 401.
@@ -80,6 +111,15 @@ export async function authedFetch(path, options = {}, retry = true) {
   const headers = { ...(options.headers || {}) }
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`
   const response = await fetch(url, { ...options, credentials: 'include', headers })
-  if (response.status === 401 && retry && await refreshSession()) return authedFetch(path, options, false)
+  if (response.status === 401) {
+    if (retry) {
+      const refreshed = await refreshSession()
+      if (refreshed) return authedFetch(path, options, false)
+    }
+    // If retry is false or refreshSession failed, the credentials are truly invalid/expired
+    accessToken = null
+    currentUser = null
+    notifyAuth(null, 'expired')
+  }
   return response
 }

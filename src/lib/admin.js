@@ -3,7 +3,11 @@ import { authedFetch } from './auth.js'
 async function json(response) {
   if (response.status === 204) return null
   const data = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(data.error ?? 'That request could not be completed. Please try again.')
+  if (!response.ok) {
+    const error = new Error(data.error ?? 'That request could not be completed. Please try again.')
+    error.status = response.status
+    throw error
+  }
   return data
 }
 
@@ -29,6 +33,9 @@ export const createAdminUser = (body) => post('/api/admin/users', body)
 export const updateAdminUser = (id, body) => patch(`/api/admin/users/${id}`, body)
 export const deleteAdminUser = (id) => del(`/api/admin/users/${id}`)
 export const resetAdminUserPassword = (id, password) => post(`/api/admin/users/${id}/password`, { password })
+export const sendUserSetupEmail = (id, body = {}) => post(`/api/admin/users/${id}/send-setup-email`, body)
+export const fetchUserSetupEmailPreview = (id, customNote) => get(`/api/admin/users/${id}/setup-email-preview${customNote ? `?customNote=${encodeURIComponent(customNote)}` : ''}`)
+export const bulkSendUserSetupEmail = (body) => post('/api/admin/users/bulk-send-setup-email', body)
 export const uploadAdminUserAvatar = async (id, file) => {
   const body = new FormData()
   body.append('avatar', file)
