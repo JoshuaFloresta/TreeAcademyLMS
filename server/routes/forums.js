@@ -1,4 +1,5 @@
 import express from 'express'
+import mongoose from 'mongoose'
 import { z } from 'zod'
 import { Announcement, Course, ForumPost, ForumReaction, ForumThread, LearningProgress, Notification, User } from '../models.js'
 import { requireAuth, requireStaff } from '../security.js'
@@ -96,6 +97,7 @@ router.get('/api/announcements', requireAuth, asyncRoute(async (req, res) => {
 
 router.get('/api/announcements/:id', requireAuth, asyncRoute(async (req, res) => {
   if (!dbState.ready) return res.status(503).json({ error: 'Announcements require MongoDB.' })
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(404).json({ error: 'Announcement not found.' })
   const announcement = await Announcement.findById(req.params.id)
     .populate('authorId', 'name role avatarUrl')
     .lean()

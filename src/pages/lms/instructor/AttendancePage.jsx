@@ -580,8 +580,10 @@ function RollCall({ session, courseTitle, onSaved }) {
   const toast = useToast()
   const queryClient = useQueryClient()
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['event-attendance', session.id],
+    queryKey: ['event-attendance', session?.id],
     queryFn: () => fetchEventAttendance(session.id),
+    enabled: Boolean(session?.id),
+    retry: 1,
   })
 
   const [draft, setDraft] = useState(null)
@@ -1688,6 +1690,7 @@ export default function AttendancePage({ role }) {
     queryKey: ['event-attendance', activeSession?.id],
     queryFn: () => fetchEventAttendance(activeSession.id),
     enabled: Boolean(activeSession?.id),
+    retry: 1,
   })
 
   const { data: summaryData } = useQuery({

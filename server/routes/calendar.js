@@ -1,4 +1,5 @@
 import express from 'express'
+import mongoose from 'mongoose'
 import { z } from 'zod'
 import { Attendance, CalendarEvent, Course, LearningProgress, User } from '../models.js'
 import { requireAuth, requireStaff } from '../security.js'
@@ -74,6 +75,7 @@ router.delete('/api/staff/calendar-events/:id', requireAuth, requireStaff, async
 // course (attendance needs a learner list to check off, which only a course enrollment gives us).
 router.get('/api/staff/calendar-events/:id/attendance', requireAuth, requireStaff, asyncRoute(async (req, res) => {
   if (!dbState.ready) return res.status(503).json({ error: 'Attendance requires MongoDB.' })
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(404).json({ error: 'Event not found.' })
   const event = await CalendarEvent.findById(req.params.id).lean()
   if (!event) return res.status(404).json({ error: 'Event not found.' })
   if (!event.courseId) return res.status(400).json({ error: 'This event is not linked to a course, so it has no roster to take attendance for.' })

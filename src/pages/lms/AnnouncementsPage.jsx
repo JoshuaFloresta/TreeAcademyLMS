@@ -129,7 +129,20 @@ function AnnouncementDetailView({ announcementId, role, user, onBack }) {
 
   const { data: announcement, isLoading, error } = useQuery({
     queryKey: ['announcement', announcementId],
-    queryFn: () => fetchAnnouncement(announcementId),
+    queryFn: async () => {
+      try {
+        return await fetchAnnouncement(announcementId)
+      } catch (err) {
+        const cached = queryClient.getQueryData(['announcements'])?.find((a) => a.id === announcementId)
+        if (cached) return cached
+        const all = await fetchAnnouncements()
+        const found = all.find((a) => a.id === announcementId)
+        if (found) return found
+        throw err
+      }
+    },
+    initialData: () => queryClient.getQueryData(['announcements'])?.find((a) => a.id === announcementId),
+    retry: 1,
   })
 
   const remove = async () => {
@@ -253,6 +266,14 @@ export default function AnnouncementsPage({ role, user, announcementId }) {
   // Admins moderate every announcement; instructors may edit/remove their own
   const canModify = (announcement) => role === 'admin' || announcement.authorId === user?.id
 
+  const handleBack = () => {
+    if (window.history.state && window.history.state.idx > 0) {
+      navigate(-1)
+    } else {
+      navigate('/dashboard')
+    }
+  }
+
   if (announcementId) {
     return (
       <AnnouncementDetailView
@@ -266,6 +287,16 @@ export default function AnnouncementsPage({ role, user, announcementId }) {
 
   return (
     <>
+      <button
+        type="button"
+        className="filter-button"
+        onClick={handleBack}
+        style={{ marginBottom: 18, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+        aria-label="Back"
+      >
+        <ArrowLeft size={15} /> Back
+      </button>
+
       <div className="page-title-row">
         <div>
           <p className="eyebrow">{isStaff ? 'TEACHING & COMMUNICATIONS' : 'YOUR CLASSES'}</p>

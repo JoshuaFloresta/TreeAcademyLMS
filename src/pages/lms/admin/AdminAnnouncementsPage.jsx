@@ -259,7 +259,20 @@ function AdminAnnouncementDetailView({ announcementId, onBack, onEdit }) {
 
   const { data: announcement, isLoading, error } = useQuery({
     queryKey: ['announcement', announcementId],
-    queryFn: () => fetchAnnouncement(announcementId),
+    queryFn: async () => {
+      try {
+        return await fetchAnnouncement(announcementId)
+      } catch (err) {
+        const cached = queryClient.getQueryData(['announcements'])?.find((a) => a.id === announcementId)
+        if (cached) return cached
+        const all = await fetchAnnouncements()
+        const found = all.find((a) => a.id === announcementId)
+        if (found) return found
+        throw err
+      }
+    },
+    initialData: () => queryClient.getQueryData(['announcements'])?.find((a) => a.id === announcementId),
+    retry: 1,
   })
 
   const handleDelete = async () => {
@@ -499,8 +512,26 @@ export default function AdminAnnouncementsPage({ announcementId }) {
     )
   }
 
+  const handleBack = () => {
+    if (window.history.state && window.history.state.idx > 0) {
+      navigate(-1)
+    } else {
+      navigate('/admin/dashboard')
+    }
+  }
+
   return (
     <>
+      <button
+        type="button"
+        className="filter-button"
+        onClick={handleBack}
+        style={{ marginBottom: 18, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+        aria-label="Back"
+      >
+        <ArrowLeft size={15} /> Back
+      </button>
+
       <div className="page-title-row">
         <div>
           <p className="eyebrow">COMMUNICATIONS &amp; BROADCASTS</p>
