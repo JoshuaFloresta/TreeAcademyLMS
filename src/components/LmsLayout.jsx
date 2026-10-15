@@ -9,7 +9,6 @@ import { fetchCourses, fetchNotifications, fetchPresence, fetchStaffOverview, ma
 import Brand from './Brand.jsx'
 import LmsPageContent from './LmsPageContent.jsx'
 import OnlineMembersPanel from './OnlineMembersPanel.jsx'
-import NotificationDetailModal from './NotificationDetailModal.jsx'
 import { getLmsPage } from '../lib/lmsPages.js'
 
 const navItems = [
@@ -157,7 +156,6 @@ function HeaderNotifications({ count, notifications = [] }) {
   const queryClient = useQueryClient()
   const boxRef = useRef(null)
   const [open, setOpen] = useState(false)
-  const [selectedNotif, setSelectedNotif] = useState(null)
 
   useEffect(() => {
     const onClickAway = (event) => {
@@ -195,10 +193,11 @@ function HeaderNotifications({ count, notifications = [] }) {
       markSingleReadMutation.mutate(notif._id)
     }
     setOpen(false)
-    if (notif.link) {
-      navigate(notif.link)
+    const target = notif.link || '/announcements'
+    if (target.startsWith('http://') || target.startsWith('https://')) {
+      window.location.assign(target)
     } else {
-      setSelectedNotif(notif)
+      navigate(target)
     }
   }
 
@@ -277,13 +276,6 @@ function HeaderNotifications({ count, notifications = [] }) {
             </Link>
           </div>
         </div>
-      )}
-
-      {selectedNotif && (
-        <NotificationDetailModal
-          notification={selectedNotif}
-          onClose={() => setSelectedNotif(null)}
-        />
       )}
     </div>
   )

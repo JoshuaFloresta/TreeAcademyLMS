@@ -1,6 +1,7 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Edit3, Globe, Mail, Megaphone, Pin, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, Edit3, Globe, Mail, Megaphone, Pin, Plus, Trash2 } from 'lucide-react'
 import { useConfirm } from '../../lib/confirmContext.js'
 import { useToast } from '../../lib/toastContext.js'
 import {
@@ -120,12 +121,21 @@ function ComposeForm({ courses, initialAnnouncement, role, onDone, onCancel }) {
 }
 
 export default function AnnouncementsPage({ role, user }) {
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const toast = useToast()
   const confirm = useConfirm()
   const isStaff = role !== 'learner'
   const [composing, setComposing] = useState(false)
   const [editingAnnouncement, setEditingAnnouncement] = useState(null)
+
+  const handleBack = () => {
+    if (window.history.state && window.history.state.idx > 0) {
+      navigate(-1)
+    } else {
+      navigate('/notifications')
+    }
+  }
 
   const { data: announcements = [], isLoading } = useQuery({
     queryKey: ['announcements'],
@@ -163,6 +173,16 @@ export default function AnnouncementsPage({ role, user }) {
 
   return (
     <>
+      <button
+        type="button"
+        className="filter-button"
+        onClick={handleBack}
+        style={{ marginBottom: 18, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+        aria-label="Back"
+      >
+        <ArrowLeft size={15} /> Back
+      </button>
+
       <div className="page-title-row">
         <div>
           <p className="eyebrow">{isStaff ? 'TEACHING & COMMUNICATIONS' : 'YOUR CLASSES'}</p>

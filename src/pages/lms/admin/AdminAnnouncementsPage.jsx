@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  ArrowLeft,
   BookOpen,
   Calendar,
   CheckCircle2,
@@ -250,9 +252,18 @@ function AnnouncementModal({ announcement, courses, onDone, onClose }) {
 }
 
 export default function AdminAnnouncementsPage() {
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const toast = useToast()
   const confirm = useConfirm()
+
+  const handleBack = () => {
+    if (window.history.state && window.history.state.idx > 0) {
+      navigate(-1)
+    } else {
+      navigate('/notifications')
+    }
+  }
 
   const [modalOpen, setModalOpen] = useState(false)
   const [editingAnnouncement, setEditingAnnouncement] = useState(null)
@@ -334,6 +345,16 @@ export default function AdminAnnouncementsPage() {
 
   return (
     <>
+      <button
+        type="button"
+        className="filter-button"
+        onClick={handleBack}
+        style={{ marginBottom: 18, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+        aria-label="Back"
+      >
+        <ArrowLeft size={15} /> Back
+      </button>
+
       <div className="page-title-row">
         <div>
           <p className="eyebrow">COMMUNICATIONS &amp; BROADCASTS</p>

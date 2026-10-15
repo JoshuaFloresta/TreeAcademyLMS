@@ -1,9 +1,9 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, CheckCheck, ChevronRight, ExternalLink } from 'lucide-react'
+import { ArrowLeft, Bell, CheckCheck } from 'lucide-react'
 import { fetchNotifications, markAllNotificationsRead, markNotificationRead } from '../../lib/lms.js'
 import Loading from '../../components/Loading.jsx'
-import NotificationDetailModal from '../../components/NotificationDetailModal.jsx'
 
 function timeAgo(dateString) {
   if (!dateString) return ''
@@ -19,12 +19,12 @@ function timeAgo(dateString) {
 }
 
 export default function NotificationsPage() {
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { data: notifications = [], isLoading, error } = useQuery({
     queryKey: ['notifications-page'],
     queryFn: fetchNotifications,
   })
-  const [selectedNotification, setSelectedNotification] = useState(null)
   const [filter, setFilter] = useState('all')
 
   const readAllMutation = useMutation({
@@ -47,7 +47,20 @@ export default function NotificationsPage() {
     if (!notification.readAt) {
       readSingleMutation.mutate(notification._id)
     }
-    setSelectedNotification(notification)
+    const target = notification.link || '/announcements'
+    if (target.startsWith('http://') || target.startsWith('https://')) {
+      window.location.assign(target)
+    } else {
+      navigate(target)
+    }
+  }
+
+  const handleBack = () => {
+    if (window.history.state && window.history.state.idx > 0) {
+      navigate(-1)
+    } else {
+      navigate('/dashboard')
+    }
   }
 
   const unreadCount = notifications.filter((notification) => !notification.readAt).length
@@ -56,11 +69,21 @@ export default function NotificationsPage() {
     : notifications
 
   return <>
+    <button
+      type="button"
+      className="filter-button"
+      onClick={handleBack}
+      style={{ marginBottom: 18, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+      aria-label="Back"
+    >
+      <ArrowLeft size={15} /> Back
+    </button>
+
     <div className="page-title-row">
       <div>
         <p className="eyebrow">YOUR ACADEMY UPDATES</p>
         <h1>Notifications</h1>
-        <p>Everything important, without the noise. Click any notification to view its full details.</p>
+        <p>Everything important, without the noise. Click any notification to open its page.</p>
       </div>
       <div className="admin-row-actions">
         {unreadCount > 0 && (
@@ -123,7 +146,7 @@ export default function NotificationsPage() {
           }}
           tabIndex={0}
           role="button"
-          aria-label={`View notification: ${notification.title}`}
+          aria-label={`Open: ${notification.title}`}
         >
           <span className={`notice-icon ${!notification.readAt ? 'gold' : ''}`}>
             <Bell size={18} />
@@ -134,27 +157,10 @@ export default function NotificationsPage() {
               <small>{timeAgo(notification.createdAt)}</small>
             </div>
             <p>{notification.body}</p>
-            <div className="notification-item-actions">
-              <span className="view-detail-hint">
-                Click to view details <ChevronRight size={13} />
-              </span>
-              {notification.link && (
-                <span className="has-link-hint">
-                  Has link <ExternalLink size={11} />
-                </span>
-              )}
-            </div>
           </div>
           {!notification.readAt && <span className="notification-new">New</span>}
         </article>
       ))}
     </div>
-
-    {selectedNotification && (
-      <NotificationDetailModal
-        notification={selectedNotification}
-        onClose={() => setSelectedNotification(null)}
-      />
-    )}
   </>
 }
