@@ -7,6 +7,7 @@ import { useToast } from '../../lib/toastContext.js'
 import {
   createStaffAnnouncement,
   deleteAnnouncement,
+  fetchAnnouncement,
   fetchAnnouncements,
   fetchCourses,
   updateAnnouncement,
@@ -120,7 +121,96 @@ function ComposeForm({ courses, initialAnnouncement, role, onDone, onCancel }) {
   )
 }
 
-export default function AnnouncementsPage({ role, user }) {
+function AnnouncementDetailView({ announcementId, role, user, onBack }) {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+  const confirm = useConfirm()
+  const isStaff = role !== 'learner'
+
+  const { data: announcement, isLoading, error } = useQuery({
+    queryKey: ['announcement', announcementId],
+    queryFn: () => fetchAnnouncement(announcementId),
+  })
+
+  const remove = async () => {
+    if (
+      !(await confirm({
+        title: 'Delete this announcement?',
+        message: `“${announcement.title}” will be removed for everyone.`,
+        confirmLabel: 'Delete announcement',
+        danger: true,
+      }))
+    )
+      return
+    try {
+      await deleteAnnouncement(announcement.id)
+      toast.success('Announcement deleted.')
+      queryClient.invalidateQueries({ queryKey: ['announcements'] })
+      onBack()
+    } catch (e) {
+      toast.error(e.message || 'Failed to delete announcement.')
+    }
+  }
+
+  const canModify = role === 'admin' || announcement?.authorId === user?.id
+
+  return (
+    <div className="announcement-detail-view">
+      <button
+        type="button"
+        className="filter-button"
+        onClick={onBack}
+        style={{ marginBottom: 18, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+        aria-label="Back to announcements"
+      >
+        <ArrowLeft size={15} /> Back to announcements
+      </button>
+
+      {isLoading && <Loading label="Loading announcement…" />}
+      {error && (
+        <div className="empty-state">
+          <Megaphone size={26} />
+          <strong>Could not load announcement</strong>
+          <p>{error.message || 'This announcement may have been removed or does not exist.'}</p>
+        </div>
+      )}
+      {!isLoading && !error && announcement && (
+        <article className={`announce-card announce-detail-card ${announcement.pinned ? 'pinned' : ''}`}>
+          <div className="announce-head">
+            <div>
+              <small style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                {!announcement.courseId && <Globe size={11} />}
+                {announcement.courseTitle.toUpperCase()}
+              </small>
+              <h2 style={{ fontSize: 22, margin: '8px 0 4px', color: 'var(--forest)', fontWeight: 750 }}>
+                {announcement.pinned && <Pin size={16} />} {announcement.title}
+              </h2>
+            </div>
+            <span className="announce-meta">
+              {announcement.authorName} · {when(announcement.createdAt)}
+              {isStaff && canModify && (
+                <span style={{ display: 'inline-flex', gap: 4, marginLeft: 8 }}>
+                  <button
+                    type="button"
+                    className="builder-danger"
+                    onClick={remove}
+                    aria-label="Delete announcement"
+                    title="Delete announcement"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </span>
+              )}
+            </span>
+          </div>
+          <p className="announce-detail-body">{announcement.body}</p>
+        </article>
+      )}
+    </div>
+  )
+}
+
+export default function AnnouncementsPage({ role, user, announcementId }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const toast = useToast()
@@ -128,14 +218,6 @@ export default function AnnouncementsPage({ role, user }) {
   const isStaff = role !== 'learner'
   const [composing, setComposing] = useState(false)
   const [editingAnnouncement, setEditingAnnouncement] = useState(null)
-
-  const handleBack = () => {
-    if (window.history.state && window.history.state.idx > 0) {
-      navigate(-1)
-    } else {
-      navigate('/notifications')
-    }
-  }
 
   const { data: announcements = [], isLoading } = useQuery({
     queryKey: ['announcements'],
@@ -171,18 +253,19 @@ export default function AnnouncementsPage({ role, user }) {
   // Admins moderate every announcement; instructors may edit/remove their own
   const canModify = (announcement) => role === 'admin' || announcement.authorId === user?.id
 
+  if (announcementId) {
+    return (
+      <AnnouncementDetailView
+        announcementId={announcementId}
+        role={role}
+        user={user}
+        onBack={() => navigate('/announcements')}
+      />
+    )
+  }
+
   return (
     <>
-      <button
-        type="button"
-        className="filter-button"
-        onClick={handleBack}
-        style={{ marginBottom: 18, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
-        aria-label="Back"
-      >
-        <ArrowLeft size={15} /> Back
-      </button>
-
       <div className="page-title-row">
         <div>
           <p className="eyebrow">{isStaff ? 'TEACHING & COMMUNICATIONS' : 'YOUR CLASSES'}</p>
@@ -233,7 +316,20 @@ export default function AnnouncementsPage({ role, user }) {
           </p>
         ) : (
           announcements.map((announcement) => (
-            <article className={`announce-card ${announcement.pinned ? 'pinned' : ''}`} key={announcement.id}>
+            <article
+              className={`announce-card clickable ${announcement.pinned ? 'pinned' : ''}`}
+              key={announcement.id}
+              onClick={() => navigate(`/announcements/${announcement.id}`)}
+              tabIndex={0}
+              role="button"
+              aria-label={`View announcement: ${announcement.title}`}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  navigate(`/announcements/${announcement.id}`)
+                }
+              }}
+            >
               <div className="announce-head">
                 <div>
                   <small style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
@@ -250,7 +346,8 @@ export default function AnnouncementsPage({ role, user }) {
                     <span style={{ display: 'inline-flex', gap: 4, marginLeft: 8 }}>
                       <button
                         type="button"
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation()
                           setComposing(false)
                           setEditingAnnouncement(announcement)
                         }}
@@ -262,7 +359,10 @@ export default function AnnouncementsPage({ role, user }) {
                       <button
                         type="button"
                         className="builder-danger"
-                        onClick={() => remove(announcement)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          remove(announcement)
+                        }}
                         aria-label="Delete announcement"
                         title="Delete announcement"
                       >

@@ -22,6 +22,7 @@ import { useToast } from '../../../lib/toastContext.js'
 import {
   createStaffAnnouncement,
   deleteAnnouncement,
+  fetchAnnouncement,
   fetchAnnouncements,
   fetchCourses,
   updateAnnouncement,
@@ -251,19 +252,143 @@ function AnnouncementModal({ announcement, courses, onDone, onClose }) {
   )
 }
 
-export default function AdminAnnouncementsPage() {
-  const navigate = useNavigate()
+function AdminAnnouncementDetailView({ announcementId, onBack, onEdit }) {
   const queryClient = useQueryClient()
   const toast = useToast()
   const confirm = useConfirm()
 
-  const handleBack = () => {
-    if (window.history.state && window.history.state.idx > 0) {
-      navigate(-1)
-    } else {
-      navigate('/notifications')
+  const { data: announcement, isLoading, error } = useQuery({
+    queryKey: ['announcement', announcementId],
+    queryFn: () => fetchAnnouncement(announcementId),
+  })
+
+  const handleDelete = async () => {
+    const confirmed = await confirm({
+      title: 'Delete this announcement?',
+      message: `Are you sure you want to permanently delete "${announcement?.title}"? This action cannot be undone.`,
+      confirmLabel: 'Delete Announcement',
+      danger: true,
+    })
+    if (!confirmed) return
+
+    try {
+      await deleteAnnouncement(announcement.id)
+      toast.success('Announcement deleted.')
+      queryClient.invalidateQueries({ queryKey: ['announcements'] })
+      onBack()
+    } catch (err) {
+      toast.error(err.message || 'Failed to delete announcement.')
     }
   }
+
+  const handleTogglePin = async () => {
+    try {
+      await updateAnnouncement(announcement.id, { pinned: !announcement.pinned })
+      toast.success(announcement.pinned ? 'Announcement unpinned.' : 'Announcement pinned to top.')
+      queryClient.invalidateQueries({ queryKey: ['announcement', announcementId] })
+      queryClient.invalidateQueries({ queryKey: ['announcements'] })
+    } catch (err) {
+      toast.error(err.message || 'Failed to update pin state.')
+    }
+  }
+
+  return (
+    <div className="admin-announcement-detail-view">
+      <button
+        type="button"
+        className="filter-button"
+        onClick={onBack}
+        style={{ marginBottom: 18, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+        aria-label="Back to announcements"
+      >
+        <ArrowLeft size={15} /> Back to announcements
+      </button>
+
+      {isLoading && <Loading label="Loading announcement..." />}
+      {error && (
+        <div className="empty-state">
+          <Megaphone size={26} />
+          <strong>Could not load announcement</strong>
+          <p>{error.message || 'This announcement may have been removed or does not exist.'}</p>
+        </div>
+      )}
+
+      {!isLoading && !error && announcement && (
+        <article className={`admin-announce-item ${announcement.pinned ? 'pinned' : ''}`} style={{ padding: 28 }}>
+          <div className="admin-announce-item-head">
+            <div>
+              <div className="admin-announce-item-badges">
+                {!announcement.courseId ? (
+                  <span className="scope-badge academy">
+                    <Globe size={11} /> Academy-Wide Broadcast
+                  </span>
+                ) : (
+                  <span className="scope-badge course">
+                    <BookOpen size={11} /> {announcement.courseTitle}
+                  </span>
+                )}
+                {announcement.pinned && (
+                  <span className="scope-badge pinned">
+                    <Pin size={11} /> Pinned
+                  </span>
+                )}
+              </div>
+              <h2 style={{ margin: '8px 0 0', color: 'var(--forest)', fontSize: 22, fontWeight: 750 }}>
+                {announcement.title}
+              </h2>
+            </div>
+
+            <div className="admin-announce-actions">
+              <button
+                type="button"
+                className="admin-announce-action-btn"
+                title={announcement.pinned ? 'Unpin announcement' : 'Pin to top'}
+                onClick={handleTogglePin}
+              >
+                <Pin size={15} style={{ color: announcement.pinned ? 'var(--gold)' : undefined }} />
+              </button>
+              <button
+                type="button"
+                className="admin-announce-action-btn"
+                title="Edit announcement"
+                onClick={() => onEdit(announcement)}
+              >
+                <Edit3 size={15} />
+              </button>
+              <button
+                type="button"
+                className="admin-announce-action-btn danger"
+                title="Delete announcement"
+                onClick={handleDelete}
+              >
+                <Trash2 size={15} />
+              </button>
+            </div>
+          </div>
+
+          <p style={{ margin: '18px 0', color: '#414d42', fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+            {announcement.body}
+          </p>
+
+          <div className="admin-announce-meta" style={{ borderTop: '1px solid #edf0ec', paddingTop: 14, marginTop: 14 }}>
+            <span>
+              <User size={13} /> Posted by <strong>{announcement.authorName}</strong> ({announcement.authorRole})
+            </span>
+            <span>
+              <Calendar size={13} /> {formatDate(announcement.createdAt)}
+            </span>
+          </div>
+        </article>
+      )}
+    </div>
+  )
+}
+
+export default function AdminAnnouncementsPage({ announcementId }) {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const toast = useToast()
+  const confirm = useConfirm()
 
   const [modalOpen, setModalOpen] = useState(false)
   const [editingAnnouncement, setEditingAnnouncement] = useState(null)
@@ -343,18 +468,39 @@ export default function AdminAnnouncementsPage() {
   const courseCount = announcements.filter((a) => Boolean(a.courseId)).length
   const pinnedCount = announcements.filter((a) => a.pinned).length
 
+  if (announcementId) {
+    return (
+      <>
+        <AdminAnnouncementDetailView
+          announcementId={announcementId}
+          onBack={() => navigate('/admin/announcements')}
+          onEdit={(announcement) => {
+            setEditingAnnouncement(announcement)
+            setModalOpen(true)
+          }}
+        />
+        {modalOpen && (
+          <AnnouncementModal
+            announcement={editingAnnouncement}
+            courses={courses}
+            onDone={() => {
+              queryClient.invalidateQueries({ queryKey: ['announcements'] })
+              queryClient.invalidateQueries({ queryKey: ['announcement', announcementId] })
+              setModalOpen(false)
+              setEditingAnnouncement(null)
+            }}
+            onClose={() => {
+              setModalOpen(false)
+              setEditingAnnouncement(null)
+            }}
+          />
+        )}
+      </>
+    )
+  }
+
   return (
     <>
-      <button
-        type="button"
-        className="filter-button"
-        onClick={handleBack}
-        style={{ marginBottom: 18, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
-        aria-label="Back"
-      >
-        <ArrowLeft size={15} /> Back
-      </button>
-
       <div className="page-title-row">
         <div>
           <p className="eyebrow">COMMUNICATIONS &amp; BROADCASTS</p>
@@ -489,7 +635,10 @@ export default function AdminAnnouncementsPage() {
                         </span>
                       )}
                     </div>
-                    <h3 style={{ margin: '8px 0 0', color: 'var(--forest)', fontSize: 17, fontWeight: 700 }}>
+                    <h3
+                      style={{ margin: '8px 0 0', color: 'var(--forest)', fontSize: 17, fontWeight: 700, cursor: 'pointer' }}
+                      onClick={() => navigate(`/admin/announcements/${announcement.id}`)}
+                    >
                       {announcement.title}
                     </h3>
                   </div>

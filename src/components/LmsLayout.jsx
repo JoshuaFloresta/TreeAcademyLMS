@@ -5,7 +5,7 @@ import { io } from 'socket.io-client'
 import { AlertTriangle, ArrowRight, BarChart3, Bell, BookOpen, CalendarClock, CalendarDays, CheckCheck, ChevronRight, ClipboardCheck, FileText, Flag, GraduationCap, LayoutDashboard, Library, LifeBuoy, LogOut, Mail, Megaphone, Menu, MessagesSquare, Newspaper, Receipt, RefreshCw, ScrollText, Search, Settings, ShieldCheck, Sparkles, Ticket, UserCheck, UserRound, Users, UsersRound, X } from 'lucide-react'
 import { API_URL, avatarSrc } from '../lib/api.js'
 import { authedFetch, getLastAuthReason, stopImpersonation } from '../lib/auth.js'
-import { fetchCourses, fetchNotifications, fetchPresence, fetchStaffOverview, markAllNotificationsRead, markNotificationRead, searchAcademy } from '../lib/lms.js'
+import { fetchAnnouncements, fetchCourses, fetchNotifications, fetchPresence, fetchStaffOverview, markAllNotificationsRead, markNotificationRead, searchAcademy } from '../lib/lms.js'
 import Brand from './Brand.jsx'
 import LmsPageContent from './LmsPageContent.jsx'
 import OnlineMembersPanel from './OnlineMembersPanel.jsx'
@@ -188,12 +188,25 @@ function HeaderNotifications({ count, notifications = [] }) {
     },
   })
 
+  const { data: announcements = [] } = useQuery({
+    queryKey: ['announcements'],
+    queryFn: () => fetchAnnouncements(),
+  })
+
   const handleNotificationClick = (notif) => {
     if (!notif.readAt) {
       markSingleReadMutation.mutate(notif._id)
     }
     setOpen(false)
-    const target = notif.link || '/announcements'
+    let target = notif.link || '/announcements'
+    if (target === '/announcements' && announcements.length) {
+      const match = announcements.find((a) =>
+        notif.title?.includes(a.title) || (a.title && notif.title?.toLowerCase().includes(a.title.toLowerCase()))
+      )
+      if (match) {
+        target = `/announcements/${match.id}`
+      }
+    }
     if (target.startsWith('http://') || target.startsWith('https://')) {
       window.location.assign(target)
     } else {

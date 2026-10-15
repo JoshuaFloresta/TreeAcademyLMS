@@ -212,7 +212,7 @@ router.get('/api/search', requireAuth, asyncRoute(async (req, res) => {
   ])
   res.json({
     courses: courses.map((course) => ({ id: course._id, title: course.title, to: `/catalog?course=${course._id}` })),
-    announcements: announcements.map((row) => ({ id: row._id, title: row.title, to: '/announcements' })),
+    announcements: announcements.map((row) => ({ id: row._id, title: row.title, to: `/announcements/${row._id}` })),
     users: users.map((row) => ({ id: row._id, title: row.name, subtitle: row.email, to: `/profile?member=${row._id}` })),
   })
 }))

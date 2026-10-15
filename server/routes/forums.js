@@ -94,6 +94,37 @@ router.get('/api/announcements', requireAuth, asyncRoute(async (req, res) => {
   })))
 }))
 
+router.get('/api/announcements/:id', requireAuth, asyncRoute(async (req, res) => {
+  if (!dbState.ready) return res.status(503).json({ error: 'Announcements require MongoDB.' })
+  const announcement = await Announcement.findById(req.params.id)
+    .populate('authorId', 'name role avatarUrl')
+    .lean()
+  if (!announcement) return res.status(404).json({ error: 'Announcement not found.' })
+
+  const isStaff = ['instructor', 'admin'].includes(req.auth.role)
+  const courses = await visibleCourses(req.auth.role, req.auth.sub)
+  const titleById = new Map(courses.map((course) => [String(course._id), course.title]))
+
+  if (!isStaff && announcement.courseId) {
+    const hasAccess = courses.some((c) => String(c._id) === String(announcement.courseId))
+    if (!hasAccess) return res.status(403).json({ error: 'Access denied.' })
+  }
+
+  res.json({
+    id: announcement._id.toString(),
+    courseId: announcement.courseId ? String(announcement.courseId) : null,
+    courseTitle: announcement.courseId ? (titleById.get(String(announcement.courseId)) ?? 'Course') : 'All Programs (Academy-Wide)',
+    title: announcement.title,
+    body: announcement.body,
+    pinned: Boolean(announcement.pinned),
+    authorId: announcement.authorId?._id ? String(announcement.authorId._id) : null,
+    authorName: announcement.authorId?.name ?? 'Staff',
+    authorRole: announcement.authorId?.role ?? 'Staff',
+    createdAt: announcement.createdAt,
+    updatedAt: announcement.updatedAt,
+  })
+}))
+
 router.post('/api/staff/announcements', requireAuth, requireStaff, asyncRoute(async (req, res) => {
   if (!dbState.ready) return res.status(503).json({ error: 'Announcements require MongoDB.' })
   const values = generalAnnouncementInput.parse(req.body)
@@ -135,7 +166,7 @@ router.post('/api/staff/announcements', requireAuth, requireStaff, asyncRoute(as
         recipientId: row._id,
         title: notifTitle,
         body: values.body.slice(0, 300),
-        link: '/announcements',
+        link: `/announcements/${announcement._id}`,
       }))
     ).catch((err) => console.error('Error inserting announcement notifications:', err))
   }
@@ -191,7 +222,7 @@ router.post('/api/staff/courses/:id/announcements', requireAuth, requireStaff, a
         recipientId: row._id,
         title: `${course.title}: ${values.title}`,
         body: values.body.slice(0, 300),
-        link: '/announcements',
+        link: `/announcements/${announcement._id}`,
       }))
     ).catch((err) => console.error('Error inserting course announcement notifications:', err))
   }

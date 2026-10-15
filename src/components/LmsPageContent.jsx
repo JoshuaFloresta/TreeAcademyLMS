@@ -2,6 +2,8 @@ import { Navigate } from 'react-router-dom'
 import SettingsPage from '../pages/lms/SettingsPage.jsx'
 import AssignmentDetailPage from '../pages/lms/AssignmentDetailPage.jsx'
 import ForumsPage from '../pages/lms/ForumsPage.jsx'
+import AnnouncementsPage from '../pages/lms/AnnouncementsPage.jsx'
+import AdminAnnouncementsPage from '../pages/lms/admin/AdminAnnouncementsPage.jsx'
 import CourseBuilderPage from '../pages/lms/instructor/CourseBuilderPage.jsx'
 import AssignmentEditorPage from '../pages/lms/instructor/AssignmentEditorPage.jsx'
 import QuizEditorPage from '../pages/lms/instructor/QuizEditorPage.jsx'
@@ -18,6 +20,8 @@ const builderQuizPattern = /^\/builder\/quizzes\/([^/]+)$/
 // A discussion thread gets its own URL so "Share" on the thread page can hand out a real
 // deep link, rather than everyone landing back on the undifferentiated /forums list.
 const forumThreadPattern = /^\/forums\/([^/]+)$/
+const announcementDetailPattern = /^\/announcements\/([^/]+)$/
+const adminAnnouncementDetailPattern = /^\/admin\/announcements\/([^/]+)$/
 
 export default function LmsPageContent({ page, pathname, role, user, onUserUpdate }) {
   // Admin-only route guard
@@ -50,6 +54,12 @@ export default function LmsPageContent({ page, pathname, role, user, onUserUpdat
 
   const forumThreadMatch = pathname.match(forumThreadPattern)
   if (forumThreadMatch) return <ForumsPage role={role} user={user} initialThreadId={forumThreadMatch[1]} />
+
+  const announcementMatch = pathname.match(announcementDetailPattern)
+  if (announcementMatch) return <AnnouncementsPage role={role} user={user} announcementId={announcementMatch[1]} />
+
+  const adminAnnouncementMatch = pathname.match(adminAnnouncementDetailPattern)
+  if (adminAnnouncementMatch) return <AdminAnnouncementsPage role={role} user={user} announcementId={adminAnnouncementMatch[1]} />
 
   const currentPage = getLmsPage(pathname)
   if (currentPage?.roles && !currentPage.roles.includes(role)) {

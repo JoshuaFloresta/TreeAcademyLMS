@@ -71,6 +71,7 @@ export const fetchCourseAnalytics = (courseId) => get(`/api/staff/courses/${cour
 
 // Announcements & forums
 export const fetchAnnouncements = (courseId) => get(courseId ? `/api/announcements?courseId=${encodeURIComponent(courseId)}` : '/api/announcements')
+export const fetchAnnouncement = (id) => get(`/api/announcements/${id}`)
 export const createAnnouncement = (courseId, payload) => post(`/api/staff/courses/${courseId}/announcements`, payload)
 export const createStaffAnnouncement = (payload) => post('/api/staff/announcements', payload)
 export const updateAnnouncement = (id, payload) => patch(`/api/staff/announcements/${id}`, payload)

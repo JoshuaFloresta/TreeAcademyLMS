@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Bell, CheckCheck } from 'lucide-react'
-import { fetchNotifications, markAllNotificationsRead, markNotificationRead } from '../../lib/lms.js'
+import { Bell, CheckCheck } from 'lucide-react'
+import { fetchAnnouncements, fetchNotifications, markAllNotificationsRead, markNotificationRead } from '../../lib/lms.js'
 import Loading from '../../components/Loading.jsx'
 
 function timeAgo(dateString) {
@@ -24,6 +24,10 @@ export default function NotificationsPage() {
   const { data: notifications = [], isLoading, error } = useQuery({
     queryKey: ['notifications-page'],
     queryFn: fetchNotifications,
+  })
+  const { data: announcements = [] } = useQuery({
+    queryKey: ['announcements'],
+    queryFn: () => fetchAnnouncements(),
   })
   const [filter, setFilter] = useState('all')
 
@@ -47,19 +51,19 @@ export default function NotificationsPage() {
     if (!notification.readAt) {
       readSingleMutation.mutate(notification._id)
     }
-    const target = notification.link || '/announcements'
+    let target = notification.link || '/announcements'
+    if (target === '/announcements' && announcements.length) {
+      const match = announcements.find((a) =>
+        notification.title?.includes(a.title) || (a.title && notification.title?.toLowerCase().includes(a.title.toLowerCase()))
+      )
+      if (match) {
+        target = `/announcements/${match.id}`
+      }
+    }
     if (target.startsWith('http://') || target.startsWith('https://')) {
       window.location.assign(target)
     } else {
       navigate(target)
-    }
-  }
-
-  const handleBack = () => {
-    if (window.history.state && window.history.state.idx > 0) {
-      navigate(-1)
-    } else {
-      navigate('/dashboard')
     }
   }
 
@@ -69,16 +73,6 @@ export default function NotificationsPage() {
     : notifications
 
   return <>
-    <button
-      type="button"
-      className="filter-button"
-      onClick={handleBack}
-      style={{ marginBottom: 18, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
-      aria-label="Back"
-    >
-      <ArrowLeft size={15} /> Back
-    </button>
-
     <div className="page-title-row">
       <div>
         <p className="eyebrow">YOUR ACADEMY UPDATES</p>
