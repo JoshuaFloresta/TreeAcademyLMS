@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { useIsFetching, useIsMutating, useQuery } from '@tanstack/react-query'
+import { useIsFetching, useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { io } from 'socket.io-client'
-import { AlertTriangle, BarChart3, Bell, BookOpen, CalendarClock, CalendarDays, ChevronRight, ClipboardCheck, FileText, Flag, GraduationCap, LayoutDashboard, Library, LifeBuoy, LogOut, Mail, Megaphone, Menu, MessagesSquare, Newspaper, Receipt, RefreshCw, ScrollText, Search, Settings, ShieldCheck, Sparkles, Ticket, UserCheck, UserRound, Users, UsersRound, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, BarChart3, Bell, BookOpen, CalendarClock, CalendarDays, CheckCheck, ChevronRight, ClipboardCheck, FileText, Flag, GraduationCap, LayoutDashboard, Library, LifeBuoy, LogOut, Mail, Megaphone, Menu, MessagesSquare, Newspaper, Receipt, RefreshCw, ScrollText, Search, Settings, ShieldCheck, Sparkles, Ticket, UserCheck, UserRound, Users, UsersRound, X } from 'lucide-react'
 import { API_URL, avatarSrc } from '../lib/api.js'
 import { authedFetch, getLastAuthReason, stopImpersonation } from '../lib/auth.js'
-import { fetchCourses, fetchNotifications, fetchPresence, fetchStaffOverview, searchAcademy } from '../lib/lms.js'
+import { fetchCourses, fetchNotifications, fetchPresence, fetchStaffOverview, markAllNotificationsRead, markNotificationRead, searchAcademy } from '../lib/lms.js'
 import Brand from './Brand.jsx'
 import LmsPageContent from './LmsPageContent.jsx'
 import OnlineMembersPanel from './OnlineMembersPanel.jsx'
+import NotificationDetailModal from './NotificationDetailModal.jsx'
 import { getLmsPage } from '../lib/lmsPages.js'
 
 const navItems = [
@@ -64,6 +65,7 @@ const adminNavSections = [
     items: [
       { label: 'Announcements', icon: Megaphone, to: '/admin/announcements' },
       { label: 'Discussions', icon: MessagesSquare, to: '/forums' },
+      { label: 'Notifications', icon: Bell, to: '/notifications', badgeKey: 'notifications' },
       { label: 'Email Automation', icon: Mail, to: '/admin/email-automation' },
       { label: 'Blog', icon: Newspaper, to: '/admin/blog' },
     ],
@@ -133,7 +135,158 @@ function useNavBadges(user) {
     notifications: notifications.filter((notification) => !notification.readAt).length,
     operations: pendingEnrollments,
     grading: overview?.pendingGrading ?? 0,
+    list: notifications,
   }
+}
+
+function timeAgoShort(dateString) {
+  if (!dateString) return ''
+  const diffMs = Date.now() - new Date(dateString).getTime()
+  const minutes = Math.floor(diffMs / 60_000)
+  if (minutes < 1) return 'Just now'
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(diffMs / 3_600_000)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d ago`
+  return new Date(dateString).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })
+}
+
+function HeaderNotifications({ count, notifications = [] }) {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const boxRef = useRef(null)
+  const [open, setOpen] = useState(false)
+  const [selectedNotif, setSelectedNotif] = useState(null)
+
+  useEffect(() => {
+    const onClickAway = (event) => {
+      if (boxRef.current && !boxRef.current.contains(event.target)) setOpen(false)
+    }
+    const onKey = (event) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onClickAway)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onClickAway)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [])
+
+  const markAllReadMutation = useMutation({
+    mutationFn: markAllNotificationsRead,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['nav-notifications'] })
+      queryClient.invalidateQueries({ queryKey: ['notifications-page'] })
+    },
+  })
+
+  const markSingleReadMutation = useMutation({
+    mutationFn: markNotificationRead,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['nav-notifications'] })
+      queryClient.invalidateQueries({ queryKey: ['notifications-page'] })
+    },
+  })
+
+  const handleNotificationClick = (notif) => {
+    if (!notif.readAt) {
+      markSingleReadMutation.mutate(notif._id)
+    }
+    setOpen(false)
+    if (notif.link) {
+      navigate(notif.link)
+    } else {
+      setSelectedNotif(notif)
+    }
+  }
+
+  const recent = notifications.slice(0, 8)
+
+  return (
+    <div className="header-notifications" ref={boxRef}>
+      <button
+        type="button"
+        className="header-icon notification-bell-btn"
+        aria-label="Notifications"
+        aria-expanded={open}
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <Bell size={19} />
+        {count > 0 && (
+          <span className="notification-badge-count">{count > 9 ? '9+' : count}</span>
+        )}
+      </button>
+
+      {open && (
+        <div className="header-notifications-panel">
+          <div className="notifications-panel-head">
+            <div className="notifications-head-title">
+              <strong>Notifications</strong>
+              {count > 0 && <span className="notifications-unread-pill">{count} new</span>}
+            </div>
+            {count > 0 && (
+              <button
+                type="button"
+                className="notifications-mark-read-btn"
+                disabled={markAllReadMutation.isPending}
+                onClick={() => markAllReadMutation.mutate()}
+              >
+                <CheckCheck size={14} /> Mark all read
+              </button>
+            )}
+          </div>
+
+          <div className="notifications-panel-list">
+            {recent.length === 0 ? (
+              <div className="notifications-empty">
+                <Bell size={24} />
+                <p>You’re all caught up!</p>
+                <small>New notifications will appear here.</small>
+              </div>
+            ) : (
+              recent.map((notif) => (
+                <button
+                  type="button"
+                  key={notif._id}
+                  className={`notifications-panel-item ${notif.readAt ? '' : 'unread'}`}
+                  onClick={() => handleNotificationClick(notif)}
+                >
+                  <span className={`notifications-item-icon ${!notif.readAt ? 'gold' : ''}`}>
+                    <Bell size={14} />
+                  </span>
+                  <div className="notifications-item-text">
+                    <strong className="notifications-item-title">{notif.title}</strong>
+                    <p className="notifications-item-body">{notif.body}</p>
+                    <span className="notifications-item-time">{timeAgoShort(notif.createdAt)}</span>
+                  </div>
+                  {!notif.readAt && <span className="notifications-item-dot" />}
+                </button>
+              ))
+            )}
+          </div>
+
+          <div className="notifications-panel-footer">
+            <Link
+              to="/notifications"
+              className="notifications-view-all"
+              onClick={() => setOpen(false)}
+            >
+              View all in Notifications <ArrowRight size={13} />
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {selectedNotif && (
+        <NotificationDetailModal
+          notification={selectedNotif}
+          onClose={() => setSelectedNotif(null)}
+        />
+      )}
+    </div>
+  )
 }
 
 function HeaderSearch() {
@@ -294,7 +447,7 @@ export default function LmsLayout({ user, authReady, authStatus = 'loading', aut
         : <NavLink to="/profile"><UserRound size={19} /> <span>Profile &amp; settings</span></NavLink>}<button type="button" className="sidebar-signout" onClick={signOut}><LogOut size={19} /> <span>Sign out</span></button></div>
     </aside>
     <div className={`sidebar-backdrop ${navOpen ? 'show' : ''}`} onClick={() => setNavOpen(false)} />
-    <main className="lms-main">{user.impersonating && <div className="impersonation-bar"><span><UserRound size={15} /> Viewing as <strong>{user.name}</strong>{user.impersonatorName ? ` — signed in as ${user.impersonatorName}` : ''}</span><button type="button" onClick={exitImpersonation}>Exit impersonation</button></div>}<header className="lms-header"><button className="lms-menu" onClick={() => setNavOpen(true)} aria-label="Open navigation"><Menu /></button><div className="breadcrumbs"><span>Tree Academy</span><ChevronRight size={15} /><strong>{title}</strong></div><div className="header-tools"><HeaderSearch /><NavLink to="/notifications" className="header-icon notification-dot" aria-label="Notifications" data-has-unread={badges.notifications > 0}><Bell size={19} /></NavLink><button className="member-trigger" onClick={() => setOnlinePanelOpen(true)} aria-expanded={onlinePanelOpen} aria-controls="online-members-title"><i className="online-live-dot" /><UsersRound size={16} /><span><b>{members.length}</b> Online</span></button></div></header><section className="page-content"><LmsPageContent page={page} pathname={location.pathname} role={role} user={user} onUserUpdate={onUserUpdate} /></section></main>
+    <main className="lms-main">{user.impersonating && <div className="impersonation-bar"><span><UserRound size={15} /> Viewing as <strong>{user.name}</strong>{user.impersonatorName ? ` — signed in as ${user.impersonatorName}` : ''}</span><button type="button" onClick={exitImpersonation}>Exit impersonation</button></div>}<header className="lms-header"><button className="lms-menu" onClick={() => setNavOpen(true)} aria-label="Open navigation"><Menu /></button><div className="breadcrumbs"><span>Tree Academy</span><ChevronRight size={15} /><strong>{title}</strong></div><div className="header-tools"><HeaderSearch /><HeaderNotifications count={badges.notifications} notifications={badges.list} /><button className="member-trigger" onClick={() => setOnlinePanelOpen(true)} aria-expanded={onlinePanelOpen} aria-controls="online-members-title"><i className="online-live-dot" /><UsersRound size={16} /><span><b>{members.length}</b> Online</span></button></div></header><section className="page-content"><LmsPageContent page={page} pathname={location.pathname} role={role} user={user} onUserUpdate={onUserUpdate} /></section></main>
     <OnlineMembersPanel open={onlinePanelOpen} onOpenChange={setOnlinePanelOpen} members={members} currentUserId={user.id} />
   </div>
 }
