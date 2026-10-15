@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
   BookOpen,
   Calendar,
+  CheckCheck,
   CheckCircle2,
   Edit3,
   Globe,
@@ -25,6 +26,9 @@ import {
   fetchAnnouncement,
   fetchAnnouncements,
   fetchCourses,
+  fetchNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
   updateAnnouncement,
 } from '../../../lib/lms.js'
 import Loading from '../../../components/Loading.jsx'
@@ -252,7 +256,7 @@ function AnnouncementModal({ announcement, courses, onDone, onClose }) {
   )
 }
 
-function AdminAnnouncementDetailView({ announcementId, onBack, onEdit }) {
+function AdminAnnouncementDetailView({ announcementId, onBack, onEdit, onMarkRead }) {
   const queryClient = useQueryClient()
   const toast = useToast()
   const confirm = useConfirm()
@@ -274,6 +278,12 @@ function AdminAnnouncementDetailView({ announcementId, onBack, onEdit }) {
     initialData: () => queryClient.getQueryData(['announcements'])?.find((a) => a.id === announcementId),
     retry: 1,
   })
+
+  useEffect(() => {
+    if (announcementId) {
+      onMarkRead?.(announcementId)
+    }
+  }, [announcementId, onMarkRead])
 
   const handleDelete = async () => {
     const confirmed = await confirm({
@@ -311,11 +321,23 @@ function AdminAnnouncementDetailView({ announcementId, onBack, onEdit }) {
         type="button"
         className="filter-button"
         onClick={onBack}
-        style={{ marginBottom: 18, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+        style={{ marginBottom: 16, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
         aria-label="Back to announcements"
       >
         <ArrowLeft size={15} /> Back to announcements
       </button>
+
+      {announcement && (
+        <div className="breadcrumbs" style={{ marginBottom: 14 }}>
+          <span style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={onBack}>
+            Announcements
+          </span>
+          <span>&gt;</span>
+          <span>{announcement.courseTitle}</span>
+          <span>&gt;</span>
+          <strong>{announcement.title}</strong>
+        </div>
+      )}
 
       {isLoading && <Loading label="Loading announcement..." />}
       {error && (
@@ -408,6 +430,17 @@ export default function AdminAnnouncementsPage({ announcementId }) {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedScope, setSelectedScope] = useState('all') // 'all', 'academy-wide', or courseId
   const [pinnedFilter, setPinnedFilter] = useState('all') // 'all', 'pinned'
+  const [statusTab, setStatusTab] = useState('all') // 'all', 'unread', 'pinned'
+
+  const storageKey = `tree_admin_read_announcements`
+  const [readIds, setReadIds] = useState(() => {
+    try {
+      const raw = localStorage.getItem(storageKey)
+      return raw ? new Set(JSON.parse(raw)) : new Set()
+    } catch {
+      return new Set()
+    }
+  })
 
   const { data: announcements = [], isLoading } = useQuery({
     queryKey: ['announcements'],
@@ -419,7 +452,81 @@ export default function AdminAnnouncementsPage({ announcementId }) {
     queryFn: fetchCourses,
   })
 
+  const { data: notifications = [] } = useQuery({
+    queryKey: ['notifications-page'],
+    queryFn: fetchNotifications,
+  })
+
+  const markSingleReadMutation = useMutation({
+    mutationFn: markNotificationRead,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['nav-notifications'] })
+      queryClient.invalidateQueries({ queryKey: ['notifications-page'] })
+    },
+  })
+
+  const markAllReadMutation = useMutation({
+    mutationFn: markAllNotificationsRead,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['nav-notifications'] })
+      queryClient.invalidateQueries({ queryKey: ['notifications-page'] })
+    },
+  })
+
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['announcements'] })
+
+  const isAnnouncementRead = (announcement) => {
+    if (readIds.has(announcement.id)) return true
+    const matchedNotif = notifications.find(
+      (n) => n.link === `/announcements/${announcement.id}` || (n.title && n.title.includes(announcement.title))
+    )
+    if (matchedNotif && matchedNotif.readAt) return true
+    return false
+  }
+
+  const markAsRead = (id) => {
+    setReadIds((prev) => {
+      if (prev.has(id)) return prev
+      const next = new Set(prev)
+      next.add(id)
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(Array.from(next)))
+      } catch (err) {
+        console.error(err)
+      }
+      return next
+    })
+    const matchedNotif = notifications.find(
+      (n) =>
+        !n.readAt &&
+        (n.link === `/announcements/${id}` ||
+          (announcements.find((a) => a.id === id)?.title &&
+            n.title?.includes(announcements.find((a) => a.id === id)?.title)))
+    )
+    if (matchedNotif) {
+      markSingleReadMutation.mutate(matchedNotif._id)
+    }
+  }
+
+  const markAllAsRead = async () => {
+    const allIds = announcements.map((a) => a.id)
+    setReadIds((prev) => {
+      const next = new Set(prev)
+      allIds.forEach((id) => next.add(id))
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(Array.from(next)))
+      } catch (err) {
+        console.error(err)
+      }
+      return next
+    })
+    try {
+      await markAllReadMutation.mutateAsync()
+    } catch {
+      // ignore
+    }
+    toast.success('All announcements marked as read.')
+  }
 
   const handleDelete = async (announcement) => {
     const confirmed = await confirm({
@@ -452,13 +559,17 @@ export default function AdminAnnouncementsPage({ announcementId }) {
   // Filtered list
   const filteredAnnouncements = useMemo(() => {
     return announcements.filter((item) => {
+      // Status tab filter
+      if (statusTab === 'unread' && isAnnouncementRead(item)) return false
+      if (statusTab === 'pinned' && !item.pinned) return false
+
       // Scope filter
       if (selectedScope === 'academy-wide' && item.courseId) return false
       if (selectedScope !== 'all' && selectedScope !== 'academy-wide' && String(item.courseId) !== String(selectedScope)) {
         return false
       }
 
-      // Pinned filter
+      // Pinned filter dropdown (if not using tab)
       if (pinnedFilter === 'pinned' && !item.pinned) return false
 
       // Search term
@@ -473,10 +584,14 @@ export default function AdminAnnouncementsPage({ announcementId }) {
 
       return true
     })
-  }, [announcements, selectedScope, pinnedFilter, searchTerm])
+  }, [announcements, statusTab, selectedScope, pinnedFilter, searchTerm, readIds, notifications])
 
   // Statistics
   const totalCount = announcements.length
+  const unreadCount = useMemo(
+    () => announcements.filter((a) => !isAnnouncementRead(a)).length,
+    [announcements, readIds, notifications]
+  )
   const academyCount = announcements.filter((a) => !a.courseId).length
   const courseCount = announcements.filter((a) => Boolean(a.courseId)).length
   const pinnedCount = announcements.filter((a) => a.pinned).length
@@ -487,6 +602,7 @@ export default function AdminAnnouncementsPage({ announcementId }) {
         <AdminAnnouncementDetailView
           announcementId={announcementId}
           onBack={() => navigate('/admin/announcements')}
+          onMarkRead={markAsRead}
           onEdit={(announcement) => {
             setEditingAnnouncement(announcement)
             setModalOpen(true)
@@ -540,16 +656,28 @@ export default function AdminAnnouncementsPage({ announcementId }) {
             Create, moderate, and broadcast updates to your academy. Announcements notify learners in-app and via email.
           </p>
         </div>
-        <button
-          type="button"
-          className="button button-primary"
-          onClick={() => {
-            setEditingAnnouncement(null)
-            setModalOpen(true)
-          }}
-        >
-          <Plus size={16} /> New announcement
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          {unreadCount > 0 && (
+            <button
+              type="button"
+              className="button button-ghost button-compact"
+              onClick={markAllAsRead}
+              disabled={markAllReadMutation.isPending}
+            >
+              <CheckCheck size={14} /> Mark all as read
+            </button>
+          )}
+          <button
+            type="button"
+            className="button button-primary"
+            onClick={() => {
+              setEditingAnnouncement(null)
+              setModalOpen(true)
+            }}
+          >
+            <Plus size={16} /> New announcement
+          </button>
+        </div>
       </div>
 
       {/* Quick metrics summary */}
@@ -586,6 +714,33 @@ export default function AdminAnnouncementsPage({ announcementId }) {
             <small>Priority announcements</small>
           </div>
         </div>
+      </div>
+
+      {/* Filter Tabs */}
+      <div className="announce-tabs">
+        <button
+          type="button"
+          className={`announce-tab-btn ${statusTab === 'all' ? 'active' : ''}`}
+          onClick={() => setStatusTab('all')}
+        >
+          All announcements ({totalCount})
+        </button>
+        <button
+          type="button"
+          className={`announce-tab-btn ${statusTab === 'unread' ? 'active' : ''}`}
+          onClick={() => setStatusTab('unread')}
+        >
+          Unread {unreadCount > 0 && <span className="tab-pill">{unreadCount}</span>}
+        </button>
+        {pinnedCount > 0 && (
+          <button
+            type="button"
+            className={`announce-tab-btn ${statusTab === 'pinned' ? 'active' : ''}`}
+            onClick={() => setStatusTab('pinned')}
+          >
+            <Pin size={12} /> Pinned ({pinnedCount})
+          </button>
+        )}
       </div>
 
       {/* Search & Filter Toolbar */}
@@ -630,6 +785,26 @@ export default function AdminAnnouncementsPage({ announcementId }) {
       <div className="admin-announce-grid">
         {isLoading ? (
           <Loading label="Loading announcements..." />
+        ) : statusTab === 'unread' && unreadCount === 0 ? (
+          <div className="empty-state" style={{ padding: '32px 20px', textAlign: 'center' }}>
+            <CheckCircle2 size={32} style={{ color: 'var(--forest)', margin: '0 auto 8px', display: 'block' }} />
+            <strong>You’re all caught up</strong>
+            <p style={{ margin: '4px 0 0', color: '#7a8579', fontSize: 13 }}>
+              There are no unread announcements at this time.
+            </p>
+            <button
+              type="button"
+              className="button button-ghost button-compact"
+              onClick={() => {
+                setStatusTab('all')
+                setSearchTerm('')
+                setSelectedScope('all')
+              }}
+              style={{ marginTop: 10 }}
+            >
+              View all announcements
+            </button>
+          </div>
         ) : filteredAnnouncements.length === 0 ? (
           <div className="operations-note" style={{ padding: '32px 20px', textAlign: 'center' }}>
             <Megaphone size={24} style={{ margin: '0 auto 8px', display: 'block', color: 'var(--gold)' }} />
@@ -643,10 +818,11 @@ export default function AdminAnnouncementsPage({ announcementId }) {
         ) : (
           filteredAnnouncements.map((announcement) => {
             const isAcademyWide = !announcement.courseId
+            const isRead = isAnnouncementRead(announcement)
             return (
               <article
                 key={announcement.id}
-                className={`admin-announce-item ${announcement.pinned ? 'pinned' : ''}`}
+                className={`admin-announce-item ${!isRead ? 'unread' : ''} ${announcement.pinned ? 'pinned' : ''}`}
               >
                 <div className="admin-announce-item-head">
                   <div>
@@ -665,10 +841,16 @@ export default function AdminAnnouncementsPage({ announcementId }) {
                           <Pin size={11} /> Pinned
                         </span>
                       )}
+                      {!isRead && (
+                        <span className="announce-unread-badge">New</span>
+                      )}
                     </div>
                     <h3
                       style={{ margin: '8px 0 0', color: 'var(--forest)', fontSize: 17, fontWeight: 700, cursor: 'pointer' }}
-                      onClick={() => navigate(`/admin/announcements/${announcement.id}`)}
+                      onClick={() => {
+                        markAsRead(announcement.id)
+                        navigate(`/admin/announcements/${announcement.id}`)
+                      }}
                     >
                       {announcement.title}
                     </h3>
