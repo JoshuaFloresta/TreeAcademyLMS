@@ -629,7 +629,7 @@ const contentAssetSchema = new Schema({
 }, { timestamps: true })
 
 const announcementSchema = new Schema({
-  courseId: { type: Schema.Types.ObjectId, ref: 'Course', required: true, index: true },
+  courseId: { type: Schema.Types.ObjectId, ref: 'Course', required: false, default: null, index: true },
   authorId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   title: { type: String, required: true, trim: true, maxlength: 160 },
   body: { type: String, required: true, trim: true, maxlength: 4000 },

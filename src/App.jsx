@@ -8,7 +8,7 @@ import BlogPostPage from './pages/BlogPostPage.jsx'
 import CourseApplicationPage from './pages/CourseApplicationPage.jsx'
 import EnrollmentPage from './pages/EnrollmentPage.jsx'
 import LandingPage from './pages/LandingPage.jsx'
-import { getCurrentUser, logout, refreshSession, subscribeAuth } from './lib/auth.js'
+import { checkAuthSession, getCurrentUser, hasSessionHint, logout, subscribeAuth } from './lib/auth.js'
 import { useIdleLogout } from './lib/useIdleLogout.js'
 import { useToast } from './lib/toastContext.js'
 import './App.css'
@@ -16,6 +16,8 @@ import './App.css'
 function App() {
   const [user, setUser] = useState(getCurrentUser)
   const [authReady, setAuthReady] = useState(false)
+  const [authStatus, setAuthStatus] = useState(() => (hasSessionHint() ? 'loading' : 'unauthenticated'))
+  const [authError, setAuthError] = useState(null)
   const navigate = useNavigate()
   const location = useLocation()
   const toast = useToast()
@@ -24,34 +26,90 @@ function App() {
   useEffect(() => {
     return subscribeAuth((nextUser, reason) => {
       setUser(nextUser)
-      if (!nextUser && reason === 'expired') {
-        const currentPath = location.pathname + location.search
-        const publicPaths = ['/', '/about', '/blog', '/enroll', '/auth']
-        const isPublic = publicPaths.includes(location.pathname) || location.pathname.startsWith('/blog/') || location.pathname.startsWith('/apply/')
-        if (!isPublic) {
-          navigate(`/auth?redirect=${encodeURIComponent(currentPath)}&reason=expired`, { replace: true })
-          toast.error('Your session has expired. Please sign in again.')
+      if (nextUser) {
+        setAuthStatus('authenticated')
+        setAuthError(null)
+      } else {
+        setAuthStatus('unauthenticated')
+        if (reason === 'expired') {
+          const currentPath = location.pathname + location.search
+          const publicPaths = ['/', '/about', '/blog', '/enroll', '/auth']
+          const isPublic = publicPaths.includes(location.pathname) || location.pathname.startsWith('/blog/') || location.pathname.startsWith('/apply/')
+          if (!isPublic) {
+            navigate(`/auth?redirect=${encodeURIComponent(currentPath)}&reason=expired`, { replace: true })
+            toast.error('Your session has expired. Please sign in again.')
+          }
         }
       }
     })
   }, [location.pathname, location.search, navigate, toast])
 
-  // Restore the session from the httpOnly refresh cookie on first load, since the in-memory
-  // access token in lib/auth.js does not survive a page refresh.
+  const retryAuth = useCallback(async () => {
+    setAuthStatus('loading')
+    setAuthError(null)
+    try {
+      const result = await checkAuthSession()
+      setUser(result.user)
+      setAuthStatus(result.status)
+      setAuthError(result.error || null)
+    } catch (err) {
+      console.warn('Session verification failed:', err)
+      setUser(null)
+      setAuthStatus('error')
+      setAuthError('Unable to connect to the server.')
+    } finally {
+      setAuthReady(true)
+    }
+  }, [])
+
+  // Restore the session on mount. If no session hint exists, checkAuthSession resolves
+  // instantly (0ms) so logged-out users are never delayed by network round-trips.
   useEffect(() => {
     let cancelled = false
-    refreshSession()
-      .then((restoredUser) => {
-        if (!cancelled) setUser(restoredUser)
+
+    // App-level watchdog: guarantees auth check resolves within 4500ms max,
+    // completely preventing any infinite spinner or loading hang.
+    const watchdog = setTimeout(() => {
+      if (!cancelled) {
+        setAuthReady((ready) => {
+          if (!ready) {
+            console.warn('Auth check watchdog reached timeout, releasing loading state.')
+            setAuthStatus((current) => (current === 'loading' ? 'error' : current))
+            setAuthError('Connection timed out. Server may be starting up.')
+            return true
+          }
+          return ready
+        })
+      }
+    }, 4500)
+
+    checkAuthSession()
+      .then((result) => {
+        if (!cancelled) {
+          setUser(result.user)
+          setAuthStatus(result.status)
+          setAuthError(result.error || null)
+        }
       })
       .catch((err) => {
-        console.warn('Session restoration failed:', err)
-        if (!cancelled) setUser(null)
+        console.warn('Session verification failed:', err)
+        if (!cancelled) {
+          setUser(null)
+          setAuthStatus('error')
+          setAuthError('Unable to connect to the server.')
+        }
       })
       .finally(() => {
-        if (!cancelled) setAuthReady(true)
+        clearTimeout(watchdog)
+        if (!cancelled) {
+          setAuthReady(true)
+        }
       })
-    return () => { cancelled = true }
+
+    return () => {
+      cancelled = true
+      clearTimeout(watchdog)
+    }
   }, [])
 
   const signOut = async () => { await logout(); setUser(null) }
@@ -80,7 +138,7 @@ function App() {
     <Route path="/enroll" element={<EnrollmentPage />} />
     <Route path="/apply/:slug" element={<CourseApplicationPage />} />
     <Route path="/auth" element={<AuthPage onAuthenticated={setUser} />} />
-    <Route path="/*" element={<LmsLayout user={user} authReady={authReady} onSignOut={signOut} onUserUpdate={updateUser} />} />
+    <Route path="/*" element={<LmsLayout user={user} authReady={authReady} authStatus={authStatus} authError={authError} onRetryAuth={retryAuth} onSignOut={signOut} onUserUpdate={updateUser} />} />
   </Routes>
 }
 

@@ -15,6 +15,7 @@ import { startImpersonation } from '../../../lib/auth.js'
 import { useConfirm } from '../../../lib/confirmContext.js'
 import { useToast } from '../../../lib/toastContext.js'
 import Loading from '../../../components/Loading.jsx'
+import AccessDenied from '../../../components/AccessDenied.jsx'
 import {
   bulkEnrollUsers, bulkSendUserSetupEmail, bulkUserAction, createAdminRole, createAdminUser, decideEnrollment, deleteAdminUser, deleteBillingRecord, enrollUserCourse, fetchAdminCourses, fetchAdminEnrollments,
   fetchAdminRoles, fetchAdminUsers, fetchInstructorTeachingCourses, fetchUserCourses, fetchUserSetupEmailPreview, importUsers, resetAdminUserPassword, saveInstructorTeachingCourses, sendUserSetupEmail, unenrollUserCourse, updateAdminUser, uploadAdminUserAvatar,
@@ -795,7 +796,7 @@ export default function AdminUsersPage({ user }) {
   const { data: allUsers = [], isLoading, isError, error: usersError, refetch } = useQuery({ queryKey: ['admin-users', filters], queryFn: () => fetchAdminUsers(filters) })
   // The signed-in admin can't manage themselves here (self-edit is blocked server-side anyway,
   // and self-delete/impersonate would be nonsensical) — drop that row entirely to declutter.
-  const usersExcludingSelf = allUsers.filter((row) => row.id !== user.id)
+  const usersExcludingSelf = allUsers.filter((row) => row.id !== user?.id)
   const { data: courses = [] } = useQuery({ queryKey: ['admin-courses-min'], queryFn: fetchAdminCourses })
   // Same query key/args AdminEnrollmentsPage uses for its default (non-archived) view, so the two
   // pages share one cached fetch when visited in the same session rather than each paying for it.
@@ -961,10 +962,14 @@ export default function AdminUsersPage({ user }) {
     <div className="admin-table admin-table-users">
       <div className="admin-table-head"><span>{allIds.length > 0 && <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all" />}</span><span>MEMBER</span><span>ROLE</span><span>STATUS</span><span>BILLING</span><span>LAST ACTIVE</span><span>ACTIONS</span></div>
       {isLoading ? <Loading label="Loading users…" />
-        : isError ? <div className="operations-note" style={{ color: '#c0392b', display: 'flex', alignItems: 'center', gap: 10, padding: '16px 0' }}>
-            <span>Failed to load users: {usersError?.message || 'Server error.'}</span>
-            <button type="button" className="button button-ghost button-compact" onClick={() => refetch()}><RefreshCw size={12} /> Retry</button>
-          </div>
+        : isError ? (
+            usersError?.status === 403
+              ? <div style={{ padding: '20px 0' }}><AccessDenied role={user?.role} requiredRoles={['Admin']} /></div>
+              : <div className="operations-note" style={{ color: '#c0392b', display: 'flex', alignItems: 'center', gap: 10, padding: '16px 0' }}>
+                  <span>Failed to load users: {usersError?.message || 'Server error.'}</span>
+                  <button type="button" className="button button-ghost button-compact" onClick={() => refetch()}><RefreshCw size={12} /> Retry</button>
+                </div>
+          )
         : !users.length ? <p className="operations-note">No users match those filters.</p>
         : users.map((row) => { const billing = billingSummary(enrollmentsFor(row)); return <div key={row.id}>
           <div className={`admin-table-row ${expandedId === row.id ? 'expanded' : ''}`}>

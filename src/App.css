@@ -225,10 +225,28 @@ em { font-family: var(--serif); font-weight: 400; }
 .lms-page { min-height: 100vh; display: grid; grid-template-columns: 245px minmax(0, 1fr) 267px; background: #f7f8f5; }.sidebar { position: fixed; z-index: 30; inset: 0 auto 0 0; width: 245px; display: flex; flex-direction: column; color: #d9e4da; background: var(--forest); }.sidebar-head { display: flex; align-items: center; justify-content: space-between; min-height: 79px; padding: 0 25px; border-bottom: 1px solid #42634d; }.sidebar-close { display: none; color: #fff; background: none; border: 0; }.workspace-label { display: grid; grid-template-columns: 29px 1fr auto; gap: 9px; align-items: center; padding: 21px 20px; border-bottom: 1px solid #42634d; }.workspace-avatar { display: grid; width: 29px; height: 29px; place-items: center; color: var(--forest); background: #d9b980; border-radius: 50%; font-size: 8px; font-weight: 800; }.workspace-label strong, .workspace-label small { display: block; }.workspace-label strong { color: #fff; font-size: 11px; }.workspace-label small { margin-top: 2px; color: #aac0ae; font-size: 9px; text-transform: capitalize; }/* flex:1 + min-height:0 lets this shrink inside the fixed-height .sidebar column instead of
    pushing sidebar-bottom (Settings/Sign out) off-screen when the admin nav's full item list (with
    "More" expanded) is taller than the viewport — overflow-y then scrolls just the link list. */
-.lms-nav { display: grid; flex: 1 1 auto; min-height: 0; gap: 3px; padding: 20px 12px; overflow-y: auto; }.lms-nav a, .sidebar-bottom > a, .sidebar-signout { display: flex; align-items: center; gap: 11px; min-height: 40px; padding: 0 10px; color: #bfd0c1; background: none; border: 0; border-left: 2px solid transparent; font: inherit; font-size: 12px; font-weight: 650; text-align: left; cursor: pointer; }.lms-nav a:hover, .lms-nav a.active, .sidebar-bottom > a:hover, .sidebar-bottom > a.active, .sidebar-signout:hover { color: #fff; background: #29553a; border-left-color: #d3b878; }.lms-nav b { display: grid; min-width: 18px; height: 18px; margin-left: auto; place-items: center; color: var(--forest); background: #c8d9c9; border-radius: 9px; font-size: 9px; }.lms-nav b.gold-badge { color: #5e4720; background: #dec486; }.sidebar-bottom { display: grid; gap: 3px; margin-top: auto; padding: 14px 12px; border-top: 1px solid #42634d; }
+.lms-nav { display: grid; flex: 1 1 auto; min-height: 0; gap: 3px; padding: 20px 12px; overflow-y: auto; }
+.lms-nav-group { display: grid; gap: 2px; margin-bottom: 14px; }
+.lms-nav-group:last-child { margin-bottom: 0; }
+.lms-nav-section-title { padding: 6px 10px 4px; font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #7d9e84; user-select: none; }
+.lms-nav a, .sidebar-bottom > a, .sidebar-signout { display: flex; align-items: center; gap: 11px; min-height: 40px; padding: 0 10px; color: #bfd0c1; background: none; border: 0; border-left: 2px solid transparent; font: inherit; font-size: 12px; font-weight: 650; text-align: left; cursor: pointer; }
+.lms-nav a:hover, .lms-nav a.active, .sidebar-bottom > a:hover, .sidebar-bottom > a.active, .sidebar-signout:hover { color: #fff; background: #29553a; border-left-color: #d3b878; }
+.lms-nav b { display: grid; min-width: 18px; height: 18px; margin-left: auto; place-items: center; color: var(--forest); background: #c8d9c9; border-radius: 9px; font-size: 9px; }
+.lms-nav b.gold-badge { color: #5e4720; background: #dec486; }
+.sidebar-bottom { display: grid; gap: 3px; margin-top: auto; padding: 14px 12px; border-top: 1px solid #42634d; }
 .lms-nav-more { display: flex; align-items: center; gap: 11px; min-height: 40px; margin-top: 4px; padding: 0 10px; color: #9db09f; background: none; border: 0; border-top: 1px dashed #42634d; font: inherit; font-size: 11px; font-weight: 700; text-align: left; cursor: pointer; }
 .lms-nav-more:hover { color: #fff; }
-.lms-auth-loading { display: grid; min-height: 100vh; place-items: center; background: #f7f8f5; }.spinner { width: 34px; height: 34px; border: 3px solid #dde4dc; border-top-color: var(--forest); border-radius: 50%; animation: spin .7s linear infinite; }
+.lms-auth-loading { display: grid; min-height: 100vh; place-items: center; background: #f7f8f5; padding: 20px; }
+.lms-auth-loading-card { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 32px 28px; background: #ffffff; border: 1px solid #e4e7e2; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04); max-width: 420px; width: 100%; border-radius: 4px; }
+.lms-auth-loading-card .spinner { margin-bottom: 16px; }
+.lms-auth-loading-card p { color: #6a7168; font-size: 13px; margin: 0 0 16px; }
+.lms-auth-loading-btn { font-size: 12px; color: var(--forest); background: transparent; border: 1px solid #ccd4cb; padding: 6px 14px; cursor: pointer; font-weight: 600; border-radius: 3px; transition: all 0.15s ease; }
+.lms-auth-loading-btn:hover { background: #eff3ee; border-color: var(--forest); }
+.lms-auth-error-card { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 36px 28px; background: #ffffff; border: 1px solid #eedad8; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.05); max-width: 440px; width: 100%; border-radius: 4px; }
+.lms-auth-error-card h3 { margin: 12px 0 8px; color: #96281b; font-size: 17px; font-weight: 700; }
+.lms-auth-error-card p { color: #666; font-size: 13px; line-height: 1.5; margin: 0 0 20px; }
+.lms-auth-error-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.spinner { width: 34px; height: 34px; border: 3px solid #dde4dc; border-top-color: var(--forest); border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 /* inline-block so the box sizes correctly inside a plain <p>; flex/grid parents blockify it anyway. */
 .spinner-sm { display: inline-block; vertical-align: middle; flex: none; width: 12px; height: 12px; border-width: 2px; }
@@ -1336,6 +1354,32 @@ a.task-row:hover { background: #f7f8f5; }
 .announce-meta { display: inline-flex; gap: 8px; align-items: center; color: #9aa099; font-size: 10px; }
 .announce-meta button { display: grid; place-items: center; background: none; border: 0; color: #a3a89f; cursor: pointer; }
 .announce-card > p { margin: 11px 0 0; color: #56604f; font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+
+/* Admin Announcements Management */
+.admin-announce-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-top: 20px; }
+.admin-announce-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-top: 22px; padding: 14px 18px; background: #fff; border: 1px solid #e1e5df; border-radius: 8px; }
+.admin-announce-search { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 220px; padding: 6px 12px; background: #fbfbf8; border: 1px solid #d9ded7; border-radius: 6px; }
+.admin-announce-search input { width: 100%; border: 0; background: transparent; outline: none; font: inherit; font-size: 13px; color: var(--forest); }
+.admin-announce-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.admin-announce-filters select { min-height: 36px; padding: 0 11px; color: var(--forest); background: #fff; border: 1px solid #d9ded7; border-radius: 6px; font: inherit; font-size: 12px; font-weight: 700; }
+.admin-announce-grid { display: grid; gap: 14px; margin-top: 20px; }
+.admin-announce-item { padding: 22px; background: #fff; border: 1px solid #e1e5df; border-radius: 8px; transition: border-color .15s ease, box-shadow .15s ease; }
+.admin-announce-item:hover { border-color: #c9d5c8; box-shadow: 0 4px 16px rgba(27,67,46,.04); }
+.admin-announce-item.pinned { border-color: #d9c78a; background: #fefdf9; }
+.admin-announce-item-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
+.admin-announce-item-badges { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.scope-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 4px; font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.scope-badge.academy { color: #523e16; background: #f5e8c4; border: 1px solid #e2cb8b; }
+.scope-badge.course { color: #1b432e; background: #e0ece3; border: 1px solid #c2d8c7; }
+.scope-badge.pinned { color: #87621f; background: #fdf5df; border: 1px solid #eed699; }
+.admin-announce-actions { display: flex; gap: 6px; align-items: center; }
+.admin-announce-action-btn { display: grid; width: 32px; height: 32px; place-items: center; color: #768275; background: #f7f9f6; border: 1px solid #dfe5dc; border-radius: 6px; cursor: pointer; transition: all .15s ease; }
+.admin-announce-action-btn:hover { color: var(--forest); background: #ebf1ea; border-color: #c0cec1; }
+.admin-announce-action-btn.danger:hover { color: #a12b2b; background: #fbeeed; border-color: #e5b6b6; }
+.admin-announce-modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: rgba(15, 36, 24, 0.45); backdrop-filter: blur(2px); }
+.admin-announce-modal { width: min(680px, 100%); max-height: 90vh; overflow-y: auto; background: #fff; border-radius: 12px; box-shadow: 0 20px 45px rgba(15, 36, 24, 0.25); border: 1px solid #dce2d9; padding: 28px; }
+.admin-announce-email-hint { display: flex; gap: 9px; align-items: flex-start; padding: 12px 14px; background: #f2f7f3; border: 1px solid #cfe1d3; border-radius: 6px; color: #274b34; font-size: 12px; line-height: 1.5; margin-top: 8px; }
+.admin-announce-email-hint svg { flex: 0 0 auto; margin-top: 1px; color: var(--forest); }
 /* Header count chip — "Discussions 12" */
 .forum-count { display: inline-grid; min-width: 22px; height: 20px; margin-left: 8px; padding: 0 6px; place-items: center; color: #896a32; background: #efe1c4; border-radius: 999px; font-size: 11px; font-weight: 800; vertical-align: middle; }
 .forum-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-top: 20px; }

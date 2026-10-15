@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Navigate, NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { Link, Navigate, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useIsFetching, useIsMutating, useQuery } from '@tanstack/react-query'
 import { io } from 'socket.io-client'
-import { BarChart3, Bell, BookOpen, CalendarClock, CalendarDays, ChevronDown, ChevronRight, ClipboardCheck, FileText, Flag, GraduationCap, LayoutDashboard, Library, LifeBuoy, LogOut, Mail, Megaphone, Menu, MessagesSquare, MoreHorizontal, Newspaper, Receipt, ScrollText, Search, Settings, ShieldCheck, Sparkles, Ticket, UserCheck, UserRound, Users, UsersRound, X } from 'lucide-react'
+import { AlertTriangle, BarChart3, Bell, BookOpen, CalendarClock, CalendarDays, ChevronRight, ClipboardCheck, FileText, Flag, GraduationCap, LayoutDashboard, Library, LifeBuoy, LogOut, Mail, Megaphone, Menu, MessagesSquare, Newspaper, Receipt, RefreshCw, ScrollText, Search, Settings, ShieldCheck, Sparkles, Ticket, UserCheck, UserRound, Users, UsersRound, X } from 'lucide-react'
 import { API_URL, avatarSrc } from '../lib/api.js'
-import { authedFetch, stopImpersonation } from '../lib/auth.js'
+import { authedFetch, getLastAuthReason, stopImpersonation } from '../lib/auth.js'
 import { fetchCourses, fetchNotifications, fetchPresence, fetchStaffOverview, searchAcademy } from '../lib/lms.js'
 import Brand from './Brand.jsx'
 import LmsPageContent from './LmsPageContent.jsx'
@@ -38,26 +38,52 @@ const instructorNavItems = [
   { label: 'Recognition', icon: Sparkles, to: '/recognition' },
 ]
 
-// Administrators get a dedicated console — only platform-management destinations, none of the
-// learner/instructor coursework nav. The list has grown past what's comfortable in one glance,
-// so only the most-used destinations show by default; the rest sit behind a "More" toggle.
-const adminNavItems = [
-  { label: 'Dashboard', icon: LayoutDashboard, to: '/admin/dashboard', primary: true },
-  { label: 'User Management', icon: Users, to: '/admin/users', primary: true },
-  { label: 'Course Catalog & Pricing', icon: BookOpen, to: '/admin/courses', primary: true },
-  { label: 'Enrollment Management', icon: GraduationCap, to: '/admin/enrollments', badgeKey: 'operations', primary: true },
-  { label: 'Global Analytics', icon: BarChart3, to: '/admin/analytics', primary: true },
-  { label: 'Enrollment Documents', icon: FileText, to: '/enrollment-documents' },
-  { label: 'Vouchers & Discounts', icon: Ticket, to: '/admin/vouchers' },
-  { label: 'Discussions', icon: MessagesSquare, to: '/forums' },
-  { label: 'Roles & Permissions', icon: ShieldCheck, to: '/admin/roles' },
-  { label: 'Audit Logs', icon: ScrollText, to: '/admin/audit' },
-  { label: 'Content Library', icon: Library, to: '/admin/content' },
-  { label: 'Support / Helpdesk', icon: LifeBuoy, to: '/admin/support' },
-  { label: 'Reports', icon: Flag, to: '/admin/reports' },
-  { label: 'Webinars & Special Courses', icon: CalendarClock, to: '/admin/webinars' },
-  { label: 'Blog', icon: Newspaper, to: '/admin/blog' },
-  { label: 'Email Automation', icon: Mail, to: '/admin/email-automation' },
+// Administrators get a dedicated console organized into logical operational domains
+// with clear visual hierarchy, scannability, and instant access to all core modules.
+const adminNavSections = [
+  {
+    title: 'Overview',
+    items: [
+      { label: 'Dashboard', icon: LayoutDashboard, to: '/admin/dashboard' },
+      { label: 'Global Analytics', icon: BarChart3, to: '/admin/analytics' },
+    ],
+  },
+  {
+    title: 'Academics & Admissions',
+    items: [
+      { label: 'User Management', icon: Users, to: '/admin/users' },
+      { label: 'Course Catalog & Pricing', icon: BookOpen, to: '/admin/courses' },
+      { label: 'Enrollment Management', icon: GraduationCap, to: '/admin/enrollments', badgeKey: 'operations' },
+      { label: 'Enrollment Documents', icon: FileText, to: '/enrollment-documents' },
+      { label: 'Webinars & Special Courses', icon: CalendarClock, to: '/admin/webinars' },
+      { label: 'Content Library', icon: Library, to: '/admin/content' },
+    ],
+  },
+  {
+    title: 'Communications',
+    items: [
+      { label: 'Announcements', icon: Megaphone, to: '/admin/announcements' },
+      { label: 'Discussions', icon: MessagesSquare, to: '/forums' },
+      { label: 'Email Automation', icon: Mail, to: '/admin/email-automation' },
+      { label: 'Blog', icon: Newspaper, to: '/admin/blog' },
+    ],
+  },
+  {
+    title: 'Finance & Operations',
+    items: [
+      { label: 'Billing & Payments', icon: Receipt, to: '/admin/billing' },
+      { label: 'Vouchers & Discounts', icon: Ticket, to: '/admin/vouchers' },
+    ],
+  },
+  {
+    title: 'Governance & Support',
+    items: [
+      { label: 'Roles & Permissions', icon: ShieldCheck, to: '/admin/roles' },
+      { label: 'Audit Logs', icon: ScrollText, to: '/admin/audit' },
+      { label: 'Reports', icon: Flag, to: '/admin/reports' },
+      { label: 'Support / Helpdesk', icon: LifeBuoy, to: '/admin/support' },
+    ],
+  },
 ]
 
 const pageTitles = {
@@ -161,12 +187,10 @@ function initialsOf(name) {
   return name.trim().split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase()
 }
 
-export default function LmsLayout({ user, authReady, onSignOut, onUserUpdate }) {
+export default function LmsLayout({ user, authReady, authStatus = 'loading', authError = null, onRetryAuth, onSignOut, onUserUpdate }) {
   const [navOpen, setNavOpen] = useState(false)
   const [onlinePanelOpen, setOnlinePanelOpen] = useState(false)
-  const [adminNavExpanded, setAdminNavExpanded] = useState(false)
   const location = useLocation()
-  const [prevAdminPathname, setPrevAdminPathname] = useState(location.pathname)
   const navigate = useNavigate()
   const page = location.pathname.split('/')[1] || 'dashboard'
   const title = pageTitles[page] ?? getLmsPage(location.pathname)?.label ?? `${page.charAt(0).toUpperCase()}${page.slice(1)}`
@@ -175,23 +199,63 @@ export default function LmsLayout({ user, authReady, onSignOut, onUserUpdate }) 
   // Learner access is pathway-scoped (see learnerVisibleCourseFilter) — the course(s) /api/courses
   // returns for a learner *are* the program(s) they're enrolled in, so no separate lookup is needed.
   const { data: learnerCourses = [] } = useQuery({ queryKey: ['courses'], queryFn: fetchCourses, enabled: Boolean(user && user.role === 'learner') })
-  // If navigation lands directly on a page that lives behind the "More" toggle (a deep link,
-  // browser back/forward, the header search), auto-expand once so the highlighted link isn't
-  // hidden. Adjusted here during render (React's documented pattern for "state derived from a prop
-  // change") rather than in an effect, and only when the pathname actually changed — folding this
-  // into the render-time boolean below as `adminNavExpanded || onSecondaryAdminPage` used to mean
-  // the section could never be collapsed by the button while still sitting on that page, since the
-  // OR forced it back open on every render regardless of what the button had just set.
-  if (location.pathname !== prevAdminPathname) {
-    setPrevAdminPathname(location.pathname)
-    if (adminNavItems.some((item) => !item.primary && (item.to === location.pathname || location.pathname.startsWith(`${item.to}/`)))) setAdminNavExpanded(true)
-  }
-  const showAllAdminItems = adminNavExpanded
 
-  if (!authReady) return <div className="lms-auth-loading"><span className="spinner" /></div>
+  // 1. Loading state (genuine check in-flight)
+  if (!authReady || authStatus === 'loading') {
+    return <div className="lms-auth-loading">
+      <div className="lms-auth-loading-card">
+        <span className="spinner" />
+        <p>Verifying your session…</p>
+        <button
+          type="button"
+          className="lms-auth-loading-btn"
+          onClick={() => {
+            navigate(`/auth?redirect=${encodeURIComponent(location.pathname + location.search)}&reason=logged_out`, { replace: true })
+          }}
+        >
+          Go to Sign In
+        </button>
+      </div>
+    </div>
+  }
+
+  // 2. Recoverable error state (server down, 5xx, or network failure while having a session)
+  if (authStatus === 'error' && !user) {
+    return <div className="lms-auth-loading">
+      <div className="lms-auth-error-card">
+        <AlertTriangle size={36} color="#c0392b" style={{ marginBottom: 8 }} />
+        <h3>Unable to Connect to Server</h3>
+        <p>
+          {authError || 'We could not reach the Tree Academy service to verify your credentials. The server may be starting up or your connection was interrupted.'}
+        </p>
+        <div className="lms-auth-error-actions">
+          {onRetryAuth && (
+            <button type="button" className="button button-primary button-compact" onClick={onRetryAuth}>
+              <RefreshCw size={14} /> Retry Connection
+            </button>
+          )}
+          <button
+            type="button"
+            className="button button-ghost button-compact"
+            onClick={() => {
+              navigate(`/auth?redirect=${encodeURIComponent(location.pathname + location.search)}&reason=logged_out`, { replace: true })
+            }}
+          >
+            Go to Sign In
+          </button>
+          <Link to="/" className="button button-ghost button-compact">
+            Home
+          </Link>
+        </div>
+      </div>
+    </div>
+  }
+
+  // 3. Unauthenticated state (user logged out or session expired)
   if (!user) {
     const target = location.pathname + location.search
-    return <Navigate to={`/auth?redirect=${encodeURIComponent(target)}&reason=logged_out`} replace state={{ from: location }} />
+    const reason = getLastAuthReason() || 'logged_out'
+    return <Navigate to={`/auth?redirect=${encodeURIComponent(target)}&reason=${reason}`} replace state={{ from: location }} />
   }
 
   const role = user.role
@@ -207,13 +271,18 @@ export default function LmsLayout({ user, authReady, onSignOut, onUserUpdate }) 
       <div className="workspace-label"><span className="workspace-avatar" style={user.avatarUrl ? { backgroundImage: `url(${avatarSrc(user.avatarUrl)})` } : undefined}>{!user.avatarUrl && initials}</span><span><strong>{user.name}</strong><small>{role === 'learner' ? programLabel : role.charAt(0).toUpperCase() + role.slice(1)}</small></span></div>
       <nav className="lms-nav">
         {role === 'admin'
-          ? <>
-            {adminNavItems.filter((item) => item.primary || showAllAdminItems).map((item) => <NavLink key={item.to} to={item.to} onClick={() => setNavOpen(false)}><item.icon size={19} /><span>{item.label}</span>{item.badgeKey && badges[item.badgeKey] > 0 && <b className="gold-badge">{badges[item.badgeKey]}</b>}</NavLink>)}
-            <button type="button" className="lms-nav-more" onClick={() => setAdminNavExpanded((current) => !current)}>
-              {showAllAdminItems ? <MoreHorizontal size={19} /> : <ChevronDown size={19} />}
-              <span>{showAllAdminItems ? 'Show less' : `More (${adminNavItems.filter((item) => !item.primary).length})`}</span>
-            </button>
-          </>
+          ? adminNavSections.map((section) => (
+            <div className="lms-nav-group" key={section.title}>
+              <div className="lms-nav-section-title">{section.title}</div>
+              {section.items.map((item) => (
+                <NavLink key={item.to} to={item.to} onClick={() => setNavOpen(false)}>
+                  <item.icon size={18} />
+                  <span>{item.label}</span>
+                  {item.badgeKey && badges[item.badgeKey] > 0 && <b className="gold-badge">{badges[item.badgeKey]}</b>}
+                </NavLink>
+              ))}
+            </div>
+          ))
           : role === 'instructor'
           ? instructorNavItems.map((item) => <NavLink key={item.to} to={item.to} onClick={() => setNavOpen(false)}><item.icon size={19} /><span>{item.label}</span>{item.badgeKey && badges[item.badgeKey] > 0 && <b className="gold-badge">{badges[item.badgeKey]}</b>}</NavLink>)
           : navItems.map((item) => <NavLink key={item.to} to={item.to} onClick={() => setNavOpen(false)}><item.icon size={19} /><span>{item.label}</span>{item.badgeKey && badges[item.badgeKey] > 0 && <b>{badges[item.badgeKey]}</b>}</NavLink>)}

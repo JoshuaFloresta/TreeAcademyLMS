@@ -1,12 +1,13 @@
 import express from 'express'
 import { z } from 'zod'
-import { Announcement, Course, ForumPost, ForumReaction, ForumThread, LearningProgress, Notification } from '../models.js'
+import { Announcement, Course, ForumPost, ForumReaction, ForumThread, LearningProgress, Notification, User } from '../models.js'
 import { requireAuth, requireStaff } from '../security.js'
 import { dbState } from '../state.js'
 import { asyncRoute } from '../lib/http.js'
 import { forumImageUpload, saveForumImageUpload } from '../lib/uploads.js'
 import { saveAudit } from '../lib/audit.js'
 import { visibleCourses } from '../lib/course-visibility.js'
+import { sendAnnouncementEmail } from '../email.js'
 
 export const router = express.Router()
 
@@ -14,7 +15,25 @@ const announcementInput = z.object({
   title: z.string().trim().min(2).max(160),
   body: z.string().trim().min(2).max(4000),
   pinned: z.boolean().optional(),
+  sendEmail: z.boolean().optional(),
 })
+
+const generalAnnouncementInput = z.object({
+  courseId: z.string().trim().nullable().optional(),
+  title: z.string().trim().min(2).max(160),
+  body: z.string().trim().min(2).max(4000),
+  pinned: z.boolean().optional(),
+  sendEmail: z.boolean().optional(),
+})
+
+const updateAnnouncementInput = z.object({
+  courseId: z.string().trim().nullable().optional(),
+  title: z.string().trim().min(2).max(160).optional(),
+  body: z.string().trim().min(2).max(4000).optional(),
+  pinned: z.boolean().optional(),
+  sendEmail: z.boolean().optional(),
+})
+
 // Set by POST /api/forums/images (which generates it via the same public-image pipeline as
 // avatars/banners) — trusted enough to just shape-check here rather than re-verify storage.
 const forumImageUrl = z.string().trim().max(500).refine((value) => value.startsWith('/uploads/forum/') || /^https?:\/\//.test(value), 'Invalid image URL.').nullable().optional()
@@ -35,17 +54,116 @@ const forumReactionInput = z.object({ type: z.enum(['like', 'dislike']) })
 // Class communication — course announcements (one-way) and discussion forums (two-way).
 router.get('/api/announcements', requireAuth, asyncRoute(async (req, res) => {
   if (!dbState.ready) return res.status(503).json({ error: 'Announcements require MongoDB.' })
+  const isStaff = ['instructor', 'admin'].includes(req.auth.role)
   const courses = await visibleCourses(req.auth.role, req.auth.sub)
   const titleById = new Map(courses.map((course) => [String(course._id), course.title]))
-  const announcements = await Announcement.find({ courseId: { $in: courses.map((course) => course._id) } })
-    .populate('authorId', 'name role').sort({ pinned: -1, createdAt: -1 }).limit(100).lean()
+
+  const filter = {}
+  if (req.query.courseId) {
+    if (req.query.courseId === 'academy-wide' || req.query.courseId === 'null') {
+      filter.courseId = null
+    } else {
+      filter.courseId = req.query.courseId
+    }
+  } else if (!isStaff) {
+    filter.$or = [
+      { courseId: { $in: courses.map((course) => course._id) } },
+      { courseId: null },
+      { courseId: { $exists: false } },
+    ]
+  }
+
+  const announcements = await Announcement.find(filter)
+    .populate('authorId', 'name role avatarUrl')
+    .sort({ pinned: -1, createdAt: -1 })
+    .limit(200)
+    .lean()
+
   res.json(announcements.map((announcement) => ({
-    id: announcement._id.toString(), courseId: String(announcement.courseId),
-    courseTitle: titleById.get(String(announcement.courseId)) ?? 'Course',
-    title: announcement.title, body: announcement.body, pinned: announcement.pinned,
+    id: announcement._id.toString(),
+    courseId: announcement.courseId ? String(announcement.courseId) : null,
+    courseTitle: announcement.courseId ? (titleById.get(String(announcement.courseId)) ?? 'Course') : 'All Programs (Academy-Wide)',
+    title: announcement.title,
+    body: announcement.body,
+    pinned: Boolean(announcement.pinned),
     authorId: announcement.authorId?._id ? String(announcement.authorId._id) : null,
-    authorName: announcement.authorId?.name ?? 'Staff', createdAt: announcement.createdAt,
+    authorName: announcement.authorId?.name ?? 'Staff',
+    authorRole: announcement.authorId?.role ?? 'Staff',
+    createdAt: announcement.createdAt,
+    updatedAt: announcement.updatedAt,
   })))
+}))
+
+router.post('/api/staff/announcements', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!dbState.ready) return res.status(503).json({ error: 'Announcements require MongoDB.' })
+  const values = generalAnnouncementInput.parse(req.body)
+
+  let courseTitle = 'All Programs (Academy-Wide)'
+  let courseIdToSave = null
+
+  if (values.courseId && values.courseId !== 'all' && values.courseId !== 'null') {
+    const course = await Course.findById(values.courseId)
+    if (!course) return res.status(404).json({ error: 'Course not found.' })
+    courseTitle = course.title
+    courseIdToSave = course._id
+  }
+
+  const announcement = await Announcement.create({
+    title: values.title,
+    body: values.body,
+    pinned: Boolean(values.pinned),
+    courseId: courseIdToSave,
+    authorId: req.auth.sub,
+  })
+
+  // Find recipients for notifications and email
+  let recipientUsers = []
+  if (courseIdToSave) {
+    const enrolled = await LearningProgress.find({ courseId: courseIdToSave }).select('learnerId').lean()
+    const learnerIds = enrolled.map((row) => row.learnerId)
+    if (learnerIds.length) {
+      recipientUsers = await User.find({ _id: { $in: learnerIds }, status: 'active' }).select('_id email name').lean()
+    }
+  } else {
+    recipientUsers = await User.find({ role: 'learner', status: 'active' }).select('_id email name').lean()
+  }
+
+  if (recipientUsers.length) {
+    const notifTitle = courseIdToSave ? `${courseTitle}: ${values.title}` : `Announcement: ${values.title}`
+    await Notification.insertMany(
+      recipientUsers.map((row) => ({
+        recipientId: row._id,
+        title: notifTitle,
+        body: values.body.slice(0, 300),
+        link: '/announcements',
+      }))
+    ).catch((err) => console.error('Error inserting announcement notifications:', err))
+  }
+
+  const shouldSendEmail = values.sendEmail !== false
+  if (shouldSendEmail && recipientUsers.length) {
+    const author = await User.findById(req.auth.sub).select('name role').lean()
+    sendAnnouncementEmail({
+      recipients: recipientUsers.map((u) => ({ email: u.email, name: u.name })),
+      title: values.title,
+      body: values.body,
+      courseTitle: courseIdToSave ? courseTitle : null,
+      authorName: author?.name ?? 'Staff',
+      authorRole: author?.role ?? 'Staff',
+    }).catch((err) => console.error('Error sending announcement email:', err))
+  }
+
+  await saveAudit('announcement.created', 'Announcement', announcement.id, { courseId: courseIdToSave, courseTitle }, req.auth.sub)
+  res.status(201).json({
+    id: announcement._id.toString(),
+    courseId: announcement.courseId ? String(announcement.courseId) : null,
+    courseTitle,
+    title: announcement.title,
+    body: announcement.body,
+    pinned: announcement.pinned,
+    authorId: String(announcement.authorId),
+    createdAt: announcement.createdAt,
+  })
 }))
 
 router.post('/api/staff/courses/:id/announcements', requireAuth, requireStaff, asyncRoute(async (req, res) => {
@@ -53,13 +171,113 @@ router.post('/api/staff/courses/:id/announcements', requireAuth, requireStaff, a
   const course = await Course.findById(req.params.id)
   if (!course) return res.status(404).json({ error: 'Course not found.' })
   const values = announcementInput.parse(req.body)
-  const announcement = await Announcement.create({ ...values, courseId: course._id, authorId: req.auth.sub })
+  const announcement = await Announcement.create({
+    title: values.title,
+    body: values.body,
+    pinned: Boolean(values.pinned),
+    courseId: course._id,
+    authorId: req.auth.sub,
+  })
+
   // Notify every learner granted access to this course (LearningProgress is the enrollment record,
   // created automatically when their pathway enrollment is approved — see provisionLearnerAccount).
   const enrolled = await LearningProgress.find({ courseId: course._id }).select('learnerId').lean()
-  if (enrolled.length) await Notification.insertMany(enrolled.map((row) => ({ recipientId: row.learnerId, title: `${course.title}: ${values.title}`, body: values.body.slice(0, 300), link: '/announcements' })))
+  const learnerIds = enrolled.map((row) => row.learnerId)
+  let recipientUsers = []
+  if (learnerIds.length) {
+    recipientUsers = await User.find({ _id: { $in: learnerIds }, status: 'active' }).select('_id email name').lean()
+    await Notification.insertMany(
+      recipientUsers.map((row) => ({
+        recipientId: row._id,
+        title: `${course.title}: ${values.title}`,
+        body: values.body.slice(0, 300),
+        link: '/announcements',
+      }))
+    ).catch((err) => console.error('Error inserting course announcement notifications:', err))
+  }
+
+  if (values.sendEmail !== false && recipientUsers.length) {
+    const author = await User.findById(req.auth.sub).select('name role').lean()
+    sendAnnouncementEmail({
+      recipients: recipientUsers.map((u) => ({ email: u.email, name: u.name })),
+      title: values.title,
+      body: values.body,
+      courseTitle: course.title,
+      authorName: author?.name ?? 'Instructor',
+      authorRole: author?.role ?? 'Instructor',
+    }).catch((err) => console.error('Error sending announcement email:', err))
+  }
+
   await saveAudit('announcement.created', 'Announcement', announcement.id, { courseId: course.id }, req.auth.sub)
   res.status(201).json(announcement)
+}))
+
+router.patch('/api/staff/announcements/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {
+  if (!dbState.ready) return res.status(503).json({ error: 'Announcements require MongoDB.' })
+  const announcement = await Announcement.findById(req.params.id)
+  if (!announcement) return res.status(404).json({ error: 'Announcement not found.' })
+
+  // Admins can moderate any announcement; instructors may only edit their own.
+  if (req.auth.role !== 'admin' && String(announcement.authorId) !== req.auth.sub) {
+    return res.status(403).json({ error: 'You can only edit your own announcements.' })
+  }
+
+  const values = updateAnnouncementInput.parse(req.body)
+  if (values.title !== undefined) announcement.title = values.title
+  if (values.body !== undefined) announcement.body = values.body
+  if (values.pinned !== undefined) announcement.pinned = values.pinned
+
+  let courseTitle = 'All Programs (Academy-Wide)'
+  if (values.courseId !== undefined) {
+    if (values.courseId && values.courseId !== 'all' && values.courseId !== 'null') {
+      const course = await Course.findById(values.courseId)
+      if (!course) return res.status(404).json({ error: 'Course not found.' })
+      announcement.courseId = course._id
+      courseTitle = course.title
+    } else {
+      announcement.courseId = null
+    }
+  } else if (announcement.courseId) {
+    const course = await Course.findById(announcement.courseId).select('title').lean()
+    if (course) courseTitle = course.title
+  }
+
+  await announcement.save()
+
+  if (values.sendEmail) {
+    let recipientUsers = []
+    if (announcement.courseId) {
+      const enrolled = await LearningProgress.find({ courseId: announcement.courseId }).select('learnerId').lean()
+      const learnerIds = enrolled.map((row) => row.learnerId)
+      if (learnerIds.length) {
+        recipientUsers = await User.find({ _id: { $in: learnerIds }, status: 'active' }).select('_id email name').lean()
+      }
+    } else {
+      recipientUsers = await User.find({ role: 'learner', status: 'active' }).select('_id email name').lean()
+    }
+    const author = await User.findById(req.auth.sub).select('name role').lean()
+    sendAnnouncementEmail({
+      recipients: recipientUsers.map((u) => ({ email: u.email, name: u.name })),
+      title: `[Updated] ${announcement.title}`,
+      body: announcement.body,
+      courseTitle: announcement.courseId ? courseTitle : null,
+      authorName: author?.name ?? 'Staff',
+      authorRole: author?.role ?? 'Staff',
+    }).catch((err) => console.error('Error sending announcement email update:', err))
+  }
+
+  await saveAudit('announcement.updated', 'Announcement', announcement.id, { courseId: announcement.courseId }, req.auth.sub)
+  res.json({
+    id: announcement._id.toString(),
+    courseId: announcement.courseId ? String(announcement.courseId) : null,
+    courseTitle,
+    title: announcement.title,
+    body: announcement.body,
+    pinned: announcement.pinned,
+    authorId: String(announcement.authorId),
+    createdAt: announcement.createdAt,
+    updatedAt: announcement.updatedAt,
+  })
 }))
 
 router.delete('/api/staff/announcements/:id', requireAuth, requireStaff, asyncRoute(async (req, res) => {

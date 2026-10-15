@@ -70,8 +70,10 @@ export const deleteQuiz = (id) => del(`/api/staff/quizzes/${id}`)
 export const fetchCourseAnalytics = (courseId) => get(`/api/staff/courses/${courseId}/analytics`)
 
 // Announcements & forums
-export const fetchAnnouncements = () => get('/api/announcements')
+export const fetchAnnouncements = (courseId) => get(courseId ? `/api/announcements?courseId=${encodeURIComponent(courseId)}` : '/api/announcements')
 export const createAnnouncement = (courseId, payload) => post(`/api/staff/courses/${courseId}/announcements`, payload)
+export const createStaffAnnouncement = (payload) => post('/api/staff/announcements', payload)
+export const updateAnnouncement = (id, payload) => patch(`/api/staff/announcements/${id}`, payload)
 export const deleteAnnouncement = (id) => del(`/api/staff/announcements/${id}`)
 export const fetchThreads = (courseId) => get(`/api/forums/threads${courseId ? `?courseId=${courseId}` : ''}`)
 export const fetchThread = (id) => get(`/api/forums/threads/${id}`)

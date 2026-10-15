@@ -29,6 +29,7 @@ const builtInPageOptions = {
   'admin-analytics': { label: 'Global Analytics', roles: ['admin'], to: '/admin/analytics' },
   'admin-reports': { label: 'Reports', roles: ['admin'], to: '/admin/reports' },
   'admin-webinars': { label: 'Special Courses & Webinars', roles: ['admin'], to: '/admin/webinars' },
+  'admin-announcements': { label: 'Announcements', roles: ['admin'], to: '/admin/announcements' },
   'admin-blog': { label: 'Blog', roles: ['admin'], to: '/admin/blog' },
   'admin-email-automation': { label: 'Email Automation', roles: ['admin'], to: '/admin/email-automation' },
 }

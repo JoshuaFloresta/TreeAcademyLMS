@@ -720,3 +720,77 @@ export async function sendRolePasswordSetupEmail({ user, setupUrl, customNote = 
   return { delivery: 'sent', setupUrl, details }
 }
 
+export async function sendAnnouncementEmail({ recipients, title, body, courseTitle, authorName, authorRole = 'Staff' }) {
+  if (!recipients || recipients.length === 0) return { delivery: 'no_recipients' }
+  const announcementsUrl = `${config.clientUrl}/announcements`
+  const eyebrow = courseTitle ? `Announcement • ${courseTitle}` : 'Academy-Wide Announcement'
+  const subject = courseTitle ? `[Tree Academy] ${courseTitle}: ${title}` : `[Tree Academy Announcement] ${title}`
+
+  const formattedBody = escapeHtml(body).replace(/\n/g, '<br>')
+
+  const html = emailShell({
+    title: subject,
+    eyebrow,
+    bodyHtml: `
+            <div style="margin-bottom: 20px;">
+                <span style="display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; text-transform: uppercase; background-color: #E8F0EC; color: #1B432E;">
+                    ${escapeHtml(courseTitle || 'All Programs')}
+                </span>
+            </div>
+            <p class="welcome-text" style="margin-bottom: 8px; font-size: 20px; line-height: 1.4;">${escapeHtml(title)}</p>
+            <p style="font-size: 13px; color: #718096; margin-bottom: 24px;">
+                Posted by <strong>${escapeHtml(authorName || 'Staff')}</strong> (${escapeHtml(authorRole)})
+            </p>
+            <div class="body-text" style="line-height: 1.7; color: #2D3748; white-space: pre-wrap; font-size: 15px; background: #ffffff; padding: 18px; border: 1px solid #E2E8F0; border-radius: 6px;">
+                ${formattedBody}
+            </div>
+            <div class="button-wrapper">
+                <a href="${announcementsUrl}" class="btn">View on Portal</a>
+            </div>
+            <p class="body-text" style="font-size: 12px; color: #718096; text-align: center;">
+                You received this announcement because you are enrolled at Tree Academy.
+            </p>`,
+  })
+
+  if (!config.email.resendApiKey || !config.email.from) {
+    console.warn(`Announcement email "${title}" queued for ${recipients.length} recipients, but email is not configured.`)
+    return { delivery: 'configuration_required', count: recipients.length }
+  }
+
+  const validRecipients = recipients
+    .map((r) => (typeof r === 'string' ? r : r.email))
+    .filter(Boolean)
+
+  if (!validRecipients.length) return { delivery: 'no_valid_recipients' }
+
+  const chunkSize = 100
+  let sentCount = 0
+  for (let i = 0; i < validRecipients.length; i += chunkSize) {
+    const chunk = validRecipients.slice(i, i + chunkSize)
+    try {
+      const batchPayload = chunk.map((email) => ({
+        from: config.email.from,
+        to: [email],
+        subject,
+        html,
+      }))
+      const response = await fetch('https://api.resend.com/emails/batch', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${config.email.resendApiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(batchPayload),
+      })
+      if (response.ok) {
+        sentCount += chunk.length
+      } else {
+        const err = await emailProviderError('announcement batch email', response)
+        console.warn('Announcement batch email warning:', err.message)
+      }
+    } catch (e) {
+      console.error('Error dispatching announcement emails:', e)
+    }
+  }
+
+  return { delivery: 'sent', count: sentCount }
+}
+
+

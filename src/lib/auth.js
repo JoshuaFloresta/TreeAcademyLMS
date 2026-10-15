@@ -4,6 +4,38 @@ import { API_URL } from './api.js'
 // the short-lived access token is held here and attached to protected requests.
 let accessToken = null
 let currentUser = null
+let lastAuthReason = null
+let lastAuthStatus = 'loading'
+
+const SESSION_HINT_KEY = 'treeacademy_has_session'
+
+export function hasSessionHint() {
+  try {
+    return localStorage.getItem(SESSION_HINT_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function setSessionHint(hasSession) {
+  try {
+    if (hasSession) {
+      localStorage.setItem(SESSION_HINT_KEY, '1')
+    } else {
+      localStorage.removeItem(SESSION_HINT_KEY)
+    }
+  } catch {
+    // Ignore environments with restricted storage
+  }
+}
+
+export function getLastAuthReason() {
+  return lastAuthReason
+}
+
+export function getLastAuthStatus() {
+  return lastAuthStatus
+}
 
 const authListeners = new Set()
 
@@ -24,7 +56,15 @@ export function getCurrentUser() { return currentUser }
 function setSession(result) {
   accessToken = result?.accessToken ?? null
   currentUser = result?.user ?? null
-  notifyAuth(currentUser)
+  if (currentUser) {
+    setSessionHint(true)
+    lastAuthReason = null
+    lastAuthStatus = 'authenticated'
+  } else {
+    setSessionHint(false)
+    lastAuthStatus = 'unauthenticated'
+  }
+  notifyAuth(currentUser, lastAuthReason)
   return currentUser
 }
 
@@ -56,24 +96,64 @@ export async function requestPasswordReset(email) {
   return postJson('/api/auth/forgot-password', { email })
 }
 
-export async function refreshSession() {
+/**
+ * Checks authentication session with explicit status:
+ * - 'authenticated': Session restored successfully
+ * - 'unauthenticated': No session exists or token is invalid/expired
+ * - 'error': Server temporarily unavailable / network timeout
+ */
+export async function checkAuthSession() {
+  // If the browser storage explicitly indicates no active session exists, skip the network
+  // request entirely. This guarantees instant (0ms) redirection to login for logged-out users.
+  if (!hasSessionHint()) {
+    accessToken = null
+    currentUser = null
+    lastAuthReason = lastAuthReason || 'logged_out'
+    lastAuthStatus = 'unauthenticated'
+    return { status: 'unauthenticated', user: null, reason: lastAuthReason }
+  }
+
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+  const timeoutId = controller ? setTimeout(() => controller.abort(), 4000) : null
+
   try {
     const response = await fetch(`${API_URL}/api/auth/refresh`, {
       method: 'POST',
       credentials: 'include',
-      signal: AbortSignal.timeout(8000),
+      signal: controller?.signal,
     })
-    if (!response.ok) {
+    if (timeoutId) clearTimeout(timeoutId)
+
+    if (response.status === 401) {
       accessToken = null
       currentUser = null
-      return null
+      setSessionHint(false)
+      lastAuthReason = 'expired'
+      lastAuthStatus = 'unauthenticated'
+      return { status: 'unauthenticated', user: null, reason: 'expired' }
     }
-    return setSession(await response.json().catch(() => ({})))
-  } catch {
-    accessToken = null
-    currentUser = null
-    return null
+
+    if (!response.ok) {
+      // 5xx / 503 / 502: server is restarting or down; do NOT clear session hint.
+      lastAuthStatus = 'error'
+      return { status: 'error', user: null, error: `Server temporarily unavailable (${response.status})` }
+    }
+
+    const data = await response.json().catch(() => ({}))
+    const user = setSession(data)
+    lastAuthStatus = 'authenticated'
+    return { status: 'authenticated', user }
+  } catch (err) {
+    if (timeoutId) clearTimeout(timeoutId)
+    lastAuthStatus = 'error'
+    const errorMsg = err?.name === 'AbortError' ? 'Connection timed out.' : 'Network connection unavailable.'
+    return { status: 'error', user: null, error: errorMsg }
   }
+}
+
+export async function refreshSession() {
+  const result = await checkAuthSession()
+  return result.user
 }
 
 // Impersonation swaps the in-memory session (and refresh cookie) to the target user. The refresh
@@ -93,15 +173,23 @@ export async function stopImpersonation() {
 }
 
 export async function logout() {
+  setSessionHint(false)
+  lastAuthReason = 'logged_out'
+  lastAuthStatus = 'unauthenticated'
+  accessToken = null
+  currentUser = null
+
   try {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+    const timer = controller ? setTimeout(() => controller.abort(), 3000) : null
     await fetch(`${API_URL}/api/auth/logout`, {
       method: 'POST',
       credentials: 'include',
-      signal: AbortSignal.timeout(5000),
+      signal: controller?.signal,
     })
-  } catch { /* ignore */ }
-  accessToken = null
-  currentUser = null
+    if (timer) clearTimeout(timer)
+  } catch { /* ignore network error on logout */ }
+
   notifyAuth(null, 'logged_out')
 }
 
@@ -119,6 +207,9 @@ export async function authedFetch(path, options = {}, retry = true) {
     // If retry is false or refreshSession failed, the credentials are truly invalid/expired
     accessToken = null
     currentUser = null
+    setSessionHint(false)
+    lastAuthReason = 'expired'
+    lastAuthStatus = 'unauthenticated'
     notifyAuth(null, 'expired')
   }
   return response
